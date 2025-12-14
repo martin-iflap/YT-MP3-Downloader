@@ -1,6 +1,7 @@
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
+from PIL import Image
 import subprocess
 import re
 
@@ -12,26 +13,35 @@ ICON_PATH = SCRIPT_DIR / "mp3.png"
 DEFAULT_FOLDER = Path.home() / "Documents" / "Martin"
 
 # -----------------------------------------   Functions   ------------------------------------------
-def safe_filename(name):
+def safe_filename(name) -> str:
+    """Sanitize the filename by removing invalid characters"""
     if not isinstance(name, str) or not name.strip():
         return "Youtube MP3"
     return re.sub(r'[\\/*?:"<>|]', "", name.strip())
 
-def choose_folder():
+def choose_folder() -> None:
+    """Open a folder selection dialog and update the folder_var
+     - set to DEFAULT_FOLDER initially if no folder is selected
+    """
     folder = filedialog.askdirectory(initialdir=str(DEFAULT_FOLDER))
     if folder:
         folder_var.set(folder)
 
-def download_audio():
+def download_audio() -> None:
+    """Download audio from the provided YouTube URL and save it as an MP3 file
+     - Uses yt-dlp and ffmpeg for downloading and conversion
+     - Updates the status_label with success or error messages
+     - adds thumbnail to the mp3 file and crops it
+    """
     url = url_var.get().strip()
     folder = folder_var.get().strip()
     filename = filename_var.get().strip()
 
     if not url:
-        status_label.configure(text="❌ Prosím vlož YouTube URL.", text_color="red")
+        status_label.configure(text="❌ Prosím vložte YouTube URL.", text_color="red")
         return
     if not folder:
-        status_label.configure(text="❌ Prosím vyber priečinok.", text_color="red")
+        status_label.configure(text="❌ Prosím vyberte priečinok.", text_color="red")
         return
 
     if not filename:
@@ -48,10 +58,42 @@ def download_audio():
             str(YT_DLP_PATH),
             "--no-playlist",
             "-x", "--audio-format", "mp3",
+            "--write-thumbnail",
+            "--convert-thumbnails", "jpg",
             "--ffmpeg-location", str(FFMPEG_PATH),
             "-o", output_template,
             url
         ], check=True)
+
+        mp3_file = Path(folder) / f"{filename}.mp3"
+        thumb_file = Path(folder) / f"{filename}.jpg"
+
+        if thumb_file.exists() and mp3_file.exists():
+            img = Image.open(thumb_file)
+            width, height = img.size
+            size = min(width, height)
+            left = (width - size) // 2
+            top = (height - size) // 2
+            img_cropped = img.crop((left, top, left + size, top + size))
+            img_cropped.save(thumb_file)
+
+            temp_mp3 = Path(folder) / f"{filename}_temp.mp3"
+            subprocess.run([
+                str(FFMPEG_PATH),
+                "-i", str(mp3_file),
+                "-i", str(thumb_file),
+                "-map", "0:a",
+                "-map", "1:0",
+                "-c", "copy",
+                "-id3v2_version", "3",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)",
+                str(temp_mp3)
+            ], check=True)
+
+            mp3_file.unlink()
+            temp_mp3.rename(mp3_file)
+            thumb_file.unlink()
 
         status_label.configure(text="✅ MP3 bolo úspešne stiahnuté.", text_color="green")
     except subprocess.CalledProcessError as e:
@@ -103,3 +145,7 @@ status_label.pack()
 
 if __name__ == "__main__":
     root.mainloop()
+
+# quality selection, progress bar, duplicate detection, recent folders dropdown, drag-and-drop URL support
+# keyboard shortcuts, multi-language support, url validation, add author, thumbnail cropping with pillow
+# check the link looks like a yt link
