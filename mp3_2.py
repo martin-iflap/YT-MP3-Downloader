@@ -29,24 +29,33 @@ def choose_folder() -> None:
 
 def download_audio() -> None:
     """Download audio from the provided YouTube URL and save it as an MP3 file
-     - Uses yt-dlp and ffmpeg for downloading and conversion
-     - Updates the status_label with success or error messages
-     - adds thumbnail to the mp3 file and crops it
+     - Uses: yt-dlp and ffmpeg for downloading and conversion
+     - Adds: thumbnail to the mp3 file and crops it
+           - artist metadata if filename contains '-' else <unknown>
     """
     url = url_var.get().strip()
     folder = folder_var.get().strip()
-    filename = filename_var.get().strip()
+    filename = filename_var.get().strip() or "Youtube MP3"
+    artist = "<unknown>"
 
-    if not url:
-        status_label.configure(text="❌ Prosím vložte YouTube URL.", text_color="red")
+    if not url or "youtube.com" not in url:
+        status_label.configure(text="❌ Prosím vložte platnú YouTube URL.", text_color="red")
         return
     if not folder:
         status_label.configure(text="❌ Prosím vyberte priečinok.", text_color="red")
         return
 
-    if not filename:
-        filename = "Youtube MP3"
     filename = safe_filename(filename)
+
+    if "-" in filename:
+        parts = filename.split("-")
+        artist = parts[0].strip()
+
+    mp3_check = Path(folder) / f"{filename}.mp3"
+    if mp3_check.exists():
+        status_label.configure(text="❌ Súbor s týmto názvom už existuje!", text_color="red")
+        return
+
     output_template = str(Path(folder) / f"{filename}.%(ext)s")
 
     if not FFMPEG_PATH.exists():
@@ -57,6 +66,7 @@ def download_audio() -> None:
         subprocess.run([
             str(YT_DLP_PATH),
             "--no-playlist",
+            "--concurrent-fragments", "3",
             "-x", "--audio-format", "mp3",
             "--write-thumbnail",
             "--convert-thumbnails", "jpg",
@@ -88,6 +98,7 @@ def download_audio() -> None:
                 "-id3v2_version", "3",
                 "-metadata:s:v", "title=Album cover",
                 "-metadata:s:v", "comment=Cover (front)",
+                "-metadata", f"artist={artist}",
                 str(temp_mp3)
             ], check=True)
 
@@ -146,6 +157,5 @@ status_label.pack()
 if __name__ == "__main__":
     root.mainloop()
 
-# quality selection, progress bar, duplicate detection, recent folders dropdown, drag-and-drop URL support
-# keyboard shortcuts, multi-language support, url validation, add author, thumbnail cropping with pillow
-# check the link looks like a yt link
+# progress bar (with multithreading), recent folders dropdown, drag-and-drop URL?
+# logging, config file?, allow to cancel download
