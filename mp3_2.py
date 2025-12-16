@@ -4,7 +4,9 @@ from pathlib import Path
 from PIL import Image
 import subprocess
 import threading
+import time
 import re
+import os
 
 # -----------------------------------------   Config   ------------------------------------------
 SCRIPT_DIR = Path(__file__).parent
@@ -45,10 +47,13 @@ def _download_audio_thread() -> None:
     artist = "<unknown>"
 
     if not url or "youtube.com" not in url:
-        status_label.configure(text="❌ Prosím vložte platnú YouTube URL.", text_color="red")
+        root.after(0, lambda: status_label.configure(
+            text="❌ Prosím vložte platnú YouTube URL.", text_color="red"))
         return
+
     if not folder:
-        status_label.configure(text="❌ Prosím vyberte priečinok.", text_color="red")
+        root.after(0, lambda: status_label.configure(
+            text="❌ Prosím vyberte priečinok.", text_color="red"))
         return
 
     filename = safe_filename(filename)
@@ -59,13 +64,15 @@ def _download_audio_thread() -> None:
 
     mp3_check = Path(folder) / f"{filename}.mp3"
     if mp3_check.exists():
-        status_label.configure(text="❌ Súbor s týmto názvom už existuje!", text_color="red")
+        root.after(0, lambda: status_label.configure(
+            text="❌ Súbor s týmto názvom už existuje!", text_color="red"))
         return
 
     output_template = str(Path(folder) / f"{filename}.%(ext)s")
 
     if not FFMPEG_PATH.exists():
-        status_label.configure(text="❌ ffmpeg.exe nebol nájdený!", text_color="red")
+        root.after(0, lambda: status_label.configure(
+            text="❌ ffmpeg.exe nebol nájdený!", text_color="red"))
         return
 
     try:
@@ -74,6 +81,8 @@ def _download_audio_thread() -> None:
         root.after(0, lambda: status_label.configure(text="⏳ Sťahovanie...", text_color="white"))
         root.after(0, lambda: main_button.configure(text="Zrušiť", command=cancel_download))
 
+        root.download_cancelled = False
+        root.current_process = None
         process = subprocess.Popen([
             str(YT_DLP_PATH),
             "--no-playlist",
@@ -98,8 +107,12 @@ def _download_audio_thread() -> None:
                     pass
 
         process.wait()
+        if root.download_cancelled:
+            return
+
         if process.returncode != 0:
             raise subprocess.CalledProcessError(process.returncode, process.args)
+        root.current_process = None
 
         mp3_file = Path(folder) / f"{filename}.mp3"
         thumb_file = Path(folder) / f"{filename}.jpg"
@@ -113,7 +126,7 @@ def _download_audio_thread() -> None:
             img_cropped = img.crop((left, top, left + size, top + size))
             img_cropped.save(thumb_file)
 
-            temp_mp3 = Path(folder) / f"{filename}_temp.mp3"
+            temp_mp3 = Path(folder) / f"{filename}_temp{os.getpid()}.mp3"
             subprocess.run([
                 str(FFMPEG_PATH),
                 "-i", str(mp3_file),
@@ -135,31 +148,88 @@ def _download_audio_thread() -> None:
         root.after(0,lambda: status_label.configure(text="✅ MP3 bolo úspešne stiahnuté.", text_color="green"))
         root.after(0,lambda: main_button.configure(text="Ďalší", command=reset_fields))
     except subprocess.CalledProcessError as e:
-        status_label.configure(text=f"❌ Chyba pri sťahovaní: {e}", text_color="red")
+        msg = f"❌ Chyba pri sťahovaní: {e}"
+        print(msg) # remove this later
+        root.after(0, lambda: status_label.configure(
+            text=msg, text_color="red"))
     except FileNotFoundError as e:
-        status_label.configure(text=f"❌ yt-dlp alebo ffmpeg nebol nájdený: {e}", text_color="red")
+        msg = f"❌ yt-dlp alebo ffmpeg nebol nájdený: {e}"
+        root.after(0, lambda: status_label.configure(
+            text=msg, text_color="red"))
     except Exception as e:
-        status_label.configure(text=f"❌ Neznáma chyba: {e}", text_color="red")
+        msg = f"❌ Neznáma chyba: {e}"
+        root.after(0, lambda: status_label.configure(
+           text=msg, text_color="red"))
     finally:
         root.after(0, lambda: progress_bar.pack_forget())
 
 def cancel_download() -> None:
-    """Cancel the ongoing download process form the root.current_process attribute"""
+    """Cancel the ongoing download process from the root.current_process attribute
+     - use a helper function to clean up partial downloads and another one to reset the UI
+    """
+    root.download_cancelled = True
     if hasattr(root, "current_process") and root.current_process and root.current_process.poll() is None:
-        root.current_process.terminate()
+        try:
+            root.current_process.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            root.current_process.kill()
+            root.current_process.wait()
         root.current_process = None
 
-    root.after(0, status_label.configure(text="❌ Stiahnutie bolo zrušené.", text_color="red"))
-    root.after(0, main_button.configure(text="Ďalší", command=reset_fields)) # or download again?
-    root.after(0, progress_bar.pack_forget())
+    def _update_ui():
+        status_label.configure(text="❌ Stiahovanie bolo zrušené.", text_color="red")
+        main_button.configure(text="Ďalší", command=reset_fields)
+        progress_bar.pack_forget()
+    root.after(0, _update_ui)
+
+    folder = folder_var.get().strip()
+    filename = safe_filename(filename_var.get().strip() or "Youtube MP3")
+    if folder and filename:
+        def _cleanup_thread():
+            cleanup_partial_downloads(Path(folder), filename)
+        threading.Thread(target=_cleanup_thread, daemon=True).start()
+
+def cleanup_partial_downloads(folder: Path, filename: str) -> None:
+    """Remove any partial download files from yt-dlp after cancellation"""
+    folder_path = Path(folder)
+    print(f"📁 Cleanup folder: {folder_path}")
+    print(f"🔍 Looking for filename: {filename}")
+
+    files_to_delete = [
+        folder_path / f"{filename}.part",
+        folder_path / f"{filename}.*.part",
+        folder_path / f"{filename}.ytdl",
+        folder_path / f"{filename}.jpg",
+        folder_path / f"{filename}.webp",
+        folder_path / f"{filename}_temp*.mp3",
+        folder_path / f"{filename}.mp3",
+        ]
+
+    time.sleep(10)
+    for f in files_to_delete:
+        if f.exists():
+            print(f"🗑️ Deleting file: {f}")
+            for attempt in range(3):
+                try:
+                    f.unlink()
+                    print(f"Unlinked partial file: {f}")
+                    break
+                except PermissionError:
+                    if attempt < 2:
+                        print(f"    ⏳ Retry {attempt + 1}/5 (file locked)")
+                        time.sleep(0.5)
+                except Exception as e:
+                    print(f"Error deleting file {f}: {e}")
+                    break
 
 def reset_fields() -> None:
-    """Reset input entries for a new download"""
-    url_var.set("")
-    filename_var.set("")
-    status_label.configure(text="")
-    main_button.configure(text="Stiahni MP3", command=download_audio)
-    # reset the entries as well
+    """Reset input entries for a new download with a helper function"""
+    def _reset():
+        url_entry.delete(0, 'end')
+        name_entry.delete(0, 'end')
+        status_label.configure(text="")
+        main_button.configure(text="Stiahni MP3", command=download_audio)
+    root.after(0, _reset)
 
 # -----------------------------------------   GUI Setup   ------------------------------------------
 ctk.set_appearance_mode("dark")
@@ -183,7 +253,8 @@ filename_var = ctk.StringVar()
 
 # Layout
 ctk.CTkLabel(root, text="YouTube URL:", font=("Arial", 16)).pack(pady=(20, 5))
-ctk.CTkEntry(root, textvariable=url_var, width=580, height=35, font=("Arial", 14)).pack()
+url_entry = ctk.CTkEntry(root, textvariable=url_var, width=580, height=35, font=("Arial", 14))
+url_entry.pack()
 
 ctk.CTkLabel(root, text="Priečinok:", font=("Arial", 16)).pack(pady=(20, 5))
 folder_frame = ctk.CTkFrame(root, fg_color="transparent")
@@ -192,7 +263,8 @@ ctk.CTkEntry(folder_frame, textvariable=folder_var, width=450, height=35, font=(
 ctk.CTkButton(folder_frame, text="Vybrať", command=choose_folder, width=120, height=35, font=("Arial", 14)).pack(side="left")
 
 ctk.CTkLabel(root, text="Názov súboru:", font=("Arial", 16)).pack(pady=(20, 5))
-ctk.CTkEntry(root, textvariable=filename_var, width=580, height=35, font=("Arial", 14)).pack()
+name_entry = ctk.CTkEntry(root, textvariable=filename_var, width=580, height=35, font=("Arial", 14))
+name_entry.pack()
 
 main_button = ctk.CTkButton(
         root, text="Stiahni MP3", command=download_audio,
@@ -208,5 +280,5 @@ progress_bar = ctk.CTkProgressBar(root, width=580, height=15)
 if __name__ == "__main__":
     root.mainloop()
 
-# progress bar (with multithreading), recent folders dropdown, drag-and-drop URL?
-# logging, config file?, cancel next buttons,
+# recent folders dropdown, drag-and-drop URL?
+# logging, config file?, cancel next buttons, CURRENTLY THE CANCEL DOWNLOAD DOESN'T WORK AT FUCKING ALL
