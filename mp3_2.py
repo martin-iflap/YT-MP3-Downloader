@@ -4,6 +4,8 @@ from pathlib import Path
 from PIL import Image
 import subprocess
 import threading
+import argparse
+import logging
 import time
 import re
 import os
@@ -14,7 +16,10 @@ FFMPEG_PATH = SCRIPT_DIR / "ffmpeg-7.1.1-essentials_build" / "ffmpeg-7.1.1-essen
 YT_DLP_PATH = SCRIPT_DIR / "yt-dlp.exe"
 ICON_PATH = SCRIPT_DIR / "mp3_new.ico"
 DEFAULT_FOLDER = Path.home() / "Documents" / "Martin"
-
+# ----------------------------------------   Logging   --------------------------------------------
+logging.basicConfig(filename="mp3.log",
+                    level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(message)s")
 # -----------------------------------------   Functions   ------------------------------------------
 def safe_filename(name) -> str:
     """Sanitize the filename by removing invalid characters"""
@@ -116,8 +121,47 @@ def _download_audio_thread() -> None:
 
         mp3_file = Path(folder) / f"{filename}.mp3"
         thumb_file = Path(folder) / f"{filename}.jpg"
+        embed_thumbnail(mp3_file, thumb_file, artist)
 
-        if thumb_file.exists() and mp3_file.exists():
+        root.after(0,lambda: status_label.configure(text="✅ MP3 bolo úspešne stiahnuté.", text_color="green"))
+        root.after(0,lambda: main_button.configure(text="Ďalší", command=reset_fields))
+    except subprocess.CalledProcessError as e:
+        msg = f"❌ Chyba pri sťahovaní"
+        root.after(0, lambda: status_label.configure(
+            text=msg, text_color="red"))
+        logging.error(f"{msg}: {e}")
+    except FileNotFoundError as e:
+        msg = f"❌ yt-dlp alebo ffmpeg nebol nájdený"
+        root.after(0, lambda: status_label.configure(
+            text=msg, text_color="red"))
+        logging.error(f"{msg}: {e}")
+    except Exception as e:
+        msg = f"❌ Neznáma chyba"
+        root.after(0, lambda: status_label.configure(
+            text=msg, text_color="red"))
+        logging.error(f"{msg}: {e}")
+    finally:
+        root.after(0, lambda: progress_bar.pack_forget())
+
+        if hasattr(root, "close_var") and root.close_var:
+            def safe_close():
+                """Close the GUI window safely after a delay"""
+                try:
+                    root.quit()
+                    root.destroy()
+                except Exception as ex:
+                    logging.warning(f"❌ Window already closed: {ex}")
+            root.after(2500, safe_close)
+
+def embed_thumbnail(mp3_file: Path, thumb_file: Path, artist: str) -> None:
+    """Crop the thumbnail 1:1 and embed it into the MP3 file using ffmpeg
+     - create a temp_mp3 file during the process to avoid corruption
+    """
+    folder = mp3_file.parent
+    filename = mp3_file.stem
+
+    if thumb_file.exists() and mp3_file.exists():
+        try:
             img = Image.open(thumb_file)
             width, height = img.size
             size = min(width, height)
@@ -145,23 +189,15 @@ def _download_audio_thread() -> None:
             temp_mp3.rename(mp3_file)
             thumb_file.unlink()
 
-        root.after(0,lambda: status_label.configure(text="✅ MP3 bolo úspešne stiahnuté.", text_color="green"))
-        root.after(0,lambda: main_button.configure(text="Ďalší", command=reset_fields))
-    except subprocess.CalledProcessError as e:
-        msg = f"❌ Chyba pri sťahovaní: {e}"
-        print(msg) # remove this later
-        root.after(0, lambda: status_label.configure(
-            text=msg, text_color="red"))
-    except FileNotFoundError as e:
-        msg = f"❌ yt-dlp alebo ffmpeg nebol nájdený: {e}"
-        root.after(0, lambda: status_label.configure(
-            text=msg, text_color="red"))
-    except Exception as e:
-        msg = f"❌ Neznáma chyba: {e}"
-        root.after(0, lambda: status_label.configure(
-           text=msg, text_color="red"))
-    finally:
-        root.after(0, lambda: progress_bar.pack_forget())
+        except Exception as e:
+            logging.error(f"❌ Error with thumbnail embeding: {e}")
+            temp_mp3 = Path(folder) / f"{filename}_temp{os.getpid()}.mp3"
+            if temp_mp3.exists():
+                temp_mp3.unlink()
+            raise
+    else:
+        logging.warning("⚠️ Thumbnail or MP3 Not Found")
+        return
 
 def cancel_download() -> None:
     """Cancel the ongoing download process from the root.current_process attribute
@@ -192,8 +228,8 @@ def cancel_download() -> None:
 def cleanup_partial_downloads(folder: Path, filename: str) -> None:
     """Remove any partial download files from yt-dlp after cancellation"""
     folder_path = Path(folder)
-    print(f"📁 Cleanup folder: {folder_path}")
-    print(f"🔍 Looking for filename: {filename}")
+    logging.info(f"📁 Cleanup folder: {folder_path}")
+    logging.info(f"🔍 Looking for filename: {filename}")
 
     files_to_delete = [
         folder_path / f"{filename}.part",
@@ -208,18 +244,18 @@ def cleanup_partial_downloads(folder: Path, filename: str) -> None:
     time.sleep(10)
     for f in files_to_delete:
         if f.exists():
-            print(f"🗑️ Deleting file: {f}")
+            logging.info(f"🗑️ Deleting file: {f}")
             for attempt in range(3):
                 try:
                     f.unlink()
-                    print(f"Unlinked partial file: {f}")
+                    logging.info(f"Unlinked partial file: {f}")
                     break
                 except PermissionError:
                     if attempt < 2:
-                        print(f"    ⏳ Retry {attempt + 1}/5 (file locked)")
+                        logging.info(f"⏳ Retry {attempt + 1}/5 (file locked)")
                         time.sleep(0.5)
                 except Exception as e:
-                    print(f"Error deleting file {f}: {e}")
+                    logging.error(f"Error deleting file {f}: {e}")
                     break
 
 def reset_fields() -> None:
@@ -230,6 +266,53 @@ def reset_fields() -> None:
         status_label.configure(text="")
         main_button.configure(text="Stiahni MP3", command=download_audio)
     root.after(0, _reset)
+
+def download_audio_headless(url: str, folder: str, filename: str) -> None:
+    """Headless download function for auto mode
+     - download audio without GUI interaction
+    """
+    artist = "<unknown>"
+    if "-" in filename:
+        parts = filename.split("-")
+        artist = parts[0].strip()
+
+    mp3_check = Path(folder) / f"{filename}.mp3" # check this
+    if mp3_check.exists():
+        logging.error("❌ Súbor s týmto názvom už existuje!")
+        return
+
+    output_template = str(Path(folder) / f"{filename}.%(ext)s")
+
+    if not FFMPEG_PATH.exists():
+        logging.error("❌ ffmpeg.exe nebol nájdený!")
+        return
+
+    try:
+        subprocess.run([ # edit this to work
+            str(YT_DLP_PATH),
+            "--no-playlist",
+            "--concurrent-fragments", "3",
+            "-x", "--audio-format", "mp3",
+            "--write-thumbnail",
+            "--convert-thumbnails", "jpg",
+            "--ffmpeg-location", str(FFMPEG_PATH),
+            "--newline",
+            "-o", output_template,
+            url
+        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+
+        mp3_file = Path(folder) / f"{filename}.mp3"
+        thumb_file = Path(folder) / f"{filename}.jpg"
+        embed_thumbnail(mp3_file, thumb_file, artist)
+    except FileNotFoundError as e:
+        logging.error(f"❌ yt-dlp alebo ffmpeg nebol nájdený: {e}")
+        exit(1)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"❌ Chyba pri sťahovaní: {e}")
+        exit(1)
+    except Exception as e:
+        logging.error(f"❌ Neznáma chyba: {e}")
+        exit(1)
 
 # -----------------------------------------   GUI Setup   ------------------------------------------
 ctk.set_appearance_mode("dark")
@@ -244,7 +327,7 @@ root.current_process = None
 try:
     root.iconbitmap(str(ICON_PATH))
 except Exception as exc:
-    print("⚠️ Ikona sa nepodarila načítať:", exc)
+    Logging.error("⚠️ Ikona sa nepodarila načítať:", exc)
 
 # Variables
 url_var = ctk.StringVar()
@@ -275,10 +358,59 @@ status_label = ctk.CTkLabel(root, text="", font=("Arial", 14))
 status_label.pack()
 
 progress_bar = ctk.CTkProgressBar(root, width=580, height=15)
-
+# -----------------------------------------   Main   ------------------------------------------
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="YouTube to MP3 Converter GUI")
+    parser.add_argument("--url", type=str, help="YouTube video URL")
+    parser.add_argument("--folder", type=str, help="Override default folder")
+    parser.add_argument("--close", action="store_true", help="Close the GUI after download")
+    parser.add_argument("--auto", action="store_true", help="Auto-download mode")
+    args = parser.parse_args()
+
+    if args.auto:
+        if not args.url:
+            print("Error: --auto requires --url")
+            exit(1)
+
+        input_url = args.url
+        logging.info(f"url: {args.url}")
+
+        input_folder = args.folder if args.folder and os.path.isdir(args.folder) else str(DEFAULT_FOLDER)
+
+        try:
+            logging.info("Fetching title for auto mode...")
+            fetched_title = subprocess.run([
+                str(YT_DLP_PATH),
+                "--no-playlist",
+                "--get-title",
+                input_url
+            ], capture_output=True, text=True, check=True,
+                timeout=15, stdin=subprocess.DEVNULL)
+            title = safe_filename(fetched_title.stdout.strip() or "Youtube MP3")
+            logging.info(f"title: {title}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            title = "Youtube MP3"
+            logging.warning("Failed to fetch title, using default.")
+
+        download_audio_headless(input_url, input_folder, title)
+        logging.info("Download completed in auto mode.")
+        exit(0)
+
+    else:
+        if args.url:
+            url_var.set(args.url)
+        if args.folder:
+            folder_path = Path(args.folder)
+            if folder_path.is_dir():
+                folder_var.set(str(folder_path))
+                DEFAULT_FOLDER = folder_path
+            else:
+                logging.warning(f"⚠️ Specified folder not found: {folder_path}, using default")
+        if args.close:
+            root.close_var = True
+
     root.mainloop()
 
-# recent folders dropdown, drag-and-drop URL?
-# logging, config file?, cancel next buttons, CURRENTLY THE CANCEL DOWNLOAD DOESN'T WORK AT FUCKING ALL
+# config file? settings? recent folders dropdown
+# desktop notifications for no gui mode, extension, native messaging setup
