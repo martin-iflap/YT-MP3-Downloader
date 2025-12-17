@@ -376,7 +376,13 @@ if __name__ == "__main__":
         input_url = args.url
         logging.info(f"url: {args.url}")
 
-        input_folder = args.folder if args.folder and os.path.isdir(args.folder) else str(DEFAULT_FOLDER)
+        if args.folder:
+            input_folder = Path(args.folder).resolve()
+            if not input_folder.is_dir():
+                logging.warning("Provided folder not found, using default")
+                input_folder = DEFAULT_FOLDER
+        else:
+            input_folder = DEFAULT_FOLDER
 
         try:
             logging.info("Fetching title for auto mode...")
@@ -401,16 +407,16 @@ if __name__ == "__main__":
         if args.url:
             url_var.set(args.url)
         if args.folder:
-            folder_path = Path(args.folder)
-            if folder_path.is_dir():
-                folder_var.set(str(folder_path))
-                DEFAULT_FOLDER = folder_path
+            f_path = Path(args.folder).resolve()
+            if f_path.is_dir():
+                folder_var.set(str(f_path))
             else:
-                logging.warning(f"⚠️ Specified folder not found: {folder_path}, using default")
+                logging.warning(f"Specified folder not found: {f_path}, using default")
+                folder_var.set(str(DEFAULT_FOLDER))
         if args.close:
             root.close_var = True
 
-    root.mainloop()
+        root.mainloop()
 
 # config file? settings? recent folders dropdown
 # desktop notifications for no gui mode, extension, native messaging setup
