@@ -1,4 +1,5 @@
 from notifications import send_notification
+from native_messaging import run_native
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
@@ -26,7 +27,7 @@ def safe_filename(name) -> str:
     """Sanitize the filename by removing invalid characters"""
     if not isinstance(name, str) or not name.strip():
         return "Youtube MP3"
-    return re.sub(r'[\\/*?:"<>|]', "", name.strip())
+    return re.sub(r'[\\/*?:"<>|]', "", name.strip()) # add filters for auto naming
 
 def choose_folder() -> None:
     """Open a folder selection dialog and update the folder_var
@@ -300,20 +301,21 @@ def download_audio_headless(url: str, folder: str, filename: str) -> None:
             "--newline",
             "-o", output_template,
             url
-        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1, timeout=300, check=True)
 
         mp3_file = Path(folder) / f"{filename}.mp3"
         thumb_file = Path(folder) / f"{filename}.jpg"
         embed_thumbnail(mp3_file, thumb_file, artist)
     except FileNotFoundError as e:
         logging.error(f"❌ yt-dlp alebo ffmpeg nebol nájdený: {e}")
-        exit(1)
+        raise
     except subprocess.CalledProcessError as e:
         logging.error(f"❌ Chyba pri sťahovaní: {e}")
-        exit(1)
+        raise
     except Exception as e:
         logging.error(f"❌ Neznáma chyba: {e}")
-        exit(1)
+        raise
 
 # -----------------------------------------   GUI Setup   ------------------------------------------
 ctk.set_appearance_mode("dark")
@@ -367,57 +369,62 @@ if __name__ == "__main__":
     parser.add_argument("--folder", type=str, help="Override default folder")
     parser.add_argument("--close", action="store_true", help="Close the GUI after download")
     parser.add_argument("--auto", action="store_true", help="Auto-download mode")
+    parser.add_argument("--native", action="store_true", help="Run in native messaging mode")
     args = parser.parse_args()
 
-    if args.auto:
-        if not args.url:
-            send_notification("Error", "Missing URL for auto mode")
-            exit(1)
-
-        input_url = args.url
-        logging.info(f"url: {args.url}")
-
-        if args.folder:
-            input_folder = Path(args.folder).resolve()
-            if not input_folder.is_dir():
-                send_notification("Warning", "Provided folder not found, using default")
-                input_folder = DEFAULT_FOLDER
-        else:
-            input_folder = DEFAULT_FOLDER
-
-        try:
-            logging.info("Fetching title for auto mode...")
-            fetched_title = subprocess.run([
-                str(YT_DLP_PATH),
-                "--no-playlist",
-                "--get-title",
-                input_url
-            ], capture_output=True, text=True, check=True,
-                timeout=15, stdin=subprocess.DEVNULL)
-            title = safe_filename(fetched_title.stdout or "Youtube MP3")
-            logging.info(f"title: {title}")
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            title = "Youtube MP3"
-            send_notification("Warning", "Failed to fetch title, using default.")
-
-        download_audio_headless(input_url, input_folder, title)
-        send_notification("Download Completed", f"Download completed in auto mode.\nFile: {title} saved to {input_folder}")
-        exit(0)
-
+    if args.native:
+        run_native()
     else:
-        if args.url:
-            url_var.set(args.url)
-        if args.folder:
-            f_path = Path(args.folder).resolve()
-            if f_path.is_dir():
-                folder_var.set(str(f_path))
+        if args.auto: # make this into a function?
+            if not args.url:
+                send_notification("Error", "Missing URL for auto mode")
+                exit(1)
+
+            input_url = args.url
+            logging.info(f"url: {args.url}")
+
+            if args.folder:
+                input_folder = Path(args.folder).resolve()
+                if not input_folder.is_dir():
+                    send_notification("Warning", "Provided folder not found, using default")
+                    input_folder = DEFAULT_FOLDER
             else:
-                logging.warning(f"Specified folder not found: {f_path}, using default")
-                folder_var.set(str(DEFAULT_FOLDER))
-        if args.close:
-            root.close_var = True
+                input_folder = DEFAULT_FOLDER
 
-        root.mainloop()
+            try:
+                logging.info("Fetching title for auto mode...")
+                fetched_title = subprocess.run([
+                    str(YT_DLP_PATH),
+                    "--no-playlist",
+                    "--skip-download",
+                    "--get-title",
+                    input_url
+                ], capture_output=True, text=True, check=True,
+                    timeout=15, stdin=subprocess.DEVNULL)
+                title = safe_filename(fetched_title.stdout or "Youtube MP3")
+                logging.info(f"title: {title}")
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                title = "Youtube MP3"
+                send_notification("Warning", "Failed to fetch title, using default.")
 
-# config file? settings? recent folders dropdown
-# desktop notifications for no gui mode, extension, native messaging setup
+            download_audio_headless(input_url, input_folder, title)
+            send_notification("Download Completed", f"Download completed in auto mode.\nFile: {title} saved to {input_folder}")
+            exit(0)
+
+        else:
+            if args.url:
+                url_var.set(args.url)
+            if args.folder:
+                f_path = Path(args.folder).resolve()
+                if f_path.is_dir():
+                    folder_var.set(str(f_path))
+                else:
+                    logging.warning(f"Specified folder not found: {f_path}, using default")
+                    folder_var.set(str(DEFAULT_FOLDER))
+            if args.close:
+                root.close_var = True
+
+            root.mainloop()
+
+# config file! settings? recent folders dropdown
+# extension, native messaging setup
