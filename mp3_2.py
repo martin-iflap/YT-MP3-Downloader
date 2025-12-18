@@ -1,3 +1,4 @@
+from notifications import send_notification
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
@@ -370,7 +371,7 @@ if __name__ == "__main__":
 
     if args.auto:
         if not args.url:
-            print("Error: --auto requires --url")
+            send_notification("Error", "Missing URL for auto mode")
             exit(1)
 
         input_url = args.url
@@ -379,7 +380,7 @@ if __name__ == "__main__":
         if args.folder:
             input_folder = Path(args.folder).resolve()
             if not input_folder.is_dir():
-                logging.warning("Provided folder not found, using default")
+                send_notification("Warning", "Provided folder not found, using default")
                 input_folder = DEFAULT_FOLDER
         else:
             input_folder = DEFAULT_FOLDER
@@ -393,14 +394,14 @@ if __name__ == "__main__":
                 input_url
             ], capture_output=True, text=True, check=True,
                 timeout=15, stdin=subprocess.DEVNULL)
-            title = safe_filename(fetched_title.stdout.strip() or "Youtube MP3")
+            title = safe_filename(fetched_title.stdout or "Youtube MP3")
             logging.info(f"title: {title}")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             title = "Youtube MP3"
-            logging.warning("Failed to fetch title, using default.")
+            send_notification("Warning", "Failed to fetch title, using default.")
 
         download_audio_headless(input_url, input_folder, title)
-        logging.info("Download completed in auto mode.")
+        send_notification("Download Completed", f"Download completed in auto mode.\nFile: {title} saved to {input_folder}")
         exit(0)
 
     else:
