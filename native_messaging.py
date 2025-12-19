@@ -1,15 +1,10 @@
+from core_and_auto import download_audio_headless, safe_filename
 from pathlib import Path
 import subprocess
 import logging
 import struct
 import json
 import sys
-from mp3_2 import (
-    download_audio_headless,
-    safe_filename,
-    YT_DLP_PATH,
-    DEFAULT_FOLDER
-)
 
 logging.basicConfig(
     filename="native_messaging.log",

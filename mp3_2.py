@@ -1,34 +1,19 @@
-from notifications import send_notification
-from native_messaging import run_native
+from core_and_auto import safe_filename, embed_thumbnail, run_auto_mode
+from config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
-from PIL import Image
 import subprocess
 import threading
 import argparse
 import logging
 import time
 import re
-import os
-
-# -----------------------------------------   Config   ------------------------------------------
-SCRIPT_DIR = Path(__file__).parent
-FFMPEG_PATH = SCRIPT_DIR / "ffmpeg-7.1.1-essentials_build" / "ffmpeg-7.1.1-essentials_build" / "bin" / "ffmpeg.exe"
-YT_DLP_PATH = SCRIPT_DIR / "yt-dlp.exe"
-ICON_PATH = SCRIPT_DIR / "mp3_new.ico"
-DEFAULT_FOLDER = Path.home() / "Documents" / "Martin"
 # ----------------------------------------   Logging   --------------------------------------------
 logging.basicConfig(filename="mp3.log",
                     level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(message)s")
 # -----------------------------------------   Functions   ------------------------------------------
-def safe_filename(name) -> str:
-    """Sanitize the filename by removing invalid characters"""
-    if not isinstance(name, str) or not name.strip():
-        return "Youtube MP3"
-    return re.sub(r'[\\/*?:"<>|]', "", name.strip()) # add filters for auto naming
-
 def choose_folder() -> None:
     """Open a folder selection dialog and update the folder_var
      - set to DEFAULT_FOLDER initially if no folder is selected
@@ -155,52 +140,6 @@ def _download_audio_thread() -> None:
                     logging.warning(f"❌ Window already closed: {ex}")
             root.after(2500, safe_close)
 
-def embed_thumbnail(mp3_file: Path, thumb_file: Path, artist: str) -> None:
-    """Crop the thumbnail 1:1 and embed it into the MP3 file using ffmpeg
-     - create a temp_mp3 file during the process to avoid corruption
-    """
-    folder = mp3_file.parent
-    filename = mp3_file.stem
-
-    if thumb_file.exists() and mp3_file.exists():
-        try:
-            img = Image.open(thumb_file)
-            width, height = img.size
-            size = min(width, height)
-            left = (width - size) // 2
-            top = (height - size) // 2
-            img_cropped = img.crop((left, top, left + size, top + size))
-            img_cropped.save(thumb_file)
-
-            temp_mp3 = Path(folder) / f"{filename}_temp{os.getpid()}.mp3"
-            subprocess.run([
-                str(FFMPEG_PATH),
-                "-i", str(mp3_file),
-                "-i", str(thumb_file),
-                "-map", "0:a",
-                "-map", "1:0",
-                "-c", "copy",
-                "-id3v2_version", "3",
-                "-metadata:s:v", "title=Album cover",
-                "-metadata:s:v", "comment=Cover (front)",
-                "-metadata", f"artist={artist}",
-                str(temp_mp3)
-            ], check=True)
-
-            mp3_file.unlink()
-            temp_mp3.rename(mp3_file)
-            thumb_file.unlink()
-
-        except Exception as e:
-            logging.error(f"❌ Error with thumbnail embeding: {e}")
-            temp_mp3 = Path(folder) / f"{filename}_temp{os.getpid()}.mp3"
-            if temp_mp3.exists():
-                temp_mp3.unlink()
-            raise
-    else:
-        logging.warning("⚠️ Thumbnail or MP3 Not Found")
-        return
-
 def cancel_download() -> None:
     """Cancel the ongoing download process from the root.current_process attribute
      - use a helper function to clean up partial downloads and another one to reset the UI
@@ -259,7 +198,7 @@ def cleanup_partial_downloads(folder: Path, filename: str) -> None:
                 except Exception as e:
                     logging.error(f"Error deleting file {f}: {e}")
                     break
-
+# move cleanup to core and use it in auto mode too?
 def reset_fields() -> None:
     """Reset input entries for a new download with a helper function"""
     def _reset():
@@ -268,54 +207,6 @@ def reset_fields() -> None:
         status_label.configure(text="")
         main_button.configure(text="Stiahni MP3", command=download_audio)
     root.after(0, _reset)
-
-def download_audio_headless(url: str, folder: str, filename: str) -> None:
-    """Headless download function for auto mode
-     - download audio without GUI interaction
-    """
-    artist = "<unknown>"
-    if "-" in filename:
-        parts = filename.split("-")
-        artist = parts[0].strip()
-
-    mp3_check = Path(folder) / f"{filename}.mp3" # check this
-    if mp3_check.exists():
-        logging.error("❌ Súbor s týmto názvom už existuje!")
-        return
-
-    output_template = str(Path(folder) / f"{filename}.%(ext)s")
-
-    if not FFMPEG_PATH.exists():
-        logging.error("❌ ffmpeg.exe nebol nájdený!")
-        return
-
-    try:
-        subprocess.run([ # edit this to work
-            str(YT_DLP_PATH),
-            "--no-playlist",
-            "--concurrent-fragments", "3",
-            "-x", "--audio-format", "mp3",
-            "--write-thumbnail",
-            "--convert-thumbnails", "jpg",
-            "--ffmpeg-location", str(FFMPEG_PATH),
-            "--newline",
-            "-o", output_template,
-            url
-        ], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1, timeout=300, check=True)
-
-        mp3_file = Path(folder) / f"{filename}.mp3"
-        thumb_file = Path(folder) / f"{filename}.jpg"
-        embed_thumbnail(mp3_file, thumb_file, artist)
-    except FileNotFoundError as e:
-        logging.error(f"❌ yt-dlp alebo ffmpeg nebol nájdený: {e}")
-        raise
-    except subprocess.CalledProcessError as e:
-        logging.error(f"❌ Chyba pri sťahovaní: {e}")
-        raise
-    except Exception as e:
-        logging.error(f"❌ Neznáma chyba: {e}")
-        raise
 
 # -----------------------------------------   GUI Setup   ------------------------------------------
 ctk.set_appearance_mode("dark")
@@ -364,6 +255,11 @@ progress_bar = ctk.CTkProgressBar(root, width=580, height=15)
 # -----------------------------------------   Main   ------------------------------------------
 
 if __name__ == "__main__":
+    """Parse command-line arguments and run the appropriate mode
+     - Native messaging mode if --native, --url required
+     - Auto-download mode if --auto, --url required
+     - else run GUI mode --folder --url and --close optional
+    """
     parser = argparse.ArgumentParser(description="YouTube to MP3 Converter GUI")
     parser.add_argument("--url", type=str, help="YouTube video URL")
     parser.add_argument("--folder", type=str, help="Override default folder")
@@ -373,44 +269,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.native:
+        from native_messaging import run_native #fix this import
         run_native()
     else:
-        if args.auto: # make this into a function?
-            if not args.url:
-                send_notification("Error", "Missing URL for auto mode")
-                exit(1)
-
-            input_url = args.url
-            logging.info(f"url: {args.url}")
-
-            if args.folder:
-                input_folder = Path(args.folder).resolve()
-                if not input_folder.is_dir():
-                    send_notification("Warning", "Provided folder not found, using default")
-                    input_folder = DEFAULT_FOLDER
-            else:
-                input_folder = DEFAULT_FOLDER
-
-            try:
-                logging.info("Fetching title for auto mode...")
-                fetched_title = subprocess.run([
-                    str(YT_DLP_PATH),
-                    "--no-playlist",
-                    "--skip-download",
-                    "--get-title",
-                    input_url
-                ], capture_output=True, text=True, check=True,
-                    timeout=15, stdin=subprocess.DEVNULL)
-                title = safe_filename(fetched_title.stdout or "Youtube MP3")
-                logging.info(f"title: {title}")
-            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                title = "Youtube MP3"
-                send_notification("Warning", "Failed to fetch title, using default.")
-
-            download_audio_headless(input_url, input_folder, title)
-            send_notification("Download Completed", f"Download completed in auto mode.\nFile: {title} saved to {input_folder}")
-            exit(0)
-
+        if args.auto:
+            run_auto_mode(args)
         else:
             if args.url:
                 url_var.set(args.url)
@@ -426,5 +289,5 @@ if __name__ == "__main__":
 
             root.mainloop()
 
-# config file! settings? recent folders dropdown
-# extension, native messaging setup
+# settings? recent folders dropdown, check project folders
+# extension

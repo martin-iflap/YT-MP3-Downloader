@@ -1,8 +1,6 @@
 from win10toast_click import ToastNotifier
-from pathlib import Path
+from config import ICON_PATH
 
-SCRIPT_DIR = Path(__file__).parent
-ICON_PATH = SCRIPT_DIR / "mp3_new.ico"
 
 toaster = ToastNotifier()
 
@@ -20,7 +18,7 @@ def send_notification(title: str, message: str) -> None:
             threaded=True,
         )
     except Exception as e:
-        print(f"Failed to send notification: {e}") # check this later
+        print(f"Failed to send notification: {e}")
 
 if __name__ == "__main__":
     send_notification("Download Complete", "Your YouTube video has been downloaded successfully.")
