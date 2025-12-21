@@ -221,7 +221,7 @@ root.current_process = None
 try:
     root.iconbitmap(str(ICON_PATH))
 except Exception as exc:
-    Logging.error("⚠️ Ikona sa nepodarila načítať:", exc)
+    logging.error("⚠️ Ikona sa nepodarila načítať:", exc)
 
 # Variables
 url_var = ctk.StringVar()

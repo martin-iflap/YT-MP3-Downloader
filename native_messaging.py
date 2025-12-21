@@ -1,4 +1,5 @@
 from core_and_auto import download_audio_headless, safe_filename
+from config import YT_DLP_PATH, DEFAULT_FOLDER
 from pathlib import Path
 import subprocess
 import logging
@@ -6,7 +7,7 @@ import struct
 import json
 import sys
 
-logging.basicConfig(
+logging.basicConfig( # remove logging for .exe?
     filename="native_messaging.log",
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
@@ -76,14 +77,19 @@ def run_native() -> None:
                     "message": "File with this name already exists",
                     "filename": filename
                 })
-                continue
             try:
                 download_audio_headless(url, str(input_folder), filename)
-                send_message({
-                    "status": "success",
-                    "filename": filename,
-                    "path": str(mp3_path)
-                })
+                if mp3_path.exists():
+                    send_message({
+                        "status": "success",
+                        "filename": filename,
+                        "path": str(mp3_path)
+                    })
+                else:
+                    send_message({
+                        "status": "error",
+                        "message": "Download failed, file not created"
+                    })
             except subprocess.TimeoutExpired as e:
                 send_message({"status": "error", "message": f"Download timed out: {e}"})
                 logging.error(f"Download timed out: {e}")
