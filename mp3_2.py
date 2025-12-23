@@ -1,11 +1,11 @@
-from core_and_auto import safe_filename, embed_thumbnail, run_auto_mode
 from config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
+from native_messaging import send_message, read_message, run_native
+from core import safe_filename, embed_thumbnail
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
 import subprocess
 import threading
-import argparse
 import logging
 import time
 import re
@@ -21,6 +21,13 @@ def choose_folder() -> None:
     folder = filedialog.askdirectory(initialdir=str(DEFAULT_FOLDER))
     if folder:
         folder_var.set(folder)
+
+def send_current_folder() -> None:
+    """Send the current folder path via native messaging"""
+    folder = folder_var.get().strip()
+    if not folder:
+        folder = str(DEFAULT_FOLDER)
+    send_message({"status": "success", "folder": folder})
 
 def download_audio() -> None:
     """Start the audio download in a separate thread to allow progress bar updates"""
@@ -40,12 +47,12 @@ def _download_audio_thread() -> None:
 
     if not url or "youtube.com" not in url:
         root.after(0, lambda: status_label.configure(
-            text="❌ Prosím vložte platnú YouTube URL.", text_color="red"))
+            text="❌ Enter valid YouTube URL", text_color="red"))
         return
 
     if not folder:
         root.after(0, lambda: status_label.configure(
-            text="❌ Prosím vyberte priečinok.", text_color="red"))
+            text="❌ Choose a folder", text_color="red"))
         return
 
     filename = safe_filename(filename)
@@ -57,21 +64,21 @@ def _download_audio_thread() -> None:
     mp3_check = Path(folder) / f"{filename}.mp3"
     if mp3_check.exists():
         root.after(0, lambda: status_label.configure(
-            text="❌ Súbor s týmto názvom už existuje!", text_color="red"))
+            text="❌ File with this filename already exists!", text_color="red"))
         return
 
     output_template = str(Path(folder) / f"{filename}.%(ext)s")
 
     if not FFMPEG_PATH.exists():
         root.after(0, lambda: status_label.configure(
-            text="❌ ffmpeg.exe nebol nájdený!", text_color="red"))
+            text="❌ ffmpeg.exe not found!", text_color="red"))
         return
 
     try:
         root.after(0, lambda: progress_bar.pack(pady=10))
         root.after(0, lambda: progress_bar.set(0))
-        root.after(0, lambda: status_label.configure(text="⏳ Sťahovanie...", text_color="white"))
-        root.after(0, lambda: main_button.configure(text="Zrušiť", command=cancel_download))
+        root.after(0, lambda: status_label.configure(text="⏳ Downloading...", text_color="white"))
+        root.after(0, lambda: main_button.configure(text="Cancel", command=cancel_download))
 
         root.download_cancelled = False
         root.current_process = None
@@ -110,20 +117,20 @@ def _download_audio_thread() -> None:
         thumb_file = Path(folder) / f"{filename}.jpg"
         embed_thumbnail(mp3_file, thumb_file, artist)
 
-        root.after(0,lambda: status_label.configure(text="✅ MP3 bolo úspešne stiahnuté.", text_color="green"))
-        root.after(0,lambda: main_button.configure(text="Ďalší", command=reset_fields))
+        root.after(0,lambda: status_label.configure(text="✅ MP3 downloaded successfully", text_color="green"))
+        root.after(0,lambda: main_button.configure(text="Next", command=reset_fields))
     except subprocess.CalledProcessError as e:
-        msg = f"❌ Chyba pri sťahovaní"
+        msg = f"❌ Error during download or conversion"
         root.after(0, lambda: status_label.configure(
             text=msg, text_color="red"))
         logging.error(f"{msg}: {e}")
     except FileNotFoundError as e:
-        msg = f"❌ yt-dlp alebo ffmpeg nebol nájdený"
+        msg = f"❌ yt-dlp or ffmpeg not found"
         root.after(0, lambda: status_label.configure(
             text=msg, text_color="red"))
         logging.error(f"{msg}: {e}")
     except Exception as e:
-        msg = f"❌ Neznáma chyba"
+        msg = f"❌ Unexpected error occurred"
         root.after(0, lambda: status_label.configure(
             text=msg, text_color="red"))
         logging.error(f"{msg}: {e}")
@@ -154,8 +161,8 @@ def cancel_download() -> None:
         root.current_process = None
 
     def _update_ui():
-        status_label.configure(text="❌ Stiahovanie bolo zrušené.", text_color="red")
-        main_button.configure(text="Ďalší", command=reset_fields)
+        status_label.configure(text="❌ Download canceled", text_color="red")
+        main_button.configure(text="Next", command=reset_fields)
         progress_bar.pack_forget()
     root.after(0, _update_ui)
 
@@ -205,15 +212,30 @@ def reset_fields() -> None:
         url_entry.delete(0, 'end')
         name_entry.delete(0, 'end')
         status_label.configure(text="")
-        main_button.configure(text="Stiahni MP3", command=download_audio)
+        main_button.configure(text="Download MP3", command=download_audio)
     root.after(0, _reset)
+
+def run_native_gui(url: str, folder: str) -> None:
+    """Run the GUI with or without prefilled arguments from Firefox"""
+    if url:
+        url_var.set(url)
+    if folder:
+        f_path = Path(folder).resolve()
+        if f_path.is_dir():
+            folder_var.set(str(f_path))
+        else:
+            send_message({"status": "warning", "message": "Invalid folder path, using default"})
+            folder_var.set(str(DEFAULT_FOLDER))
+        # if close:
+        #     root.close_var = True # add close reading
+    root.mainloop()
 
 # -----------------------------------------   GUI Setup   ------------------------------------------
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
 root = ctk.CTk()
-root.title("YouTube MP3 Konvertor")
+root.title("YouTube MP3 Downloader")
 root.geometry("650x430")
 root.current_process = None
 
@@ -221,7 +243,7 @@ root.current_process = None
 try:
     root.iconbitmap(str(ICON_PATH))
 except Exception as exc:
-    logging.error("⚠️ Ikona sa nepodarila načítať:", exc)
+    logging.error("⚠️ Icon not found:", exc)
 
 # Variables
 url_var = ctk.StringVar()
@@ -233,18 +255,18 @@ ctk.CTkLabel(root, text="YouTube URL:", font=("Arial", 16)).pack(pady=(20, 5))
 url_entry = ctk.CTkEntry(root, textvariable=url_var, width=580, height=35, font=("Arial", 14))
 url_entry.pack()
 
-ctk.CTkLabel(root, text="Priečinok:", font=("Arial", 16)).pack(pady=(20, 5))
+ctk.CTkLabel(root, text="Folder:", font=("Arial", 16)).pack(pady=(20, 5))
 folder_frame = ctk.CTkFrame(root, fg_color="transparent")
 folder_frame.pack()
 ctk.CTkEntry(folder_frame, textvariable=folder_var, width=450, height=35, font=("Arial", 14)).pack(side="left", padx=5)
-ctk.CTkButton(folder_frame, text="Vybrať", command=choose_folder, width=120, height=35, font=("Arial", 14)).pack(side="left")
+ctk.CTkButton(folder_frame, text="Choose", command=choose_folder, width=120, height=35, font=("Arial", 14)).pack(side="left")
 
-ctk.CTkLabel(root, text="Názov súboru:", font=("Arial", 16)).pack(pady=(20, 5))
+ctk.CTkLabel(root, text="Filename:", font=("Arial", 16)).pack(pady=(20, 5))
 name_entry = ctk.CTkEntry(root, textvariable=filename_var, width=580, height=35, font=("Arial", 14))
 name_entry.pack()
 
 main_button = ctk.CTkButton(
-        root, text="Stiahni MP3", command=download_audio,
+        root, text="Download MP3", command=download_audio,
         fg_color="#4CAF50", hover_color="#45a049", font=("Arial", 15), width=220, height=45)
 main_button.pack(pady=25)
 
@@ -254,40 +276,62 @@ status_label.pack()
 progress_bar = ctk.CTkProgressBar(root, width=580, height=15)
 # -----------------------------------------   Main   ------------------------------------------
 
-if __name__ == "__main__":
-    """Parse command-line arguments and run the appropriate mode
-     - Native messaging mode if --native, --url required
-     - Auto-download mode if --auto, --url required
-     - else run GUI mode --folder --url and --close optional
+def main():
+    """Main function to handle backend of the downloader/converter
+     - Reads and sends messages via native messaging protocol
+     - Supports actions: download, download_gui, select_folder, get_default_folder
     """
-    parser = argparse.ArgumentParser(description="YouTube to MP3 Converter GUI")
-    parser.add_argument("--url", type=str, help="YouTube video URL")
-    parser.add_argument("--folder", type=str, help="Override default folder")
-    parser.add_argument("--close", action="store_true", help="Close the GUI after download")
-    parser.add_argument("--auto", action="store_true", help="Auto-download mode")
-    parser.add_argument("--native", action="store_true", help="Run in native messaging mode")
-    args = parser.parse_args()
+    while True:
+        try:
+            request = read_message()
+            action = request.get("action", "download_gui")
 
-    if args.native:
-        from native_messaging import run_native #fix this import
-        run_native()
-    else:
-        if args.auto:
-            run_auto_mode(args)
-        else:
-            if args.url:
-                url_var.set(args.url)
-            if args.folder:
-                f_path = Path(args.folder).resolve()
-                if f_path.is_dir():
-                    folder_var.set(str(f_path))
-                else:
-                    logging.warning(f"Specified folder not found: {f_path}, using default")
-                    folder_var.set(str(DEFAULT_FOLDER))
-            if args.close:
-                root.close_var = True
+            actions = {
+                "download": lambda r: run_native(r.get("url", ""), r.get("folder", "")),
+                "download_gui": lambda r: run_native_gui(r.get("url", ""), r.get("folder", "")),
+                "select_folder": lambda r: (choose_folder(), send_current_folder()),
+                "get_current_folder": lambda r: send_current_folder(),
+            }
 
-            root.mainloop()
+            handler = actions.get(action, lambda r: run_native_gui(r.get("url", ""), r.get("folder", "")))
+            try:
+                handler(request)
+            except BrokenPipeError as e:
+                logging.error(f"BrokenPipeError: {e}")
+                sys.exit(1)
+            except Exception as e:
+                try:
+                    send_message({"status": "error", "message": f"Error processing action '{action}': {e}"})
+                except Exception as err:
+                    logging.error(f"Failed to send error message: {err}")
+                    sys.exit(1)
+        except SystemExit:
+            raise
+        except Exception as e:
+            try:
+                send_message({"status": "error", "message": f"Native messaging error: {e}"})
+            except Exception as err:
+                logging.error(f"Failed to send error message: {err}")
+                sys.exit(1) # check edge case Errors and raises
 
-# settings? recent folders dropdown, check project folders
-# extension
+
+if __name__ == "__main__":
+    main()
+
+
+
+# RECEIVING
+# {"url": "..."} - url only
+# {"url": "...", "folder": "..."} - with folder
+
+# {"action": "download", "url": "...", "folder": "..."} - Silent download
+# {"action": "download_gui", "url": "..."} - Open GUI with prefilled URL
+# {"action": "select_folder"} - Open folder picker, return path
+# {"action": "get_current_folder"} - Return default folder path
+
+# SENDING
+# status: "success" / "error" / "warning"
+# message: "..."
+# filename: "..." - file already exists
+# path: "..." - download successful
+# folder: "..." - current folder path !!! not implemented properly yet
