@@ -14,83 +14,68 @@
         html, body {
             -webkit-font-smoothing:antialiased;
             -moz-osx-font-smoothing:grayscale;
-            background: #17181a; /* uniform background to avoid white corners */
+            background: #17181a; /* uniform background */
         }
 
-        /* Prevent native scrollbar flicker: make body non-scrollable and move scroll to .container */
         body {
             width: 400px;
-            min-height: 410px; /* reduced to avoid unnecessary scrolling */
-            background: #17181a; /* uniform background to avoid rim/gradient issues */
-            font-family: 'SF Pro Text', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 220px;
+            background: #17181a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             padding: 20px;
             color: #e6e6e6;
-            overflow: hidden; /* prevent flicker */
+            overflow: hidden;
         }
 
         .container {
             display: flex;
             flex-direction: column;
-            gap: 16px;
-            max-height: calc(100vh - 40px);
-            overflow-y: auto; /* scroll here if needed */
-            scrollbar-width: none; /* firefox */
-            -ms-overflow-style: none; /* ie 10+ */
+            gap: 20px;
         }
-        /* hide webkit scrollbars for container */
-        .container::-webkit-scrollbar { display: none; }
 
         h1 {
-            font-size: 18px;
+            font-size: 20px;
             font-weight: 600;
             color: #ffffff;
             text-align: center;
-            margin-bottom: 2px;
+            margin-bottom: 10px;
         }
 
-        /* Card-like input area */
-        .card {
+        /* Card-like area used for the current URL only (remove card around folder) */
+        .url-container {
             background: rgba(255,255,255,0.02);
-            border-radius: 14px;
-            padding: 14px;
+            border-radius: 10px;
+            padding: 12px 15px;
             border: 1px solid rgba(255,255,255,0.04);
-            box-shadow: none; /* remove outer rim */
-            overflow: visible;
         }
 
-        .current-url-area {
+        /* Folder row should be plain (no boxed card) */
+        .folder-row {
             background: transparent;
             padding: 0;
             border: none;
-            box-shadow: none;
-        }
-
-        /* Input groups share a consistent modern look */
-        .input-group {
             display: flex;
             flex-direction: column;
             gap: 8px;
         }
 
-        label.input-label {
-            font-size: 11px;
+        .url-label, .folder-label {
+            font-size: 12px;
             color: #9aa0a6;
+            margin-bottom: 8px;
+            font-weight: 600;
             text-transform: uppercase;
             letter-spacing: normal;
-            font-weight: 600;
         }
 
-        .static-url {
+        .url-text {
             font-size: 13px;
             color: #dcdfe2;
             word-break: break-all;
-            line-height: 1.4;
-            padding: 8px 10px;
-            background: rgba(255,255,255,0.01);
-            border-radius: 8px;
-            border: 1px solid rgba(255,255,255,0.03);
+            line-height: 1.5;
         }
 
+        /* Inputs styled to match sidebar */
         input[type="text"] {
             width: 100%;
             background: rgba(255,255,255,0.02);
@@ -111,20 +96,11 @@
             box-shadow: 0 6px 18px rgba(0,0,0,0.45), 0 0 0 3px rgba(120,130,140,0.03);
         }
 
-        input[type="text"]::placeholder {
-            color: #7e8488;
-        }
+        input[type="text"]::placeholder { color:#7e8488; }
 
-        /* Actions row */
-        .actions {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            justify-content: center;
-            margin-top: 4px;
-        }
+        .not-youtube-message { font-size:13px; color:#9aa0a6; text-align:left; margin-bottom:8px; font-weight: 600; }
 
-        /* Primary pill button */
+        /* Button style copied from sidebar - primary pill */
         #DownloadBtn {
             background: linear-gradient(180deg, #26282a 0%, #1f2022 100%);
             color: #f3f4f6;
@@ -138,134 +114,40 @@
             min-width: 140px;
             box-shadow: 0 6px 18px rgba(10,10,10,0.45);
             letter-spacing: normal;
+            display: block;
+            margin: 0 auto;
+            text-transform: uppercase;
         }
+        #DownloadBtn:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(10,10,10,0.55); }
+        #DownloadBtn:active { transform: translateY(0); box-shadow: 0 6px 18px rgba(8,8,8,0.45); opacity: 0.98; }
+        #DownloadBtn:disabled { background: rgba(255,255,255,0.02); color: #8b8f92; border-color: rgba(255,255,255,0.02); cursor:not-allowed; box-shadow:none; }
 
-        #DownloadBtn:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 10px 26px rgba(10,10,10,0.55);
-        }
-
-        #DownloadBtn:active {
-            transform: translateY(0);
-            box-shadow: 0 6px 18px rgba(8,8,8,0.45);
-            opacity: 0.98;
-        }
-
-        #DownloadBtn:disabled {
-            background: rgba(255,255,255,0.02);
-            color: #8b8f92;
-            border-color: rgba(255,255,255,0.02);
-            cursor: not-allowed;
-            box-shadow: none;
-        }
-
-        /* Secondary small button */
-        .secondary-btn {
-            background: transparent;
-            color: #d7dadd;
-            border: 1px solid rgba(255,255,255,0.04);
-            padding: 8px 10px;
-            font-size: 13px;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 140ms ease;
-            position: relative; /* for tooltip */
-        }
-        .secondary-btn:hover { background: rgba(255,255,255,0.02); transform: translateY(-1px); }
-        .secondary-btn:active { transform: translateY(0); }
-
-        /* custom button tooltip */
-        .btn-tooltip {
-            position: absolute;
-            bottom: calc(100% + 8px);
-            left: 50%;
-            transform: translateX(-50%) translateY(6px);
-            white-space: nowrap;
-            background: rgba(20,20,20,0.95);
-            color: #e6e6e6;
-            padding: 6px 8px;
-            border-radius: 8px;
-            font-size: 12px;
-            box-shadow: 0 8px 22px rgba(0,0,0,0.6);
-            opacity: 0;
-            pointer-events: none;
-            transition: opacity 140ms ease, transform 140ms ease;
-            z-index: 50;
-        }
-        .secondary-btn:hover .btn-tooltip { opacity: 1; transform: translateX(-50%) translateY(0); }
-
-        /* Row with input + select button */
-        .input-row {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        .input-row input[type="text"] { flex: 1 1 auto; }
-
-        /* Result pill message */
+        /* Result pill - copy visual from sidebar */
         #result {
-            display: none; /* hidden until a message arrives */
-            align-items: center;
-            gap: 10px;
+            background: rgba(255,255,255,0.01);
             border-radius: 12px;
             padding: 10px 12px;
             min-height: 40px;
             font-size: 13px;
-            background: rgba(255,255,255,0.01);
-            color: #dfe6e9;
             border: 1px solid rgba(255,255,255,0.03);
+            display: none;
             opacity: 0;
             transform: translateY(6px);
             transition: opacity 180ms ease, transform 180ms ease;
         }
-
-        #result.show { display:flex; opacity:1; transform:translateY(0); }
-
-        /* colored indicator dot via ::before — color set via CSS variable */
-        #result::before {
-            content: '';
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: var(--result-color, #4a90e2);
-            flex: 0 0 auto;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.5);
-        }
-
-        #result.success { --result-color: #2ecc71; color:#bfecc8; border-color: rgba(46,204,113,0.08); }
-        #result.error { --result-color: #ff6b6b; color:#ffd6d6; border-color: rgba(255,107,107,0.08); }
-        #result.warning { --result-color: #f39c12; color:#ffecc5; border-color: rgba(243,156,18,0.08); }
-        /* informational (blue) messages */
-        #result.info { --result-color: #4a90e2; color:#cfe9ff; border-color: rgba(74,144,226,0.08); }
+        #result.show { display:block; opacity:1; transform:translateY(0); }
+        #result::before { content:''; width:10px; height:10px; border-radius:50%; background:var(--result-color,#4a90e2); flex:0 0 auto; box-shadow:0 2px 6px rgba(0,0,0,0.5); }
+        #result.success { --result-color:#2ecc71; color:#bfecc8; border-color: rgba(46,204,113,0.08); }
+        #result.error { --result-color:#ff6b6b; color:#ffd6d6; border-color: rgba(255,107,107,0.08); }
+        #result.warning { --result-color:#f39c12; color:#ffecc5; border-color: rgba(243,156,18,0.08); }
+        #result.info { --result-color:#4a90e2; color:#cfe9ff; border-color: rgba(74,144,226,0.08); }
 
         .loader { display:none; width:20px; height:20px; border:3px solid rgba(255,255,255,0.06); border-top:3px solid #cfd6da; border-radius:50%; animation:spin 1s linear infinite; margin:10px auto; }
         @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 
-        /* helper: in-flow element that expands (pushes content down) */
-        .helper {
-            display: block;
-            max-height: 48px; /* reduced to avoid large shifts */
-            opacity: 0;
-            overflow: hidden;
-            color: #a8b0b4; /* slightly brighter for readability */
-            background: rgba(255,255,255,0.01);
-            border-radius: 8px;
-            padding: 0 6px;
-            font-size: 12px;
-            transition: max-height 160ms ease, opacity 160ms ease, padding 160ms ease;
-        }
-        /* helper visible class - controlled via JS (mouse only) */
-        .helper-visible {
-            max-height: 48px;
-            opacity: 1;
-            padding: 8px 6px;
-        }
-        /* when parent has no-helper, hide helper even on hover */
-        .input-group.no-helper .helper { max-height: 0 !important; opacity: 0 !important; padding: 0 !important; }
-
-
-        /* visually hidden utility for accessibility */
-        .visually-hidden { position:absolute !important; height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap;border:0;padding:0;margin:-1px }
+        /* hide url input container by default (kept from original popup) */
+        .url-input-container { display: none; }
+        .url-input-container.show { display:block; }
 
     </style>
 </head>
@@ -273,48 +155,26 @@
     <div class="container">
         <h1>YouTube MP3 Downloader</h1>
 
-        <div class="card current-url-area" id="currentUrlContainer">
-            <div class="input-group">
-                <label class="input-label" for="currentUrl">Current URL</label>
-                <div class="static-url" id="currentUrl">Loading...</div>
-            </div>
+        <div class="url-container" id="currentUrlContainer">
+            <div class="url-label">Current URL</div>
+            <div class="url-text" id="currentUrl">Loading...</div>
         </div>
 
-        <div class="card">
-            <div class="input-group">
-                <label class="input-label" for="urlInput">YouTube URL</label>
-                <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." aria-describedby="urlHelp">
-                <div id="urlHelp" class="helper">Paste a YouTube link or open the page and click the extension.</div>
-            </div>
-
-            <div class="input-group">
-                <label class="input-label" for="folderInput">Download Folder (optional)</label>
-                <div class="input-row">
-                    <input type="text" id="folderInput" placeholder="Folder Path" aria-describedby="folderHelp">
-                    <button class="secondary-btn" id="selectFolderBtn">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-folder2-open" viewBox="0 0 16 16">
-                          <path d="M10.828 0.343a1 1 0 0 1 .707.293l3.172 3.172a1 1 0 0 1 .293.707v8.586a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8.586a1 1 0 0 1 .707.293l1.414 1.414a1 1 0 0 0 1.415 0l1.414-1.414a1 1 0 0 1 .707-.293H14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-1.172a1 1 0 0 1-.707-.293l-3.172-3.172a1 1 0 0 1-.293-.707V4.414a1 1 0 0 1 .293-.707L13.586.343A1 1 0 0 1 14 .343h1.414a1 1 0 0 1 1 1v8a3 3 0 0 1-3 3H2a3 3 0 0 1-3-3V4a3 3 0 0 1 3-3h8a1 1 0 0 1 .707.293l1.414 1.414a1 1 0 0 0 1.415 0l1.414-1.414A1 1 0 0 1 10.828 0z"/>
-                        </svg>
-                        <span class="btn-tooltip">Select folder</span>
-                    </button>
-                </div>
-                <div id="folderHelp" class="helper">Optional. When empty, the default folder from the app will be used.</div>
-            </div>
-
+        <div class="url-input-container" id="urlInputContainer">
+            <div class="not-youtube-message">Not on YouTube? Paste a YouTube URL below:</div>
+            <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=...">
         </div>
 
-        <div class="actions">
-            <button id="DownloadBtn">Download MP3</button>
-            <button class="secondary-btn" id="openInAppBtn">
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-box-arrow-up-right" viewBox="0 0 16 16">
-                  <path fill-rule="evenodd" d="M11.146.354a.5.5 0 0 1 .354.146l3 3a.5.5 0 0 1 0 .708l-4 4a.5.5 0 0 1-.708 0l-3-3a.5.5 0 0 1 .708-.708L10.5 9.793V1.5a.5.5 0 0 1 .146-.354l.354-.354zM1 2.5a.5.5 0 0 1 .5-.5h8a.5.5 0 0 1 .5.5v8a.5.5 0 0 1-1 0V3H2v10h10v-2a.5.5 0 0 1 1 0v2a1 1 0 0 1-1 1H1a1 1 0 0 1-1-1v-8a.5.5 0 0 1 .5-.5z"/>
-                </svg>
-                <span class="btn-tooltip">Open in app</span>
-            </button>
+        <!-- Use a plain row for folder label+input to avoid the boxed card around it -->
+        <div class="folder-row">
+            <div class="folder-label">Download Folder (Optional)</div>
+            <input type="text" id="folderInput" placeholder="Leave empty for default folder">
         </div>
 
-        <div class="loader" id="loader" aria-hidden="true"></div>
-        <div id="result" role="status" aria-live="polite"></div>
+        <button id="DownloadBtn">Download MP3</button>
+
+        <div class="loader" id="loader"></div>
+        <div id="result"></div>
     </div>
 
     <script src="popup.js"></script>

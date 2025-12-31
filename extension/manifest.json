@@ -34,5 +34,10 @@
     "notifications",
     "activeTab",
     "tabs"
-  ]
+  ],
+
+  "sidebar_action": {
+  "default_title": "YouTube MP3 Downloader",
+  "default_panel": "sidebar.html"
+}
 }
