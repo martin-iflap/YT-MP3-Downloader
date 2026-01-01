@@ -93,7 +93,7 @@ def download_audio_headless(url: str, folder: str, filename: str) -> None:
         return
 
     try:
-        subprocess.run([ # edit this to work
+        subprocess.run([
             str(YT_DLP_PATH),
             "--no-playlist",
             "--concurrent-fragments", "3",

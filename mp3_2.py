@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import threading
 import logging
+import sys
 import time
 import re
 # ----------------------------------------   Logging   --------------------------------------------
@@ -27,7 +28,7 @@ def send_current_folder() -> None:
     folder = folder_var.get().strip()
     if not folder:
         folder = str(DEFAULT_FOLDER)
-    send_message({"status": "success", "folder": folder})
+    send_message({"status": "success", "folder": folder, "final": True})
 
 def download_audio() -> None:
     """Start the audio download in a separate thread to allow progress bar updates"""
@@ -224,10 +225,11 @@ def run_native_gui(url: str, folder: str) -> None:
         if f_path.is_dir():
             folder_var.set(str(f_path))
         else:
-            send_message({"status": "warning", "message": "Invalid folder path, using default"})
+            send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
             folder_var.set(str(DEFAULT_FOLDER))
         # if close:
         #     root.close_var = True # add close reading
+    root.after(100, lambda: send_message({"status": "success", "message": "GUI opened", "final": True}))
     root.mainloop()
 
 # -----------------------------------------   GUI Setup   ------------------------------------------
@@ -243,7 +245,7 @@ root.current_process = None
 try:
     root.iconbitmap(str(ICON_PATH))
 except Exception as exc:
-    logging.error("⚠️ Icon not found:", exc)
+    logging.error("⚠️ Icon not found: %s", exc)
 
 # Variables
 url_var = ctk.StringVar()
@@ -284,7 +286,7 @@ def main():
     while True:
         try:
             request = read_message()
-            action = request.get("action", "download_gui")
+            action = request.get("action", "download")
 
             actions = {
                 "download": lambda r: run_native(r.get("url", ""), r.get("folder", "")),
@@ -293,7 +295,7 @@ def main():
                 "get_current_folder": lambda r: send_current_folder(),
             }
 
-            handler = actions.get(action, lambda r: run_native_gui(r.get("url", ""), r.get("folder", "")))
+            handler = actions.get(action, lambda r: run_native(r.get("url", ""), r.get("folder", "")))
             try:
                 handler(request)
             except BrokenPipeError as e:
@@ -301,7 +303,7 @@ def main():
                 sys.exit(1)
             except Exception as e:
                 try:
-                    send_message({"status": "error", "message": f"Error processing action '{action}': {e}"})
+                    send_message({"status": "error", "message": f"Error processing action '{action}': {e}", "final": True})
                 except Exception as err:
                     logging.error(f"Failed to send error message: {err}")
                     sys.exit(1)
@@ -309,15 +311,19 @@ def main():
             raise
         except Exception as e:
             try:
-                send_message({"status": "error", "message": f"Native messaging error: {e}"})
+                send_message({"status": "error", "message": f"Native messaging error: {e}", "final": True})
             except Exception as err:
                 logging.error(f"Failed to send error message: {err}")
                 sys.exit(1) # check edge case Errors and raises
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": # remove logging and add icon for production
     main()
 
+
+# folder from sidebar should copy to gui on open, update gui design?
+# add loading the folder after start and saving it to extension memory
+# make popup stay alive by spamming progress messages??
 
 
 # RECEIVING

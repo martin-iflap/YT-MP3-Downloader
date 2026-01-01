@@ -8,7 +8,7 @@ import json
 import sys
 
 logging.basicConfig( # remove logging for .exe?
-    filename="native_messaging.log",
+    filename="mp3.log", # for now at least
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
@@ -50,13 +50,13 @@ def run_native(url: str, folder: str) -> None:
      - basically mp3_2.download_audio_headless wrapped for native messaging
      """
     if not url or "youtube.com" not in url:
-        send_message({"status": "error", "message": "Invalid YouTube URL"})
+        send_message({"status": "error", "message": "Invalid YouTube URL", "final": True})
         return
 
     if folder:
         input_folder = Path(folder).resolve()
         if not input_folder.is_dir():
-            send_message({"status": "warning", "message": "Invalid folder path, using default"})
+            send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
             input_folder = DEFAULT_FOLDER
     else:
         input_folder = DEFAULT_FOLDER
@@ -72,7 +72,7 @@ def run_native(url: str, folder: str) -> None:
         filename = safe_filename(title.stdout.strip() or "Youtube MP3")
     except Exception as e:
         logging.error(f"Failed to fetch title: {e}")
-        send_message({"status": "warning", "message": "Could not fetch title, using default"})
+        send_message({"status": "warning", "message": "Could not fetch title, using default", "final": False})
         filename = "Youtube MP3"
 
     mp3_path = input_folder / f"{filename}.mp3"
@@ -80,36 +80,41 @@ def run_native(url: str, folder: str) -> None:
         send_message({
             "status": "error",
             "message": "File with this name already exists",
-            "filename": filename
+            "filename": filename,
+            "final": True
         })
         return
     try:
         download_audio_headless(url, str(input_folder), filename)
     except subprocess.TimeoutExpired as e:
-        send_message({"status": "error", "message": f"Download timed out: {e}"})
+        send_message({"status": "error", "message": f"Download timed out: {e}", "final": True})
         logging.error(f"Download timed out: {e}")
         return
     except Exception as e:
         logging.error(f"Download failed: {e}")
-        send_message({"status": "error", "message": f"Download failed: {e}"})
+        send_message({"status": "error", "message": f"Download failed: {e}", "final": True})
         return
 
     if mp3_path.exists():
         send_message({
             "status": "success",
             "filename": filename,
-            "path": str(mp3_path)
+            "path": str(mp3_path),
+            "final": True
         })
     else:
         send_message({
             "status": "error",
-            "message": "Download failed, file not created"
+            "message": "Download failed, file not created",
+            "final": True
         })
 
 
-if __name__ == "__main__": #recompile this dumbass
+if __name__ == "__main__":
     pass
 
-# do not download if the file already exists, add the gui too, probably refactor main to work with extension, add folder selector, add cancel download button, add progress bar? maybe not
-# better error handling, remove logging for .exe, make the extension persistent, add setting for default folder, add right click context menu, add option to name the file
-# add requirements.txt, add tests?, better code and file structure, add video and playlist download options?, add settings page,
+# git rm = delete, git rm --cached = only git
+# add cancel download button
+# better error handling, remove logging for .exe, make the extension persistent, add setting for default folder
+# add right click context menu, add option to name the file?
+# add requirements.txt, tests?, better code and file structure, add video and playlist download options?
