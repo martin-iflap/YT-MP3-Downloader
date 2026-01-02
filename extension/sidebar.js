@@ -6,7 +6,6 @@
 const downloadBtn = document.getElementById('DownloadBtn');
 const resultDiv = document.getElementById('result');
 const loader = document.getElementById('loader');
-const currentUrlContainer = document.getElementById('currentUrlContainer');
 const urlInput = document.getElementById('urlInput');
 const folderInput = document.getElementById('folderInput');
 const container = document.querySelector('.container');
@@ -34,7 +33,7 @@ browser.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
     currentTabUrl = tabs[0].url;
     isYouTubePage = isYouTubeUrl(currentTabUrl);
 
-    // Auto-fill URL input if on YouTube page
+    // Autofill URL input if on YouTube page
     const urlLabel = document.querySelector('label[for="urlInput"]');
     if (urlInput) {
       urlInput.value = isYouTubePage ? currentTabUrl : '';
@@ -47,7 +46,38 @@ browser.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
     // Update label text based on page type
     if (urlLabel) urlLabel.textContent = isYouTubePage ? 'Current URL' : 'YouTube URL';
   }
-  try { getCurrentFolder(); } catch (e) { console.warn('Could not request current folder:', e); }
+
+  // Load folder - simplified approach with guaranteed display
+  const loadFolder = () => {
+    console.log('[FOLDER] Starting folder load...');
+    console.log('[FOLDER] folderInput exists?', !!folderInput);
+
+    if (!folderInput) {
+      console.error('[FOLDER] ❌ folderInput element is NULL - cannot set folder!');
+      return;
+    }
+
+    // Try storage first
+    browser.storage.local.get('lastFolder').then((result) => {
+      console.log('[FOLDER] Storage query result:', result);
+
+      if (result && result.lastFolder) {
+        console.log('[FOLDER] ✅ Found in storage:', result.lastFolder);
+        folderInput.value = result.lastFolder;
+        console.log('[FOLDER] ✅ Display value:', folderInput.value);
+      } else {
+        console.log('[FOLDER] ⚠️ Storage empty, querying backend...');
+        getCurrentFolder();
+      }
+    }).catch((err) => {
+      console.error('[FOLDER] ❌ Storage error:', err);
+      getCurrentFolder();
+    });
+  };
+
+  // Small delay to ensure DOM is ready
+  setTimeout(loadFolder, 100);
+
 }).catch((error) => {
   console.error('Error getting tab info:', error);
   try { getCurrentFolder(); } catch (e) {}
@@ -136,20 +166,37 @@ function sendNativeAction(message, onMessage, opts = {}) {
 
 // Request current folder from native host and populate folderInput
 function getCurrentFolder() {
-  try {
-    sendNativeAction({ action: 'get_current_folder' }, (resp) => {
-      if (!resp) return;
-      // mp3_2.py sends back success status with folder field
-      if (resp.status === 'success' && resp.folder) {
-        if (folderInput) folderInput.value = resp.folder;
-        try { browser.storage.local.set({ lastFolder: resp.folder }); } catch (e) { console.warn('Could not persist lastFolder', e); }
-      } else if (resp.status === 'error') {
-        console.warn('get_current_folder error:', resp.message);
+  console.log('[FOLDER] Requesting folder from backend...');
+
+  sendNativeAction({ action: 'get_current_folder' }, (resp) => {
+    console.log('[FOLDER] Backend response:', resp);
+
+    if (!resp) {
+      console.error('[FOLDER] ❌ No response from backend');
+      return;
+    }
+
+    if (resp.status === 'success' && resp.folder) {
+      console.log('[FOLDER] ✅ Received folder from backend:', resp.folder);
+
+      if (folderInput) {
+        folderInput.value = resp.folder;
+        console.log('[FOLDER] ✅ Display value:', folderInput.value);
+      } else {
+        console.error('[FOLDER] ❌ folderInput is NULL when backend responded!');
       }
-    }, { timeoutMs: 5000 });
-  } catch (e) {
-    console.warn('getCurrentFolder send failed:', e);
-  }
+
+      // Save to storage for next time
+      try {
+        browser.storage.local.set({ lastFolder: resp.folder });
+        console.log('[FOLDER] 💾 Saved to storage');
+      } catch (e) {
+        console.error('[FOLDER] ❌ Storage save error:', e);
+      }
+    } else if (resp.status === 'error') {
+      console.error('[FOLDER] ❌ Backend error:', resp.message);
+    }
+  }, { timeoutMs: 5000 });
 }
 
 // Start download process
@@ -273,8 +320,27 @@ if (selectFolderBtn) {
 
         // mp3_2.py sends back success status with folder field after folder selection
         if (resp.status === 'success' && resp.folder) {
-          if (folderInput) folderInput.value = resp.folder;
-          try { browser.storage.local.set({ lastFolder: resp.folder }); } catch (e) { console.warn('Could not persist lastFolder', e); }
+          console.log('📁 Received folder from backend:', resp.folder);
+
+          if (folderInput) {
+            folderInput.value = resp.folder;
+            console.log('✅ Updated folderInput.value to:', folderInput.value);
+          }
+
+          try {
+            browser.storage.local.set({ lastFolder: resp.folder }).then(() => {
+              console.log('💾 Successfully saved folder to storage.local');
+              // Verify it was saved
+              browser.storage.local.get('lastFolder').then((result) => {
+                console.log('🔍 Verification - storage now contains:', result);
+              });
+            }).catch((e) => {
+              console.error('❌ Failed to save to storage:', e);
+            });
+          } catch (e) {
+            console.error('❌ Exception saving to storage:', e);
+          }
+
           showResult('Folder selected', 'success');
         } else if (resp.status === 'error') {
           showResult(resp.message || 'Folder selection failed', 'error');
@@ -288,13 +354,21 @@ if (selectFolderBtn) {
 
 if (openInAppBtn) {
   openInAppBtn.addEventListener('click', () => {
-    // declare urlToOpen locally
+    // Get URL if available, but don't require it - user can paste in GUI
     const urlToOpen = isYouTubePage ? currentTabUrl : (urlInput ? urlInput.value.trim() : '');
-    if (!urlToOpen) { showResult('Please enter a YouTube URL', 'error'); return; }
-    if (!isYouTubeUrl(urlToOpen)) { showResult('Please enter a valid YouTube URL', 'error'); return; }
+
+    // Get current folder from input (user might have selected a custom folder)
+    const folderToOpen = folderInput ? folderInput.value.trim() : '';
+
+    // Optional: validate URL only if provided
+    if (urlToOpen && !isYouTubeUrl(urlToOpen)) {
+      showResult('Invalid YouTube URL (will open GUI anyway)', 'warning');
+    }
+
     showResult('Launching app...', 'info');
     try {
-      sendNativeAction({ action: 'download_gui', url: urlToOpen }, (resp) => {
+      // Send URL and folder to backend - both optional
+      sendNativeAction({ action: 'download_gui', url: urlToOpen, folder: folderToOpen || undefined }, (resp) => {
         if (!resp) return;
         if (typeof resp !== 'object') return;
 
@@ -316,7 +390,7 @@ function showResult(message, type) {
   if (!message || !message.toString().trim()) return;
   if (!resultDiv) return; // guard to avoid runtime exceptions if DOM missing
 
-  resultDiv.classList.remove('show', 'success', 'error', 'warning');
+  resultDiv.classList.remove('show', 'success', 'error', 'warning', 'info');
 
   resultDiv.textContent = message;
   resultDiv.classList.add('show', type);
@@ -334,7 +408,7 @@ function showResult(message, type) {
   if (type === 'success') {
     setTimeout(() => {
       if (!resultDiv) return;
-      resultDiv.classList.remove('show', 'success', 'error', 'warning');
+      resultDiv.classList.remove('show', 'success', 'error', 'warning', 'info');
       try {
         document.body.style.minHeight = INITIAL_BODY_MIN_HEIGHT + 'px';
       } catch (e) { /* ignore */ }

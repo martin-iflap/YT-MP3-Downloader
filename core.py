@@ -63,7 +63,7 @@ def embed_thumbnail(mp3_file: Path, thumb_file: Path, artist: str) -> None:
             thumb_file.unlink()
 
         except Exception as e:
-            logging.error(f"❌ Error with thumbnail embeding: {e}")
+            logging.error(f"❌ Error with thumbnail embedding: {e}")
             temp_mp3 = Path(folder) / f"{filename}_temp{os.getpid()}.mp3"
             if temp_mp3.exists():
                 temp_mp3.unlink()
@@ -83,13 +83,13 @@ def download_audio_headless(url: str, folder: str, filename: str) -> None:
 
     mp3_check = Path(folder) / f"{filename}.mp3" # check this
     if mp3_check.exists():
-        logging.error("❌ Súbor s týmto názvom už existuje!")
+        logging.error("❌ File with this name already exists!")
         return
 
     output_template = str(Path(folder) / f"{filename}.%(ext)s")
 
     if not FFMPEG_PATH.exists():
-        logging.error("❌ ffmpeg.exe nebol nájdený!")
+        logging.error("❌ ffmpeg.exe not found!")
         return
 
     try:
@@ -111,11 +111,11 @@ def download_audio_headless(url: str, folder: str, filename: str) -> None:
         thumb_file = Path(folder) / f"{filename}.jpg"
         embed_thumbnail(mp3_file, thumb_file, artist)
     except FileNotFoundError as e:
-        logging.error(f"❌ yt-dlp alebo ffmpeg nebol nájdený: {e}")
+        logging.error(f"❌ yt-dlp or ffmpeg not found: {e}")
         raise
     except subprocess.CalledProcessError as e:
-        logging.error(f"❌ Chyba pri sťahovaní: {e}")
+        logging.error(f"❌ Error while downloading: {e}")
         raise
     except Exception as e:
-        logging.error(f"❌ Neznáma chyba: {e}")
+        logging.error(f"❌ Unknown error: {e}")
         raise

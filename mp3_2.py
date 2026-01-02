@@ -28,6 +28,10 @@ def send_current_folder() -> None:
     folder = folder_var.get().strip()
     if not folder:
         folder = str(DEFAULT_FOLDER)
+
+    f_path = Path(folder).resolve()
+    if not f_path.is_dir():
+        f_path = str(DEFAULT_FOLDER)
     send_message({"status": "success", "folder": folder, "final": True})
 
 def download_audio() -> None:
@@ -180,33 +184,34 @@ def cleanup_partial_downloads(folder: Path, filename: str) -> None:
     logging.info(f"📁 Cleanup folder: {folder_path}")
     logging.info(f"🔍 Looking for filename: {filename}")
 
-    files_to_delete = [
-        folder_path / f"{filename}.part",
-        folder_path / f"{filename}.*.part",
-        folder_path / f"{filename}.ytdl",
-        folder_path / f"{filename}.jpg",
-        folder_path / f"{filename}.webp",
-        folder_path / f"{filename}_temp*.mp3",
-        folder_path / f"{filename}.mp3",
-        ]
+    file_patterns_to_delete = [
+        f"{filename}.part",
+        f"{filename}.*.part",
+        f"{filename}.ytdl",
+        f"{filename}.jpg",
+        f"{filename}.webp",
+        f"{filename}_temp*.mp3",
+        f"{filename}.mp3"
+    ]
 
-    time.sleep(10)
-    for f in files_to_delete:
-        if f.exists():
-            logging.info(f"🗑️ Deleting file: {f}")
-            for attempt in range(3):
-                try:
-                    f.unlink()
-                    logging.info(f"Unlinked partial file: {f}")
-                    break
-                except PermissionError:
-                    if attempt < 2:
-                        logging.info(f"⏳ Retry {attempt + 1}/5 (file locked)")
-                        time.sleep(0.5)
-                except Exception as e:
-                    logging.error(f"Error deleting file {f}: {e}")
-                    break
-# move cleanup to core and use it in auto mode too?
+    time.sleep(10) # wait for file locks to release and yt-dlp to finalize
+    for pattern in file_patterns_to_delete:
+        for f in folder_path.glob(pattern):
+            if f.exists():
+                logging.info(f"🗑️ Deleting file: {f}")
+                for attempt in range(3):
+                    try:
+                        f.unlink()
+                        logging.info(f"Unlinked partial file: {f}")
+                        break
+                    except PermissionError:
+                        if attempt < 2:
+                            logging.info(f"⏳ Retry {attempt + 1}/5 (file locked)")
+                            time.sleep(0.5)
+                    except Exception as e:
+                        logging.error(f"Error deleting file {f}: {e}")
+                        break
+
 def reset_fields() -> None:
     """Reset input entries for a new download with a helper function"""
     def _reset():
@@ -227,8 +232,6 @@ def run_native_gui(url: str, folder: str) -> None:
         else:
             send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
             folder_var.set(str(DEFAULT_FOLDER))
-        # if close:
-        #     root.close_var = True # add close reading
     root.after(100, lambda: send_message({"status": "success", "message": "GUI opened", "final": True}))
     root.mainloop()
 
@@ -237,7 +240,7 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("green")
 
 root = ctk.CTk()
-root.title("YouTube MP3 Downloader")
+root.title("YouTube MP3 Converter")
 root.geometry("650x430")
 root.current_process = None
 
@@ -245,37 +248,51 @@ root.current_process = None
 try:
     root.iconbitmap(str(ICON_PATH))
 except Exception as exc:
-    logging.error("⚠️ Icon not found: %s", exc)
+    logging.error("⚠️ Icon not found : %s", exc)
 
 # Variables
 url_var = ctk.StringVar()
 folder_var = ctk.StringVar(value=str(DEFAULT_FOLDER))
 filename_var = ctk.StringVar()
 
+# Visual container
+main_frame = ctk.CTkFrame(root, fg_color="#17181a", corner_radius=12)
+main_frame.pack(fill='both', expand=True, padx=14, pady=14)
+
 # Layout
-ctk.CTkLabel(root, text="YouTube URL:", font=("Arial", 16)).pack(pady=(20, 5))
-url_entry = ctk.CTkEntry(root, textvariable=url_var, width=580, height=35, font=("Arial", 14))
-url_entry.pack()
+ctk.CTkLabel(main_frame, text="YouTube URL:", font=("Segoe UI", 20, "bold")).pack(in_=main_frame, pady=(12, 6))
+url_entry = ctk.CTkEntry(main_frame, textvariable=url_var, width=580, height=35, font=("Segoe UI", 14), corner_radius=999)
+url_entry.pack(in_=main_frame)
 
-ctk.CTkLabel(root, text="Folder:", font=("Arial", 16)).pack(pady=(20, 5))
-folder_frame = ctk.CTkFrame(root, fg_color="transparent")
-folder_frame.pack()
-ctk.CTkEntry(folder_frame, textvariable=folder_var, width=450, height=35, font=("Arial", 14)).pack(side="left", padx=5)
-ctk.CTkButton(folder_frame, text="Choose", command=choose_folder, width=120, height=35, font=("Arial", 14)).pack(side="left")
+ctk.CTkLabel(main_frame, text="Folder:", font=("Segoe UI", 20, "bold")).pack(in_=main_frame, pady=(12, 6))
+folder_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+folder_frame.pack(in_=main_frame)
+ctk.CTkEntry(folder_frame, textvariable=folder_var, width=450, height=35, font=("Segoe UI", 14), corner_radius=999).pack(side="left", padx=5)
+ctk.CTkButton(folder_frame, text="Choose", command=choose_folder, width=120, height=35, font=("Segoe UI", 14, "bold")).pack(side="left")
 
-ctk.CTkLabel(root, text="Filename:", font=("Arial", 16)).pack(pady=(20, 5))
-name_entry = ctk.CTkEntry(root, textvariable=filename_var, width=580, height=35, font=("Arial", 14))
-name_entry.pack()
+ctk.CTkLabel(main_frame, text="Filename:", font=("Segoe UI", 20, "bold")).pack(in_=main_frame, pady=(12, 6))
+name_entry = ctk.CTkEntry(main_frame, textvariable=filename_var, width=580, height=35, font=("Segoe UI", 14), corner_radius=999)
+name_entry.pack(in_=main_frame)
 
 main_button = ctk.CTkButton(
-        root, text="Download MP3", command=download_audio,
-        fg_color="#4CAF50", hover_color="#45a049", font=("Arial", 15), width=220, height=45)
-main_button.pack(pady=25)
+        main_frame,
+        text="Download MP3",
+        command=download_audio,
+        fg_color="#26282a",
+        hover_color="#1f2022",
+        text_color="#f3f4f6",
+        corner_radius=999,
+        border_width=1,
+        border_color="#555555",
+        font=("Segoe UI", 15, "bold"),
+        width=220,
+        height=45)
+main_button.pack(in_=main_frame, pady=20)
 
-status_label = ctk.CTkLabel(root, text="", font=("Arial", 14))
-status_label.pack()
+status_label = ctk.CTkLabel(main_frame, text="", font=("Segoe UI", 16, "bold"))
+status_label.pack(in_=main_frame)
 
-progress_bar = ctk.CTkProgressBar(root, width=580, height=15)
+progress_bar = ctk.CTkProgressBar(main_frame, width=580, height=15)
 # -----------------------------------------   Main   ------------------------------------------
 
 def main():
@@ -321,8 +338,8 @@ if __name__ == "__main__": # remove logging and add icon for production
     main()
 
 
-# folder from sidebar should copy to gui on open, update gui design?
-# add loading the folder after start and saving it to extension memory
+# update gui design?
+# folder still doesn't really work with the extension memory, also add the folder to popup
 # make popup stay alive by spamming progress messages??
 
 

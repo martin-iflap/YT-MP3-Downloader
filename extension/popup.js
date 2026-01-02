@@ -96,6 +96,20 @@ browser.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
       if (urlInputContainer) urlInputContainer.classList.add('show');
     }
   }
+
+  // Try to load folder from localStorage first
+  try {
+    browser.storage.local.get('lastFolder').then((result) => {
+      if (result && result.lastFolder && folderInput) {
+        folderInput.value = result.lastFolder;
+        console.log('Loaded folder from localStorage:', result.lastFolder);
+      }
+    }).catch((e) => {
+      console.warn('Could not read storage for lastFolder:', e);
+    });
+  } catch (e) {
+    console.warn('localStorage not available:', e);
+  }
 }).catch((error) => {
   console.error('Error getting tab info:', error);
   if (currentUrlText) currentUrlText.textContent = 'Error loading URL';
@@ -176,15 +190,14 @@ function showResult(message, type) {
   if (!message || !message.toString().trim()) return;
 
   resultDiv.textContent = message;
-  resultDiv.className = '';
-  resultDiv.classList.add(type === 'info' ? 'info' : type);
-  resultDiv.classList.add('show');
+  resultDiv.classList.remove('show', 'success', 'error', 'warning', 'info');
+  resultDiv.classList.add('show', type);
 
   // Auto-hide after 5 seconds for success messages
   if (type === 'success') {
     setTimeout(() => {
       if (!resultDiv) return;
-      resultDiv.classList.remove('show');
+      resultDiv.classList.remove('show', 'success', 'error', 'warning', 'info');
     }, 5000);
   }
 }

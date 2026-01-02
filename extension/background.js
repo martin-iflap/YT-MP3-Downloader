@@ -35,10 +35,10 @@ function isYouTubeUrl(url) {
 }
 
 // Check if sidebar is open
-function isSidebarOpen() {
+async function isSidebarOpen() {
   try {
     if (browser.sidebarAction && browser.sidebarAction.isOpen) {
-      return browser.sidebarAction.isOpen({});
+      return await browser.sidebarAction.isOpen({});
     }
   } catch (e) {
     // fallback: check if any sidebar views exist
@@ -127,13 +127,11 @@ function initiateDownload(payload, opts = {}) {
     const isFinal = Object.prototype.hasOwnProperty.call(response, 'final') ? Boolean(response.final) : (response && (response.status === 'success' || response.status === 'error'));
     if (isFinal) {
       try { clearTimeout(timeoutHandle); } catch (e) {}
-      // Show summary notification
+      // Show summary notification only for final messages
       if (response.status === 'success') {
         showNotification('Download Complete', `${response.filename || 'YouTube MP3'} saved successfully!`, 'success');
       } else if (response.status === 'error') {
         showNotification('Download Failed', response.message || 'An error occurred during download', 'error');
-      } else if (response.status === 'warning') {
-        showNotification('Warning', response.message || 'Download completed with warnings', 'warning');
       }
       // Do NOT call port.disconnect() here to avoid potential focus changes; allow native host lifecycle to control it.
     }
@@ -162,7 +160,7 @@ function initiateDownload(payload, opts = {}) {
 }
 
 // Bridge: listen for popup/sidebar requests (support all mp3_2.py actions)
-browser.runtime.onMessage.addListener((msg, sender) => {
+browser.runtime.onMessage.addListener((msg) => {
   if (!msg || msg.type !== 'native_action') return;
 
   const action = msg.action;
@@ -182,5 +180,3 @@ browser.runtime.onMessage.addListener((msg, sender) => {
 
   return true;
 });
-
-// End of background.js

@@ -33,7 +33,8 @@
     "nativeMessaging",
     "notifications",
     "activeTab",
-    "tabs"
+    "tabs",
+    "storage"
   ],
 
   "sidebar_action": {
