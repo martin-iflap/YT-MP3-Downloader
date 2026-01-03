@@ -8,6 +8,7 @@ const resultDiv = document.getElementById('result');
 const loader = document.getElementById('loader');
 const urlInput = document.getElementById('urlInput');
 const folderInput = document.getElementById('folderInput');
+const filenameInput = document.getElementById('filenameInput');
 const container = document.querySelector('.container');
 
 // remember initial body min-height so we can restore it later
@@ -131,6 +132,13 @@ browser.runtime.onMessage.addListener((msg) => {
   if (isFinal) {
     try { clearTimeout(entry.timer); } catch (e) {}
     pendingNativeRequests.delete(id);
+
+    // Reset filename input only on successful final message
+    if (msg.status === 'success' && filenameInput) {
+      if (msg.message !== "GUI opened") {
+        filenameInput.value = '';
+      }
+    }
   }
 });
 
@@ -209,13 +217,19 @@ function startDownload(url) {
   console.log('Starting download for:', url);
 
   const folderPath = folderInput ? folderInput.value.trim() : '';
+  const filename = filenameInput ? filenameInput.value.trim() : '';
 
   downloadBtn.disabled = true;
   loader.style.display = 'block';
   resultDiv.classList.remove('show', 'success', 'error', 'warning', 'info');
 
   try {
-    sendNativeAction({ action: 'download', url: url, folder: folderPath || undefined }, (response) => {
+    sendNativeAction({
+      action: 'download',
+      url: url,
+      folder: folderPath || undefined,
+      filename: filename || undefined
+    }, (response) => {
       if (!response) return;
       if (typeof response !== 'object') return;
 
@@ -360,6 +374,9 @@ if (openInAppBtn) {
     // Get current folder from input (user might have selected a custom folder)
     const folderToOpen = folderInput ? folderInput.value.trim() : '';
 
+    // Get filename if provided
+    const filenameToOpen = filenameInput ? filenameInput.value.trim() : '';
+
     // Optional: validate URL only if provided
     if (urlToOpen && !isYouTubeUrl(urlToOpen)) {
       showResult('Invalid YouTube URL (will open GUI anyway)', 'warning');
@@ -367,8 +384,13 @@ if (openInAppBtn) {
 
     showResult('Launching app...', 'info');
     try {
-      // Send URL and folder to backend - both optional
-      sendNativeAction({ action: 'download_gui', url: urlToOpen, folder: folderToOpen || undefined }, (resp) => {
+      // Send URL, folder, and filename to backend - all optional
+      sendNativeAction({
+        action: 'download_gui',
+        url: urlToOpen,
+        folder: folderToOpen || undefined,
+        filename: filenameToOpen || undefined
+      }, (resp) => {
         if (!resp) return;
         if (typeof resp !== 'object') return;
 

@@ -7,6 +7,7 @@ const urlInputContainer = document.getElementById('urlInputContainer');
 const currentUrlText = document.getElementById('currentUrl');
 const urlInput = document.getElementById('urlInput');
 const folderInput = document.getElementById('folderInput');
+const filenameInput = document.getElementById('filenameInput');
 
 let currentTabUrl = '';
 let isYouTubePage = false;
@@ -46,6 +47,11 @@ browser.runtime.onMessage.addListener((msg) => {
   if (isFinal) {
     try { clearTimeout(entry.timer); } catch (e) {}
     pendingRequests.delete(id);
+
+    // Reset filename input only on successful final message
+    if (msg.status === 'success' && filenameInput) {
+      filenameInput.value = '';
+    }
   }
 });
 
@@ -132,6 +138,7 @@ function startDownload(url) {
   console.log('Starting download for:', url);
 
   const folderPath = folderInput ? folderInput.value.trim() : '';
+  const filename = filenameInput ? filenameInput.value.trim() : '';
 
   // Show loading state
   if (downloadBtn) downloadBtn.disabled = true;
@@ -139,7 +146,12 @@ function startDownload(url) {
   if (resultDiv) resultDiv.classList.remove('show', 'success', 'error', 'warning');
 
   try {
-    sendNativeAction({ action: 'download', url: url, folder: folderPath || undefined }, (response) => {
+    sendNativeAction({
+      action: 'download',
+      url: url,
+      folder: folderPath || undefined,
+      filename: filename || undefined
+    }, (response) => {
       console.log('Native response:', response);
 
       // display according to status

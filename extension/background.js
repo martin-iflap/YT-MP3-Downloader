@@ -174,6 +174,7 @@ browser.runtime.onMessage.addListener((msg) => {
   const payload = { action: action };
   if (msg.url) payload.url = msg.url;
   if (msg.folder) payload.folder = msg.folder;
+  if (msg.filename) payload.filename = msg.filename;
   if (msg.requestId) payload.requestId = msg.requestId;
 
   initiateDownload(payload, { timeoutMs: msg.timeoutMs || DEFAULT_TIMEOUT_MS });
