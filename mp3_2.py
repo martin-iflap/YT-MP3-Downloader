@@ -221,7 +221,7 @@ def reset_fields() -> None:
         main_button.configure(text="Download MP3", command=download_audio)
     root.after(0, _reset)
 
-def run_native_gui(url: str, folder: str) -> None:
+def run_native_gui(url: str, folder: str, filename: str) -> None:
     """Run the GUI with or without prefilled arguments from Firefox"""
     if url:
         url_var.set(url)
@@ -232,6 +232,9 @@ def run_native_gui(url: str, folder: str) -> None:
         else:
             send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
             folder_var.set(str(DEFAULT_FOLDER))
+    if filename.strip():
+        filename_var.set(safe_filename(filename))
+
     root.after(100, lambda: send_message({"status": "success", "message": "GUI opened", "final": True}))
     root.mainloop()
 
@@ -306,13 +309,13 @@ def main():
             action = request.get("action", "download")
 
             actions = {
-                "download": lambda r: run_native(r.get("url", ""), r.get("folder", "")),
-                "download_gui": lambda r: run_native_gui(r.get("url", ""), r.get("folder", "")),
+                "download": lambda r: run_native(r.get("url", ""), r.get("folder", ""), r.get("filename", "")),
+                "download_gui": lambda r: run_native_gui(r.get("url", ""), r.get("folder", ""), r.get("filename", "")),
                 "select_folder": lambda r: (choose_folder(), send_current_folder()),
                 "get_current_folder": lambda r: send_current_folder(),
             }
 
-            handler = actions.get(action, lambda r: run_native(r.get("url", ""), r.get("folder", "")))
+            handler = actions.get(action, lambda r: run_native(r.get("url", ""), r.get("folder", ""), r.get("filename", "")))
             try:
                 handler(request)
             except BrokenPipeError as e:
@@ -338,9 +341,8 @@ if __name__ == "__main__": # remove logging and add icon for production
     main()
 
 
-# update gui design?
-# folder still doesn't really work with the extension memory, also add the folder to popup
 # make popup stay alive by spamming progress messages??
+# reset filename only on successful download, when downloading through popup but sidebar open no messages appear
 
 
 # RECEIVING

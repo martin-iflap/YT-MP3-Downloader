@@ -43,7 +43,7 @@ def send_message(message_content: dict, exit_code: int = 1) -> None:
             pass
         sys.exit(exit_code)
 
-def run_native(url: str, folder: str) -> None:
+def run_native(url: str, folder: str, i_filename: str) -> None:
     """Native messaging loop
      - read JSON requests and send JSON responses
      - each request should contain 'url' and optional 'folder'
@@ -61,19 +61,22 @@ def run_native(url: str, folder: str) -> None:
     else:
         input_folder = DEFAULT_FOLDER
 
-    try:
-        title = subprocess.run([
-            str(YT_DLP_PATH),
-            "--no-playlist",
-            "--skip-download",
-            "--get-title",
-            url
-        ], capture_output=True, text=True, check=True, timeout=15)
-        filename = safe_filename(title.stdout.strip() or "Youtube MP3")
-    except Exception as e:
-        logging.error(f"Failed to fetch title: {e}")
-        send_message({"status": "warning", "message": "Could not fetch title, using default", "final": False})
-        filename = "Youtube MP3"
+    if safe_filename(i_filename).strip() and i_filename.lower() != "youtube mp3":
+        filename = safe_filename(i_filename)
+    else:
+        try:
+            title = subprocess.run([
+                str(YT_DLP_PATH),
+                "--no-playlist",
+                "--skip-download",
+                "--get-title",
+                url
+            ], capture_output=True, text=True, check=True, timeout=15)
+            filename = safe_filename(title.stdout.strip() or "Youtube MP3")
+        except Exception as e:
+            logging.error(f"Failed to fetch title: {e}")
+            send_message({"status": "warning", "message": "Could not fetch title, using default", "final": False})
+            filename = "Youtube MP3"
 
     mp3_path = input_folder / f"{filename}.mp3"
     if mp3_path.exists():
@@ -115,6 +118,6 @@ if __name__ == "__main__":
 
 # git rm = delete, git rm --cached = only git
 # add cancel download button
-# better error handling, remove logging for .exe, make the extension persistent, add setting for default folder
+# remove logging for .exe, make the extension persistent
 # add right click context menu, add option to name the file?
 # add requirements.txt, tests?, better code and file structure, add video and playlist download options?
