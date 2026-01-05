@@ -61,7 +61,7 @@ def run_native(url: str, folder: str, i_filename: str) -> None:
     else:
         input_folder = DEFAULT_FOLDER
 
-    if safe_filename(i_filename).strip() and i_filename.lower() != "youtube mp3":
+    if safe_filename(i_filename).strip() and safe_filename(i_filename).lower() != "youtube mp3":
         filename = safe_filename(i_filename)
     else:
         try:

@@ -342,7 +342,7 @@ if __name__ == "__main__": # remove logging and add icon for production
 
 
 # make popup stay alive by spamming progress messages??
-# reset filename only on successful download, when downloading through popup but sidebar open no messages appear
+# when downloading through popup but sidebar opened no messages appear
 
 
 # RECEIVING
