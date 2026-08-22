@@ -1,6 +1,6 @@
-from config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
-from native_messaging import send_message, read_message, run_native
-from core import safe_filename, embed_thumbnail
+from .config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
+from .native_messaging import send_message, read_message, run_native
+from .core import safe_filename, embed_thumbnail
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
@@ -343,6 +343,8 @@ if __name__ == "__main__": # remove logging and add icon for production
 
 # make popup stay alive by spamming progress messages??
 # when downloading through popup but sidebar opened no messages appear
+
+# actually probably lets get rid of the popup since the sidewindow is great.
 
 
 # RECEIVING

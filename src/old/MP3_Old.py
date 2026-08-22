@@ -3,19 +3,15 @@ import re
 import subprocess
 import sys
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog
-
-def safe_filename(name):
-    if not isinstance(name, str) or not name.strip():
-        return "Youtube MP3"
-    return re.sub(r'[\\/*?:"<>|]', "", name.strip())
 
 # Helper: Get resource path (for PyInstaller)
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
     except Exception:
-        base_path = os.path.abspath(".")
+        base_path = os.path.abspath("")
     return os.path.join(base_path, relative_path)
 
 # Paths
@@ -70,12 +66,12 @@ def download_audio():
         ], check=True)
 
         status_label.config(text="✅ MP3 bolo úspešne stiahnuté.", fg="green")
-    except subprocess.CalledProcessError as e:
-        status_label.config(text=f"❌ Chyba pri sťahovaní: {e}", fg="red")
-    except FileNotFoundError as e:
-        status_label.config(text=f"❌ yt-dlp alebo ffmpeg nebol nájdený: {e}", fg="red")
-    except Exception as e:
-        status_label.config(text=f"❌ Neznáma chyba: {e}", fg="red")
+    except subprocess.CalledProcessError as exp:
+        status_label.config(text=f"❌ Chyba pri sťahovaní: {exp}", fg="red")
+    except FileNotFoundError as exp:
+        status_label.config(text=f"❌ yt-dlp alebo ffmpeg nebol nájdený: {exp}", fg="red")
+    except Exception as exp:
+        status_label.config(text=f"❌ Neznáma chyba: {exp}", fg="red")
 
 # GUI Setup
 root = tk.Tk()
@@ -85,7 +81,7 @@ root.configure(bg="#292929")
 
 # Window icon
 try:
-    icon_path = resource_path("mp3.png")
+    icon_path = Path(__file__).parent.parent.parent / "ico" / "mp3_old.ico"
     icon = tk.PhotoImage(file=icon_path)
     root.iconphoto(True, icon)
 except Exception as e:
@@ -117,4 +113,5 @@ tk.Button(
 status_label = tk.Label(root, text="", font=("Arial", 12), bg="#292929", fg="white")
 status_label.pack()
 
-root.mainloop()
+if __name__ == "__main__":
+    root.mainloop()

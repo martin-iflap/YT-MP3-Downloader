@@ -1,7 +1,7 @@
-from core import safe_filename, download_audio_headless
-from config import YT_DLP_PATH, DEFAULT_FOLDER
-from notifications import send_notification
-from mp3_2 import url_var, folder_var, root
+from ..mp3.core import safe_filename, download_audio_headless
+from ..mp3.config import YT_DLP_PATH, DEFAULT_FOLDER
+from .notifications import send_notification
+from ..mp3.MP3 import url_var, folder_var, root
 from pathlib import Path
 import subprocess
 import argparse
@@ -79,3 +79,10 @@ def run_auto_mode(arguments: argparse.Namespace) -> None:
     download_audio_headless(input_url, input_folder, title)
     send_notification("Download Completed", f"Download completed in auto mode.\nFile: {title} saved to {input_folder}")
     exit(0)
+
+if __name__ == "__main__":
+    """This is a CLI version for the GUI app and the auto mode. If I remember correctly,
+    I've built this one before I knew I need native messaging and I thought this one will be enough.
+    Now its probably not that useful since it's kinda annoying to use in CLI.
+    It's best to run this file as module with -m because of the imports."""
+    run_argparse()

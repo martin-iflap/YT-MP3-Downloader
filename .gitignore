@@ -1,3 +1,4 @@
 # exclude virtual environment files
 .idea/
 *.iml
+.dist/

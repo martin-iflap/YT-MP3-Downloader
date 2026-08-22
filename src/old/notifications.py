@@ -1,5 +1,5 @@
 from win10toast_click import ToastNotifier
-from config import ICON_PATH
+from ..mp3.config import ICON_PATH
 
 
 toaster = ToastNotifier()

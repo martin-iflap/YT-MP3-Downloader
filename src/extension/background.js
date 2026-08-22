@@ -159,7 +159,7 @@ function initiateDownload(payload, opts = {}) {
   }
 }
 
-// Bridge: listen for popup/sidebar requests (support all mp3_2.py actions)
+// Bridge: listen for popup/sidebar requests (support all MP3.py actions)
 browser.runtime.onMessage.addListener((msg) => {
   if (!msg || msg.type !== 'native_action') return;
 

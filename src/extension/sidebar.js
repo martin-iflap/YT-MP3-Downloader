@@ -332,7 +332,7 @@ if (selectFolderBtn) {
         if (!resp) return;
         if (typeof resp !== 'object') return;
 
-        // mp3_2.py sends back success status with folder field after folder selection
+        // MP3.py sends back success status with folder field after folder selection
         if (resp.status === 'success' && resp.folder) {
           console.log('📁 Received folder from backend:', resp.folder);
 
@@ -394,7 +394,7 @@ if (openInAppBtn) {
         if (!resp) return;
         if (typeof resp !== 'object') return;
 
-        // mp3_2.py sends back success status after launching GUI
+        // MP3.py sends back success status after launching GUI
         if (resp.status === 'success') {
           showResult(resp.message || 'App launched', 'success');
         } else if (resp.status === 'error') {

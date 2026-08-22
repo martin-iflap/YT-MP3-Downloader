@@ -1,0 +1,6 @@
+auto_mix_prep==0.2.0
+customtkinter==5.2.2
+Pillow==12.3.0
+win10toast_click==0.1.2 # for notifications.py in old/ only
+
+# we also need ffmpeg and ytdlp installed on correct path

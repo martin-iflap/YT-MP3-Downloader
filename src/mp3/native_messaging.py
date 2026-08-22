@@ -1,5 +1,5 @@
-from core import download_audio_headless, safe_filename
-from config import YT_DLP_PATH, DEFAULT_FOLDER
+from .core import download_audio_headless, safe_filename
+from .config import YT_DLP_PATH, DEFAULT_FOLDER
 from pathlib import Path
 import subprocess
 import logging
@@ -113,11 +113,7 @@ def run_native(url: str, folder: str, i_filename: str) -> None:
         })
 
 
-if __name__ == "__main__":
-    pass
-
 # git rm = delete, git rm --cached = only git
-# add cancel download button
 # remove logging for .exe, make the extension persistent
 # add right click context menu, add option to name the file?
-# add requirements.txt, tests?, better code and file structure, add video and playlist download options?
+# tests?, better code and file structure, add video and playlist download options?

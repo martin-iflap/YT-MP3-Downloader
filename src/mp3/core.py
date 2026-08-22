@@ -1,4 +1,4 @@
-from config import FFMPEG_PATH, YT_DLP_PATH
+from .config import FFMPEG_PATH, YT_DLP_PATH
 from pathlib import Path
 from PIL import Image
 import subprocess
