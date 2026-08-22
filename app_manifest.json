@@ -1,0 +1,8 @@
+{
+  "name": "app_manifest",
+  "description": "YouTube MP3 Converter",
+  "path": "C:\\Users\\User\\PycharmProjects\\MP3\\dist\\mp3_2.exe",
+  "type": "stdio",
+  "allowed_extensions": ["yt_downloader@converter.org"],
+  "\\" : "needs to be at path: C:\\Users\\User\\AppData\\Roaming\\Mozilla\\NativeMessagingHosts\\app_manifest.json"
+}
