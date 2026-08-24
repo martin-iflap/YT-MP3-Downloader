@@ -114,6 +114,6 @@ def run_native(url: str, folder: str, i_filename: str) -> None:
 
 
 # git rm = delete, git rm --cached = only git
-# remove logging for .exe, make the extension persistent
-# add right click context menu, add option to name the file?
-# tests?, better code and file structure, add video and playlist download options?
+# remove logging for .exe
+# add right click context menu
+# tests? add video and playlist download options?

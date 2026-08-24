@@ -341,10 +341,9 @@ if __name__ == "__main__": # remove logging and add icon for production
     main()
 
 
-# make popup stay alive by spamming progress messages??
-# when downloading through popup but sidebar opened no messages appear
+# We could make popup stay alive by spamming progress messages
 
-# actually probably lets get rid of the popup since the sidewindow is great.
+# Should probably compile a new version of the .exe and installer and make sure all names and all matches and is good.
 
 
 # RECEIVING
@@ -361,4 +360,4 @@ if __name__ == "__main__": # remove logging and add icon for production
 # message: "..."
 # filename: "..." - file already exists
 # path: "..." - download successful
-# folder: "..." - current folder path !!! not implemented properly yet
+# folder: "..." - current folder path

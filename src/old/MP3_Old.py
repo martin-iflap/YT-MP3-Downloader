@@ -15,7 +15,7 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 # Paths
-FFMPEG_PATH = resource_path("ffmpeg-7.1.1-essentials_build\\ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe")
+FFMPEG_PATH = resource_path("ffmpeg-7.1.1-essentials_build\\bin\\ffmpeg.exe")
 DEFAULT_FOLDER = os.path.expanduser("~\\Documents\\Martin")
 YT_DLP_PATH = resource_path("yt-dlp.exe")
 

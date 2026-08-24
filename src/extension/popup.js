@@ -213,3 +213,5 @@ function showResult(message, type) {
     }, 5000);
   }
 }
+
+// Currently unused in the actual extension but the code is functional and was being used before. Keeping it for potential.
