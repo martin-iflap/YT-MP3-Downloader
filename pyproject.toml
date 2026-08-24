@@ -1,0 +1,15 @@
+[project]
+name = "mp3"
+version = "0.1.0"
+description = "Firefox extension to download mp3 from youtube"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "auto-mix-prep==0.2.0",
+    "customtkinter==5.2.2",
+    "pillow==12.3.0",
+    "win10toast-click==0.1.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mp3"]

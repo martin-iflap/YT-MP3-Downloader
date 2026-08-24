@@ -1,4 +1,4 @@
-from src.mp3.config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
+from mp3.config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
