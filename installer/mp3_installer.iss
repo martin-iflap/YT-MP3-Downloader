@@ -31,6 +31,7 @@
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+WizardStyle=modern dynamic
 
 ; The folder shown by default in the installer.
 DefaultDirName={localappdata}\{#MyAppName}
@@ -62,7 +63,7 @@ SetupIconFile=C:\Users\User\PycharmProjects\MP3\ico\mp3.ico
 Source: "C:\Users\User\PycharmProjects\MP3\dist\mp3.exe"; DestDir: "{app}"
 
 ; Your application icon
-Source: "C:\Users\User\PycharmProjects\MP3\dist\mp3_new.ico"; DestDir: "{app}"
+Source: "C:\Users\User\PycharmProjects\MP3\ico\mp3.ico"; DestDir: "{app}"
 
 ; FFmpeg
 Source: "C:\Users\User\PycharmProjects\MP3\ffmpeg-7.1.1-essentials_build\bin\ffmpeg.exe"; DestDir: "{app}"
@@ -84,6 +85,7 @@ Root: HKCU; \
 ; FileCopy / SaveStringToFile, not listed in [Files], so the
 ; uninstaller has no record of them unless declared here.
 Type: files; Name: "{app}\yt-dlp.exe"
+Type: files; Name: "{app}\mp3.log"
 Type: files; Name: "{userappdata}\Mozilla\NativeMessagingHosts\{#NativeManifestName}"
 
 [Code]

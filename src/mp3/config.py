@@ -7,7 +7,7 @@ if getattr(sys, 'frozen', False):
 else:
     SCRIPT_DIR = Path(__file__).parent
 
-FFMPEG_PATH = SCRIPT_DIR / "ffmpeg.exe" # for .exe no "ffmpeg-7.1.1-essentials_build" / "bin" /
-YT_DLP_PATH = SCRIPT_DIR.parent.parent / "yt-dlp.exe" # for .exe no .parent
-ICON_PATH = SCRIPT_DIR.parent.parent / "ico" / "mp3.ico" # for .exe no .parent and "ico" /
-DEFAULT_FOLDER = Path.home() / "Documents" / "Martin"
+FFMPEG_PATH = SCRIPT_DIR / "ffmpeg.exe" # SCRIPT_DIR.parent.parent.parent / "ffmpeg-7.1.1-essentials_build" / "bin" / "ffmpeg.exe" for not .exe
+YT_DLP_PATH = SCRIPT_DIR / "yt-dlp.exe" # SCRIPT_DIR.parent.parent.parent / "yt-dlp.exe" for not .exe
+ICON_PATH = SCRIPT_DIR / "mp3.ico" # SCRIPT_DIR.parent.parent / "ico" / "mp3.ico" for not .exe
+DEFAULT_FOLDER = Path.home() / "Documents" / "YT-MP3-Downloads"

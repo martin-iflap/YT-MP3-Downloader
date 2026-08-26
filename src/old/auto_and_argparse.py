@@ -1,6 +1,6 @@
 from mp3.core import safe_filename, download_audio_headless
 from mp3.config import YT_DLP_PATH, DEFAULT_FOLDER
-from .notifications import send_notification
+from old.notifications import send_notification
 from mp3.MP3 import url_var, folder_var, root
 from pathlib import Path
 import subprocess

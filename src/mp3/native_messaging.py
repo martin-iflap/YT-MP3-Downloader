@@ -1,5 +1,5 @@
-from .core import download_audio_headless, safe_filename
-from .config import YT_DLP_PATH, DEFAULT_FOLDER
+from mp3.core import download_audio_headless, safe_filename, ensure_default_folder
+from mp3.config import YT_DLP_PATH
 from pathlib import Path
 import subprocess
 import logging
@@ -9,7 +9,7 @@ import sys
 
 logging.basicConfig( # remove logging for .exe?
     filename="mp3.log", # for now at least
-    level=logging.INFO,
+    level=logging.ERROR,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
@@ -57,9 +57,9 @@ def run_native(url: str, folder: str, i_filename: str) -> None:
         input_folder = Path(folder).resolve()
         if not input_folder.is_dir():
             send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
-            input_folder = DEFAULT_FOLDER
+            input_folder = ensure_default_folder()
     else:
-        input_folder = DEFAULT_FOLDER
+        input_folder = ensure_default_folder()
 
     if safe_filename(i_filename).strip() and safe_filename(i_filename).lower() != "youtube mp3":
         filename = safe_filename(i_filename)
@@ -113,7 +113,6 @@ def run_native(url: str, folder: str, i_filename: str) -> None:
         })
 
 
-# git rm = delete, git rm --cached = only git
 # remove logging for .exe
 # add right click context menu
 # tests? add video and playlist download options?

@@ -8,8 +8,16 @@ dependencies = [
     "auto-mix-prep==0.2.0",
     "customtkinter==5.2.2",
     "pillow==12.3.0",
+    "pyinstaller>=6.22.2",
     "win10toast-click==0.1.2",
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mp3"]
+packages = ["src/mp3", "src/old"]
+
+[tool.hatch.build.targets.wheel.sources]
+"src/mp3" = "mp3"
+"src/old" = "old"
+
+[tool.uv]
+package = true

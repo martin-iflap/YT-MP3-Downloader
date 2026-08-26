@@ -1,4 +1,4 @@
-from .config import FFMPEG_PATH, YT_DLP_PATH
+from mp3.config import FFMPEG_PATH, YT_DLP_PATH, DEFAULT_FOLDER
 from pathlib import Path
 from PIL import Image
 import subprocess
@@ -25,6 +25,12 @@ def safe_filename(name) -> str:
     name = re.sub(r'\s+', ' ', name).strip()
 
     return name if name else "Youtube MP3"
+
+def ensure_default_folder() -> Path:
+    """Create and return the default download folder if it does not exist."""
+    folder_path = Path(DEFAULT_FOLDER).expanduser()
+    folder_path.mkdir(parents=True, exist_ok=True)
+    return folder_path
 
 def embed_thumbnail(mp3_file: Path, thumb_file: Path, artist: str) -> None:
     """Crop the thumbnail 1:1 and embed it into the MP3 file using ffmpeg

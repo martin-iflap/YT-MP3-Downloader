@@ -1,6 +1,6 @@
-from .config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
-from .native_messaging import send_message, read_message, run_native
-from .core import safe_filename, embed_thumbnail
+from mp3.config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
+from mp3.native_messaging import send_message, read_message, run_native
+from mp3.core import safe_filename, embed_thumbnail, ensure_default_folder
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
@@ -12,7 +12,7 @@ import time
 import re
 # ----------------------------------------   Logging   --------------------------------------------
 logging.basicConfig(filename="mp3.log",
-                    level=logging.INFO,
+                    level=logging.ERROR,
                     format="%(asctime)s [%(levelname)s] %(message)s")
 # -----------------------------------------   Functions   ------------------------------------------
 def choose_folder() -> None:
@@ -27,12 +27,18 @@ def send_current_folder() -> None:
     """Send the current folder path via native messaging"""
     folder = folder_var.get().strip()
     if not folder:
-        folder = str(DEFAULT_FOLDER)
+        folder_path = ensure_default_folder()
+        folder_var.set(str(folder_path))
+        send_message({"status": "success", "folder": str(folder_path), "final": True})
+        return
 
-    f_path = Path(folder).resolve()
+    f_path = Path(folder).expanduser()
     if not f_path.is_dir():
-        f_path = str(DEFAULT_FOLDER)
-    send_message({"status": "success", "folder": folder, "final": True})
+        send_message({"status": "error", "message": f"Path doesn't exist", "final": True})
+        return
+
+    folder_var.set(str(f_path))
+    send_message({"status": "success", "folder": str(f_path), "final": True})
 
 def download_audio() -> None:
     """Start the audio download in a separate thread to allow progress bar updates"""
@@ -56,9 +62,15 @@ def _download_audio_thread() -> None:
         return
 
     if not folder:
-        root.after(0, lambda: status_label.configure(
-            text="❌ Choose a folder", text_color="red"))
-        return
+        folder_path = ensure_default_folder()
+        root.after(0, lambda: folder_var.set(str(folder_path)))
+    else:
+        folder_path = Path(folder).expanduser()
+        if not folder_path.is_dir():
+            msg = f"❌ Path doesn't exist"
+            root.after(0, lambda: status_label.configure(text=msg, text_color="red"))
+            logging.error(f"{msg}: {folder_path}")
+            return
 
     filename = safe_filename(filename)
 
@@ -66,13 +78,13 @@ def _download_audio_thread() -> None:
         parts = filename.split("-")
         artist = parts[0].strip()
 
-    mp3_check = Path(folder) / f"{filename}.mp3"
+    mp3_check = folder_path / f"{filename}.mp3"
     if mp3_check.exists():
         root.after(0, lambda: status_label.configure(
             text="❌ File with this filename already exists!", text_color="red"))
         return
 
-    output_template = str(Path(folder) / f"{filename}.%(ext)s")
+    output_template = str(folder_path / f"{filename}.%(ext)s")
 
     if not FFMPEG_PATH.exists():
         root.after(0, lambda: status_label.configure(
@@ -118,8 +130,8 @@ def _download_audio_thread() -> None:
             raise subprocess.CalledProcessError(process.returncode, process.args)
         root.current_process = None
 
-        mp3_file = Path(folder) / f"{filename}.mp3"
-        thumb_file = Path(folder) / f"{filename}.jpg"
+        mp3_file = folder_path / f"{filename}.mp3"
+        thumb_file = folder_path / f"{filename}.jpg"
         embed_thumbnail(mp3_file, thumb_file, artist)
 
         root.after(0,lambda: status_label.configure(text="✅ MP3 downloaded successfully", text_color="green"))
@@ -206,7 +218,7 @@ def cleanup_partial_downloads(folder: Path, filename: str) -> None:
                         break
                     except PermissionError:
                         if attempt < 2:
-                            logging.info(f"⏳ Retry {attempt + 1}/5 (file locked)")
+                            logging.info(f"⏳ Retry {attempt + 1}/3 (file locked)")
                             time.sleep(0.5)
                     except Exception as e:
                         logging.error(f"Error deleting file {f}: {e}")
@@ -226,12 +238,14 @@ def run_native_gui(url: str, folder: str, filename: str) -> None:
     if url:
         url_var.set(url)
     if folder:
-        f_path = Path(folder).resolve()
+        f_path = Path(folder).expanduser()
         if f_path.is_dir():
             folder_var.set(str(f_path))
+        elif f_path == Path(DEFAULT_FOLDER).expanduser():
+            folder_var.set(str(ensure_default_folder()))
         else:
-            send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
-            folder_var.set(str(DEFAULT_FOLDER))
+            send_message({"status": "error", "message": "Path doesn't exist", "final": True})
+            return
     if filename.strip():
         filename_var.set(safe_filename(filename))
 
@@ -342,9 +356,9 @@ if __name__ == "__main__": # remove logging and add icon for production
 
 
 # We could make popup stay alive by spamming progress messages
+# Improve logging paths and overall logs for future.
 
-# Should probably compile a new version of the .exe and installer and make sure all names and all matches and is good.
-
+# COMPILE: pyinstaller --onefile --add-binary "yt-dlp.exe;." --icon "ico\mp3.ico" src/mp3/mp3.py
 
 # RECEIVING
 # {"url": "..."} - url only
