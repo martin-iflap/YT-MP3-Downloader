@@ -47,7 +47,7 @@ The browser extension and the backend installer are distributed separately. Both
 
 Open the Firefox Add-ons listing for this extension and install it from there:
 
-`<FIREFOX_ADD_ON_URL>` (currently being reviewed by Mozilla)
+https://addons.mozilla.org/en-US/firefox/addon/youtube-mp3-downloader
 
 After installation, the extension will add a sidebar entry and a context menu item for YouTube links.
 
