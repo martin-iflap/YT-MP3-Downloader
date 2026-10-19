@@ -17,9 +17,8 @@
             background: #17181a; /* uniform background to avoid white corners */
         }
 
-        /* Sidebar-friendly sizing: narrower and taller layout */
+        /* Fill whatever width the user gives the sidebar */
         body {
-            width: 320px; /* narrower width appropriate for sidebar */
             min-height: 600px; /* allow taller content */
             background: #17181a; /* uniform background to avoid rim/gradient issues */
             font-family: 'SF Pro Text', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -147,9 +146,6 @@
         .action-pill:active { transform: translateY(0); }
         .action-pill:disabled { opacity: 0.85; cursor: not-allowed; }
 
-        /* Primary pill button - kept for compatibility with existing id */
-        #DownloadBtn { /* keep id for JS hooks */ }
-
         /* Secondary small button - default (full width) */
         .secondary-btn {
             background: transparent;
@@ -201,8 +197,6 @@
             opacity: 1;
             padding: 8px 6px;
         }
-        /* If JS sets no-helper (e.g. when hovering the button), keep helper hidden */
-        .input-group.no-helper .helper { max-height: 0 !important; opacity: 0 !important; padding: 0 !important; }
 
         /* Result pill message */
         #result {
@@ -255,24 +249,6 @@
             font-size: 12px;
             transition: max-height 160ms ease, opacity 160ms ease, padding 160ms ease;
         }
-        /* helper visible class - controlled via JS (mouse only) */
-        .helper-visible {
-            max-height: 48px;
-            opacity: 1;
-            padding: 8px 6px;
-        }
-        /* when parent has no-helper, hide helper even on hover */
-        .input-group.no-helper .helper { max-height: 0 !important; opacity: 0 !important; padding: 0 !important; }
-
-
-        /* visually hidden utility for accessibility */
-        .visually-hidden { position:absolute !important; height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap;border:0;padding:0;margin:-1px }
-
-        /* small-screen safety: ensure everything stacks well */
-        @media (min-width: 420px) {
-          body { width: 420px; }
-        }
-
     </style>
 </head>
 <body>
@@ -291,7 +267,7 @@
                 <label class="input-label" for="folderInput">Default Download Folder</label>
                 <div class="input-row">
                     <input type="text" id="folderInput" placeholder="Folder Path" aria-describedby="folderHelp">
-                    <div id="folderHelp" class="helper">Default folder used for downloads (also by the small popup)</div>
+                    <div id="folderHelp" class="helper">Default folder used for downloads (also by the right-click menu)</div>
                     <button class="secondary-btn secondary-narrow" id="selectFolderBtn">Choose</button>
                 </div>
             </div>
@@ -313,6 +289,7 @@
          <div id="result" role="status" aria-live="polite"></div>
      </div>
 
+     <script src="youtube.js"></script>
      <script src="sidebar.js"></script>
 </body>
 </html>

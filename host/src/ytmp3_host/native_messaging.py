@@ -49,7 +49,7 @@ def run_native(url: str, folder: str, i_filename: str) -> None:
      - each request should contain 'url' and optional 'folder'
      - basically mp3_2.download_audio_headless wrapped for native messaging
      """
-    if not url or "youtube.com" not in url:
+    if not url or not any(host in url for host in ("youtube.com", "youtu.be/")):
         send_message({"status": "error", "message": "Invalid YouTube URL", "final": True})
         return
 

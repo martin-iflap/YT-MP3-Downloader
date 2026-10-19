@@ -1,222 +1,147 @@
-/* global browser */
+/* global browser, isYouTubeUrl */
 
 const NATIVE_HOST_NAME = 'app_manifest';
-const DEFAULT_TIMEOUT_MS = 40000;
+const MENU_ID = 'download-mp3';
+const NOTIFICATION_ICON = 'icons/icon-48.png';
 
-// Sidebar-only mode: no toolbar icon, focus on sidebar and context menu
-// Track active requests and whether sidebar was open when they were initiated
-const activeRequests = new Map();
+// Per-action timeouts. The host allows 15s for the title lookup plus 300s for yt-dlp,
+// and select_folder waits on the user, so these must stay well above that.
+const ACTION_TIMEOUTS_MS = {
+  download: 6 * 60 * 1000,
+  download_gui: 30 * 1000,
+  select_folder: 10 * 60 * 1000,
+  get_current_folder: 15 * 1000
+};
 
+// download_gui keeps the host process alive to run the Tk window after its final
+// response; disconnecting the port would make Firefox kill it.
+const KEEP_ALIVE_ACTIONS = new Set(['download_gui']);
 
-// Create context menu when extension is installed
-browser.runtime.onInstalled.addListener(() => {
-  console.log('YouTube MP3 Downloader installed (sidebar-only mode)');
-
-  try {
-    browser.contextMenus.create({
-      id: 'download-mp3',
-      title: 'Download as MP3',
-      contexts: ['link'],
-      targetUrlPatterns: [
-        '*://www.youtube.com/watch*',
-        '*://youtube.com/watch*',
-        '*://youtu.be/*',
-        '*://m.youtube.com/watch*',
-        '*://www.youtube.com/shorts/*',
-        '*://youtube.com/shorts/*'
-      ]
-    });
-  } catch (e) {
-    console.warn('Could not create context menu:', e);
-  }
+// Menus are not persisted across browser restarts for MV2 persistent backgrounds,
+// so create it on every startup rather than in onInstalled.
+browser.contextMenus.create({
+  id: MENU_ID,
+  title: 'Download as MP3',
+  contexts: ['link'],
+  targetUrlPatterns: [
+    '*://www.youtube.com/watch*',
+    '*://youtube.com/watch*',
+    '*://m.youtube.com/watch*',
+    '*://youtu.be/*',
+    '*://www.youtube.com/shorts/*',
+    '*://youtube.com/shorts/*',
+    '*://m.youtube.com/shorts/*'
+  ]
+}, () => {
+  if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
 });
 
-function isYouTubeUrl(url) {
-  return url && (
-    url.includes('youtube.com/watch') ||
-    url.includes('youtu.be/') ||
-    url.includes('youtube.com/shorts/')
-  );
+// Forward a host response to extension pages; rejects when none are open, which is fine.
+function relay(message) {
+  browser.runtime.sendMessage(Object.assign({ type: 'native_response' }, message)).catch(() => {});
 }
 
-// Check if sidebar is open
 async function isSidebarOpen() {
   try {
-    if (browser.sidebarAction && browser.sidebarAction.isOpen) {
-      return await browser.sidebarAction.isOpen({});
-    }
+    return await browser.sidebarAction.isOpen({});
   } catch (e) {
-    // fallback: check if any sidebar views exist
-    try {
-      if (browser.extension && browser.extension.getViews) {
-        const views = browser.extension.getViews({ type: 'sidebar' });
-        return Array.isArray(views) && views.length > 0;
-      }
-    } catch (err) {
-      // ignore
-    }
-  }
-  return false;
-}
-
-// In sidebar-only mode, show notifications only when sidebar is closed
-async function showNotification(title, message, type) {
-  // Skip notification if sidebar is visible since user will see status there
-  const sidebarOpen = await isSidebarOpen().catch(() => false);
-  if (sidebarOpen) {
-    console.log('Sidebar open — skipping notification:', title, message);
-    return;
-  }
-
-  const iconMap = {
-    success: 'icons/icon-48.png',
-    error: 'icons/icon-48.png',
-    warning: 'icons/icon-48.png',
-    info: 'icons/icon-48.png'
-  };
-  try {
-    browser.notifications.create({
-      type: 'basic',
-      iconUrl: iconMap[type] || iconMap.info,
-      title,
-      message
-    });
-  } catch (e) {
-    console.warn('Notification create failed:', e);
+    return false;
   }
 }
 
-// Handle context menu clicks - primary interaction point for sidebar-only mode
-browser.contextMenus.onClicked.addListener((info) => {
-  if (info.menuItemId !== 'download-mp3') return;
-  const url = info.linkUrl;
-  if (isYouTubeUrl(url)) {
-    // Initiate download via native host
-    initiateDownload({ action: 'download', url: url }).catch(err => console.error('Download initiation error:', err));
+function notify(title, message) {
+  browser.notifications.create({ type: 'basic', iconUrl: NOTIFICATION_ICON, title, message })
+    .catch(e => console.warn('Notification create failed:', e));
+}
+
+// The sidebar shows results for its own requests; notify only when nobody would see them.
+async function notifyDownloadResult(origin, response) {
+  if (origin === 'sidebar' && await isSidebarOpen()) return;
+  if (response.status === 'success') {
+    notify('Download Complete', `${response.filename || 'YouTube MP3'} saved successfully!`);
   } else {
-    showNotification('Invalid URL', 'Not a valid YouTube URL', 'error');
+    notify('Download Failed', response.message || 'An error occurred during download');
   }
-});
+}
 
-// Core: for each download request, connect to native host and forward messages
-async function initiateDownload(payload, opts = {}) {
-  // payload should include at least { action: 'download', url: '...', folder?: '...' }
-  const requestId = payload.requestId || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'r' + Date.now());
-  // attach requestId so native can echo it
-  payload.requestId = requestId;
+// Run one action on a fresh host process. Guarantees exactly one final response
+// per requestId: from the host, a disconnect, or the timeout.
+function runNativeAction(payload, requestId, origin) {
+  const action = payload.action;
+  let port = null;
+  let done = false;
 
-  // Track whether sidebar was open when this request was initiated
-  // Only show notifications for requests initiated with sidebar closed
-  const sidebarWasOpenAtInitiation = await isSidebarOpen().catch(() => false);
-  activeRequests.set(requestId, {
-    sidebarWasOpen: sidebarWasOpenAtInitiation,
-    startTime: Date.now()
-  });
+  const finish = (response, disconnect) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    relay(Object.assign({}, response, { requestId, final: true }));
+    if (action === 'download') notifyDownloadResult(origin, response);
+    if (disconnect && port && !KEEP_ALIVE_ACTIONS.has(action)) port.disconnect();
+  };
 
-  let port;
+  const timer = setTimeout(() => {
+    finish({ status: 'error', message: 'Native host did not respond in time' }, true);
+  }, ACTION_TIMEOUTS_MS[action]);
+
   try {
     port = browser.runtime.connectNative(NATIVE_HOST_NAME);
   } catch (e) {
-    console.error('connectNative failed:', e);
-    // forward error to any listeners
-    try { browser.runtime.sendMessage({ type: 'native_response', requestId, status: 'error', message: 'Could not connect to native host', final: true }); } catch (err) {}
-    // Only show notification if sidebar was closed at initiation
-    if (!sidebarWasOpenAtInitiation) {
-      showNotification('Connection Error', 'Could not connect to native host', 'error');
-    }
-    activeRequests.delete(requestId);
+    finish({ status: 'error', message: 'Could not connect to native host' }, false);
     return;
   }
 
-  // optional timeout to notify if no final message arrives
-  const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
-  const timeoutHandle = setTimeout(() => {
-    try { browser.runtime.sendMessage({ type: 'native_response', requestId, status: 'error', message: 'Native host timeout', final: true }); } catch (e) {}
-    // Only show notification if sidebar was closed at initiation
-    if (!sidebarWasOpenAtInitiation) {
-      showNotification('Timeout', 'Native host did not respond in time', 'warning');
-    }
-    // do not forcefully disconnect port; let it close naturally
-  }, timeoutMs);
-
   port.onMessage.addListener((response) => {
-    // forward to sidebar/popup listeners
-    try { browser.runtime.sendMessage(Object.assign({ type: 'native_response', requestId }, response)); } catch (e) { console.warn('Failed to forward native response', e); }
-
-    // If response is explicit final, clear timeout and show notification
-    const isFinal = Object.prototype.hasOwnProperty.call(response, 'final') ? Boolean(response.final) : (response && (response.status === 'success' || response.status === 'error'));
+    if (done) return;
+    const isFinal = Object.prototype.hasOwnProperty.call(response, 'final')
+      ? Boolean(response.final)
+      : response.status === 'success' || response.status === 'error';
     if (isFinal) {
-      try { clearTimeout(timeoutHandle); } catch (e) {}
-
-      // Only show notifications if sidebar was closed when request was initiated
-      // This ensures sidebar can display its own UI without duplicate notifications
-      const requestInfo = activeRequests.get(requestId);
-      const shouldNotify = requestInfo && !requestInfo.sidebarWasOpen;
-
-      if (shouldNotify) {
-        // Show all final states: success, error, and any other final status
-        if (response.status === 'success') {
-          showNotification('Download Complete', `${response.filename || 'YouTube MP3'} saved successfully!`, 'success');
-        } else if (response.status === 'error') {
-          showNotification('Download Failed', response.message || 'An error occurred during download', 'error');
-        }
-      }
-
-      // Clean up
-      activeRequests.delete(requestId);
-      // Do NOT call port.disconnect() here to avoid potential focus changes; allow native host lifecycle to control it.
+      finish(response, true);
+    } else {
+      relay(Object.assign({}, response, { requestId, final: false }));
     }
   });
 
-  port.onDisconnect.addListener(() => {
-    try { clearTimeout(timeoutHandle); } catch (e) {}
-    const err = browser.runtime.lastError;
-    if (err) {
-      console.error('Native messaging error:', err);
-      try { browser.runtime.sendMessage({ type: 'native_response', requestId, status: 'error', message: err.message || String(err), final: true }); } catch (e) {}
-      // Only show notification if sidebar was closed at initiation
-      const requestInfo = activeRequests.get(requestId);
-      if (requestInfo && !requestInfo.sidebarWasOpen) {
-        showNotification('Connection Error', 'Native host disconnected', 'error');
-      }
-    }
-    // listeners removed by browser automatically when port closed; nothing else to do
+  // Firefox reports why the host went away (e.g. not installed) on port.error, not runtime.lastError.
+  port.onDisconnect.addListener((p) => {
+    finish({ status: 'error', message: p.error ? p.error.message : 'Native host exited unexpectedly' }, false);
   });
 
-  // post the payload
   try {
     port.postMessage(payload);
   } catch (e) {
-    console.error('Failed to post message to native host:', e);
-    try { browser.runtime.sendMessage({ type: 'native_response', requestId, status: 'error', message: 'Failed to send to native host', final: true }); } catch (err) {}
-    // Only show notification if sidebar was closed at initiation
-    if (!sidebarWasOpenAtInitiation) {
-      showNotification('Send Failed', 'Could not send message to native host', 'error');
-    }
-    try { clearTimeout(timeoutHandle); } catch (ignore) {}
-    activeRequests.delete(requestId);
+    finish({ status: 'error', message: 'Failed to send to native host' }, true);
   }
 }
 
-// Bridge: listen for sidebar/popup requests (support all MP3.py actions)
-browser.runtime.onMessage.addListener((msg) => {
-  if (!msg || msg.type !== 'native_action') return;
-
-  const action = msg.action;
-  const allowedActions = ['download', 'download_gui', 'select_folder', 'get_current_folder'];
-
-  if (!allowedActions.includes(action)) {
-    try { browser.runtime.sendMessage({ type: 'native_response', requestId: msg.requestId || null, status: 'error', message: 'Unsupported action', final: true }); } catch (e) {}
+browser.contextMenus.onClicked.addListener(async (info) => {
+  if (info.menuItemId !== MENU_ID) return;
+  if (!isYouTubeUrl(info.linkUrl)) {
+    notify('Invalid URL', 'Not a valid YouTube URL');
     return;
   }
 
-  const payload = { action: action };
+  // Use the default folder chosen in the sidebar; without one the host falls back to its own.
+  const payload = { action: 'download', url: info.linkUrl };
+  const { lastFolder } = await browser.storage.local.get('lastFolder').catch(() => ({}));
+  if (lastFolder) payload.folder = lastFolder;
+
+  runNativeAction(payload, crypto.randomUUID(), 'menu');
+});
+
+browser.runtime.onMessage.addListener((msg) => {
+  if (!msg || msg.type !== 'native_action') return;
+
+  if (!Object.hasOwn(ACTION_TIMEOUTS_MS, msg.action)) {
+    relay({ requestId: msg.requestId || null, status: 'error', message: 'Unsupported action', final: true });
+    return;
+  }
+
+  const payload = { action: msg.action };
   if (msg.url) payload.url = msg.url;
   if (msg.folder) payload.folder = msg.folder;
   if (msg.filename) payload.filename = msg.filename;
-  if (msg.requestId) payload.requestId = msg.requestId;
 
-  initiateDownload(payload, { timeoutMs: msg.timeoutMs || DEFAULT_TIMEOUT_MS }).catch(err => console.error('Download error:', err));
-
-  return true;
+  runNativeAction(payload, msg.requestId || crypto.randomUUID(), 'sidebar');
 });

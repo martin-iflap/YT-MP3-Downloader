@@ -1,439 +1,179 @@
-// @ts-check
-/// <reference types="firefox-webext-browser" />
-/* global browser */
+/* global browser, isYouTubeUrl */
 
-// Get DOM elements
 const downloadBtn = document.getElementById('DownloadBtn');
+const openInAppBtn = document.getElementById('openInAppBtn');
+const selectFolderBtn = document.getElementById('selectFolderBtn');
 const resultDiv = document.getElementById('result');
 const loader = document.getElementById('loader');
 const urlInput = document.getElementById('urlInput');
+const urlLabel = document.querySelector('label[for="urlInput"]');
 const folderInput = document.getElementById('folderInput');
 const filenameInput = document.getElementById('filenameInput');
-const container = document.querySelector('.container');
 
-// remember initial body min-height so we can restore it later
-const INITIAL_BODY_MIN_HEIGHT = (function(){
-  const v = window.getComputedStyle(document.body).minHeight || '320px';
-  return parseInt(v, 10) || 320;
-})();
+// ----- Native requests (relayed through background.js) -----
 
-let currentTabUrl = '';
-let isYouTubePage = false;
+// requestId -> response handler. background.js guarantees one final response per request.
+const pendingRequests = new Map();
 
-// Check if URL is a YouTube URL
-function isYouTubeUrl(url) {
-  return url && (
-    url.includes('youtube.com/watch') ||
-    url.includes('youtu.be/') ||
-    url.includes('youtube.com/shorts/')
-  );
-}
-
-browser.tabs.query({ active: true, currentWindow: true }).then((tabs) => {
-  if (tabs[0]) {
-    currentTabUrl = tabs[0].url;
-    isYouTubePage = isYouTubeUrl(currentTabUrl);
-
-    // Autofill URL input if on YouTube page
-    const urlLabel = document.querySelector('label[for="urlInput"]');
-    if (urlInput) {
-      urlInput.value = isYouTubePage ? currentTabUrl : '';
-      if (isYouTubePage) {
-        try { urlInput.focus(); urlInput.select(); } catch (e) {}
-      } else {
-        try { urlInput.focus(); } catch (e) {}
-      }
-    }
-    // Update label text based on page type
-    if (urlLabel) urlLabel.textContent = isYouTubePage ? 'Current URL' : 'YouTube URL';
+browser.runtime.onMessage.addListener((msg) => {
+  if (!msg || msg.type !== 'native_response') return;
+  const handler = pendingRequests.get(msg.requestId);
+  if (!handler) return;
+  if (msg.final) pendingRequests.delete(msg.requestId);
+  try {
+    handler(msg);
+  } catch (e) {
+    console.error('Error in native response handler:', e);
   }
-
-  // Load folder - simplified approach with guaranteed display
-  const loadFolder = () => {
-    console.log('[FOLDER] Starting folder load...');
-    console.log('[FOLDER] folderInput exists?', !!folderInput);
-
-    if (!folderInput) {
-      console.error('[FOLDER] ❌ folderInput element is NULL - cannot set folder!');
-      return;
-    }
-
-    // Try storage first
-    browser.storage.local.get('lastFolder').then((result) => {
-      console.log('[FOLDER] Storage query result:', result);
-
-      if (result && result.lastFolder) {
-        console.log('[FOLDER] ✅ Found in storage:', result.lastFolder);
-        folderInput.value = result.lastFolder;
-        console.log('[FOLDER] ✅ Display value:', folderInput.value);
-      } else {
-        console.log('[FOLDER] ⚠️ Storage empty, querying backend...');
-        getCurrentFolder();
-      }
-    }).catch((err) => {
-      console.error('[FOLDER] ❌ Storage error:', err);
-      getCurrentFolder();
-    });
-  };
-
-  // Small delay to ensure DOM is ready
-  setTimeout(loadFolder, 100);
-
-}).catch((error) => {
-  console.error('Error getting tab info:', error);
-  try { getCurrentFolder(); } catch (e) {}
 });
 
-// Handle download button click (guard DOM element presence)
-if (downloadBtn) {
-  downloadBtn.addEventListener('click', () => {
-    // Declare urlToDownload locally instead of implicitly
-    const urlToDownload = isYouTubePage ? currentTabUrl : (urlInput ? urlInput.value.trim() : '');
-
-    // Validate URL
-    if (!urlToDownload) {
-      showResult('Please enter a YouTube URL', 'error');
-      return;
-    }
-
-    if (!isYouTubeUrl(urlToDownload)) {
-      showResult('Please enter a valid YouTube URL', 'error');
-      return;
-    }
-
-    // Start download
-    startDownload(urlToDownload);
+function sendNativeAction(message, onResponse) {
+  const requestId = crypto.randomUUID();
+  pendingRequests.set(requestId, onResponse);
+  browser.runtime.sendMessage(Object.assign({ type: 'native_action', requestId }, message)).catch((e) => {
+    pendingRequests.delete(requestId);
+    onResponse({ status: 'error', message: `Could not reach the extension background: ${e.message}`, final: true });
   });
 }
 
-// Pending native requests map (requestId -> {onMessage, timer, cleanup})
-const pendingNativeRequests = new Map();
+// ----- URL field -----
 
-function genRequestId() {
-  return 'r' + Date.now() + Math.floor(Math.random() * 10000);
+// The sidebar outlives tab switches and YouTube's in-page navigation, so keep the URL
+// field in sync with the active tab, unless the user has typed a URL of their own.
+let autofilledUrl = '';
+
+async function syncUrlFromActiveTab() {
+  const current = urlInput.value.trim();
+  if (current && current !== autofilledUrl) return;
+
+  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+  const url = tab && isYouTubeUrl(tab.url) ? tab.url : '';
+  urlInput.value = url;
+  autofilledUrl = url;
+  urlLabel.textContent = url ? 'Current URL' : 'YouTube URL';
 }
 
-// Listen for native responses forwarded by background
-browser.runtime.onMessage.addListener((msg) => {
-  if (!msg || msg.type !== 'native_response') return;
-  const id = msg.requestId;
-  if (!id) return;
-  const entry = pendingNativeRequests.get(id);
-  if (!entry) return;
-  try {
-    entry.onMessage(msg);
-  } catch (e) { console.error('Error in native response handler:', e); }
+browser.tabs.onActivated.addListener(() => syncUrlFromActiveTab().catch(console.error));
+browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (tab.active) syncUrlFromActiveTab().catch(console.error);
+}, { properties: ['url'] });
 
-  // determine finality (explicit final flag is authoritative, else infer from status)
-  const isFinal = Object.prototype.hasOwnProperty.call(msg, 'final')
-    ? Boolean(msg.final)
-    : Boolean(msg && (msg.status === 'success' || msg.status === 'error'));
+syncUrlFromActiveTab()
+  .catch(e => console.error('Error getting tab info:', e))
+  .finally(() => {
+    urlInput.focus();
+    urlInput.select();
+  });
 
-  if (isFinal) {
-    try { clearTimeout(entry.timer); } catch (e) {}
-    pendingNativeRequests.delete(id);
+// ----- Folder field -----
 
-    // Reset filename input only on successful final message
-    if (msg.status === 'success' && filenameInput) {
-      if (msg.message !== "GUI opened") {
-        filenameInput.value = '';
-      }
-    }
+function saveFolder(folder) {
+  const op = folder ? browser.storage.local.set({ lastFolder: folder }) : browser.storage.local.remove('lastFolder');
+  op.catch(e => console.error('Could not save folder:', e));
+}
+
+function setFolder(folder) {
+  folderInput.value = folder;
+  saveFolder(folder);
+}
+
+async function loadFolder() {
+  const { lastFolder } = await browser.storage.local.get('lastFolder');
+  if (lastFolder) {
+    folderInput.value = lastFolder;
+    return;
   }
+  sendNativeAction({ action: 'get_current_folder' }, (resp) => {
+    if (resp.status === 'success' && resp.folder) setFolder(resp.folder);
+    else if (resp.status === 'error') console.error('Could not get default folder:', resp.message);
+  });
+}
+
+loadFolder().catch(e => console.error('Could not load folder:', e));
+
+// A typed folder becomes the new default too; clearing it falls back to the host default next time.
+folderInput.addEventListener('change', () => saveFolder(folderInput.value.trim()));
+
+selectFolderBtn.addEventListener('click', () => {
+  showResult('Opening folder chooser...', 'info');
+  sendNativeAction({ action: 'select_folder' }, (resp) => {
+    if (resp.status === 'success' && resp.folder) {
+      setFolder(resp.folder);
+      showResult('Folder selected', 'success');
+    } else if (resp.status === 'error') {
+      showResult(resp.message || 'Folder selection failed', 'error');
+    }
+  });
 });
 
-function sendNativeAction(message, onMessage, opts = {}) {
-  const requestId = genRequestId();
-  const timeoutMs = opts.timeoutMs || 30000;
-  const timer = setTimeout(() => {
-     try { onMessage({ status: 'error', message: 'Native host timeout', final: true }); } catch (e) {}
-    pendingNativeRequests.delete(requestId);
-     }, timeoutMs);
+// ----- Actions -----
 
-  pendingNativeRequests.set(requestId, { onMessage: onMessage, timer: timer });
+function setBusy(busy) {
+  downloadBtn.disabled = busy;
+  loader.style.display = busy ? 'block' : 'none';
+}
 
-  try {
-    browser.runtime.sendMessage(Object.assign({ type: 'native_action', requestId: requestId }, message));
-  } catch (e) {
-    clearTimeout(timer);
-    pendingNativeRequests.delete(requestId);
-    throw e;
+downloadBtn.addEventListener('click', () => {
+  const url = urlInput.value.trim();
+  if (!url) {
+    showResult('Please enter a YouTube URL', 'error');
+    return;
   }
-
-  return {
-    requestId: requestId,
-    cleanup: () => {
-      const e = pendingNativeRequests.get(requestId);
-      if (e) {
-        try { clearTimeout(e.timer); } catch (err) {}
-        pendingNativeRequests.delete(requestId);
-      }
-    }
-  };
-}
-
-// Request current folder from native host and populate folderInput
-function getCurrentFolder() {
-  console.log('[FOLDER] Requesting folder from backend...');
-
-  sendNativeAction({ action: 'get_current_folder' }, (resp) => {
-    console.log('[FOLDER] Backend response:', resp);
-
-    if (!resp) {
-      console.error('[FOLDER] ❌ No response from backend');
-      return;
-    }
-
-    if (resp.status === 'success' && resp.folder) {
-      console.log('[FOLDER] ✅ Received folder from backend:', resp.folder);
-
-      if (folderInput) {
-        folderInput.value = resp.folder;
-        console.log('[FOLDER] ✅ Display value:', folderInput.value);
-      } else {
-        console.error('[FOLDER] ❌ folderInput is NULL when backend responded!');
-      }
-
-      // Save to storage for next time
-      try {
-        browser.storage.local.set({ lastFolder: resp.folder });
-        console.log('[FOLDER] 💾 Saved to storage');
-      } catch (e) {
-        console.error('[FOLDER] ❌ Storage save error:', e);
-      }
-    } else if (resp.status === 'error') {
-      console.error('[FOLDER] ❌ Backend error:', resp.message);
-    }
-  }, { timeoutMs: 5000 });
-}
-
-// Start download process
-function startDownload(url) {
-  if (!downloadBtn || !loader || !resultDiv) {
-    console.error('Missing UI elements for download');
+  if (!isYouTubeUrl(url)) {
+    showResult('Please enter a valid YouTube URL', 'error');
     return;
   }
 
-  console.log('Starting download for:', url);
-
-  const folderPath = folderInput ? folderInput.value.trim() : '';
-  const filename = filenameInput ? filenameInput.value.trim() : '';
-
-  downloadBtn.disabled = true;
-  loader.style.display = 'block';
-  resultDiv.classList.remove('show', 'success', 'error', 'warning', 'info');
-
-  try {
-    sendNativeAction({
-      action: 'download',
-      url: url,
-      folder: folderPath || undefined,
-      filename: filename || undefined
-    }, (response) => {
-      if (!response) return;
-      if (typeof response !== 'object') return;
-
-      console.log('Native response:', response);
-
-      // Handle warnings as non-final intermediate messages
-      if (response.status === 'warning') {
-        showResult(response.message || 'Warning', 'warning');
-        return; // wait for final
-      }
-
-      // Handle success
-      if (response.status === 'success') {
-        loader.style.display = 'none';
-        downloadBtn.disabled = false;
-        showResult(response.message || `Downloaded: ${response.filename || 'YouTube MP3'}`, 'success');
-        return;
-      }
-
-      // Handle errors
-      if (response.status === 'error') {
-        loader.style.display = 'none';
-        downloadBtn.disabled = false;
-        if (urlInput) urlInput.disabled = false;
-        showResult(response.message || 'Download failed', 'error');
-        return;
-      }
-
-      // Handle any other status (info, progress, etc.) as non-final
-      if (response.message) {
-        showResult(response.message, response.status || 'info');
-      }
-    }, { timeoutMs: 120000 });
-  } catch (e) {
-    loader.style.display = 'none';
-    downloadBtn.disabled = false;
-    showResult('Failed to start native download', 'error');
-  }
-}
-
-// Add handlers for new UI buttons (Select folder, Open in app)
-const selectFolderBtn = document.getElementById('selectFolderBtn');
-const openInAppBtn = document.getElementById('openInAppBtn');
-
-// show/hide helpers only when hovering the actual input or the helper itself (with a short hover delay)
-const inputGroups = document.querySelectorAll('.input-group');
-if (inputGroups && inputGroups.length) {
-  inputGroups.forEach(group => {
-    const inputEl = group.querySelector('input[type="text"]');
-    const helper = group.querySelector('.helper');
-    if (!inputEl || !helper) return;
-
-    let hoverTimer = null;
-    const HOVER_DELAY_MS = 140;
-
-    inputEl.addEventListener('mouseenter', () => {
-      if (group.classList.contains('no-helper')) return;
-      if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
-      hoverTimer = setTimeout(() => {
-        if (!group.classList.contains('no-helper')) helper.classList.add('helper-visible');
-        hoverTimer = null;
-      }, HOVER_DELAY_MS);
-    });
-
-    inputEl.addEventListener('mouseleave', () => {
-      if (hoverTimer) {
-        clearTimeout(hoverTimer);
-        hoverTimer = null;
-      } else {
-        try { if (!helper.matches(':hover')) helper.classList.remove('helper-visible'); } catch (e) { helper.classList.remove('helper-visible'); }
-      }
-    });
-
-    helper.addEventListener('mouseenter', () => {
-      if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
-      if (!group.classList.contains('no-helper')) helper.classList.add('helper-visible');
-    });
-
-    helper.addEventListener('mouseleave', () => {
-      helper.classList.remove('helper-visible');
-    });
-  });
-}
-
-// Prevent selectFolderBtn hover from showing helper: add no-helper to parent input-group while hovering the button
-if (selectFolderBtn) {
-  selectFolderBtn.addEventListener('mouseenter', (e) => {
-    const group = e.currentTarget.closest('.input-group');
-    if (group) group.classList.add('no-helper');
-  });
-  selectFolderBtn.addEventListener('mouseleave', (e) => {
-    const group = e.currentTarget.closest('.input-group');
-    if (group) group.classList.remove('no-helper');
-  });
-
-  selectFolderBtn.addEventListener('click', () => {
-    showResult('Opening folder chooser...', 'info');
-    try {
-      sendNativeAction({ action: 'select_folder' }, (resp) => {
-        if (!resp) return;
-        if (typeof resp !== 'object') return;
-
-        // MP3.py sends back success status with folder field after folder selection
-        if (resp.status === 'success' && resp.folder) {
-          console.log('📁 Received folder from backend:', resp.folder);
-
-          if (folderInput) {
-            folderInput.value = resp.folder;
-            console.log('✅ Updated folderInput.value to:', folderInput.value);
-          }
-
-          try {
-            browser.storage.local.set({ lastFolder: resp.folder }).then(() => {
-              console.log('💾 Successfully saved folder to storage.local');
-              // Verify it was saved
-              browser.storage.local.get('lastFolder').then((result) => {
-                console.log('🔍 Verification - storage now contains:', result);
-              });
-            }).catch((e) => {
-              console.error('❌ Failed to save to storage:', e);
-            });
-          } catch (e) {
-            console.error('❌ Exception saving to storage:', e);
-          }
-
-          showResult('Folder selected', 'success');
-        } else if (resp.status === 'error') {
-          showResult(resp.message || 'Folder selection failed', 'error');
-        }
-      }, { timeoutMs: 120000 });
-    } catch (e) {
-      showResult('Failed to open folder chooser', 'error');
+  setBusy(true);
+  clearResult();
+  sendNativeAction({
+    action: 'download',
+    url,
+    folder: folderInput.value.trim() || undefined,
+    filename: filenameInput.value.trim() || undefined
+  }, (resp) => {
+    if (!resp.final) {
+      if (resp.message) showResult(resp.message, resp.status === 'warning' ? 'warning' : 'info');
+      return;
+    }
+    setBusy(false);
+    if (resp.status === 'success') {
+      filenameInput.value = '';
+      showResult(resp.message || `Downloaded: ${resp.filename || 'YouTube MP3'}`, 'success');
+    } else {
+      showResult(resp.message || 'Download failed', 'error');
     }
   });
-}
+});
 
-if (openInAppBtn) {
-  openInAppBtn.addEventListener('click', () => {
-    // Get URL if available, but don't require it - user can paste in GUI
-    const urlToOpen = isYouTubePage ? currentTabUrl : (urlInput ? urlInput.value.trim() : '');
-
-    // Get current folder from input (user might have selected a custom folder)
-    const folderToOpen = folderInput ? folderInput.value.trim() : '';
-
-    // Get filename if provided
-    const filenameToOpen = filenameInput ? filenameInput.value.trim() : '';
-
-    // Optional: validate URL only if provided
-    if (urlToOpen && !isYouTubeUrl(urlToOpen)) {
-      showResult('Invalid YouTube URL (will open GUI anyway)', 'warning');
-    }
-
-    showResult('Launching app...', 'info');
-    try {
-      // Send URL, folder, and filename to backend - all optional
-      sendNativeAction({
-        action: 'download_gui',
-        url: urlToOpen,
-        folder: folderToOpen || undefined,
-        filename: filenameToOpen || undefined
-      }, (resp) => {
-        if (!resp) return;
-        if (typeof resp !== 'object') return;
-
-        // MP3.py sends back success status after launching GUI
-        if (resp.status === 'success') {
-          showResult(resp.message || 'App launched', 'success');
-        } else if (resp.status === 'error') {
-          showResult(resp.message || 'Failed to launch app', 'error');
-        }
-      }, { timeoutMs: 120000 });
-    } catch (e) {
-      showResult('Failed to launch app', 'error');
-    }
+openInAppBtn.addEventListener('click', () => {
+  // Everything is optional here; the user can fill it in inside the app.
+  showResult('Launching app...', 'info');
+  sendNativeAction({
+    action: 'download_gui',
+    url: urlInput.value.trim() || undefined,
+    folder: folderInput.value.trim() || undefined,
+    filename: filenameInput.value.trim() || undefined
+  }, (resp) => {
+    if (resp.status === 'success') showResult(resp.message || 'App launched', 'success');
+    else if (resp.status === 'error') showResult(resp.message || 'Failed to launch app', 'error');
   });
+});
+
+// ----- Result pill -----
+
+let hideTimer = null;
+
+function clearResult() {
+  clearTimeout(hideTimer);
+  resultDiv.className = '';
+  resultDiv.textContent = '';
 }
 
-// Show result message
 function showResult(message, type) {
-  if (!message || !message.toString().trim()) return;
-  if (!resultDiv) return; // guard to avoid runtime exceptions if DOM missing
-
-  resultDiv.classList.remove('show', 'success', 'error', 'warning', 'info');
-
+  clearTimeout(hideTimer);
   resultDiv.textContent = message;
-  resultDiv.classList.add('show', type);
-
-  try {
-    const padding = 60;
-    const needed = (container ? container.scrollHeight : document.documentElement.scrollHeight) + padding;
-    const finalH = Math.max(INITIAL_BODY_MIN_HEIGHT, Math.ceil(needed));
-    document.body.style.minHeight = finalH + 'px';
-    if (container) container.scrollTop = container.scrollHeight;
-  } catch (e) {
-    console.warn('Could not adjust popup size:', e);
-  }
-
-  if (type === 'success') {
-    setTimeout(() => {
-      if (!resultDiv) return;
-      resultDiv.classList.remove('show', 'success', 'error', 'warning', 'info');
-      try {
-        document.body.style.minHeight = INITIAL_BODY_MIN_HEIGHT + 'px';
-      } catch (e) { /* ignore */ }
-    }, 5000);
-  }
+  resultDiv.className = `show ${type}`;
+  resultDiv.scrollIntoView({ block: 'nearest' });
+  if (type === 'success') hideTimer = setTimeout(clearResult, 5000);
 }
