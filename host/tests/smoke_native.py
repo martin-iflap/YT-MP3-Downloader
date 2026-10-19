@@ -1,4 +1,5 @@
-from mp3.MP3 import safe_filename
+from ytmp3_host.MP3 import safe_filename
+from ytmp3_host.config import YT_DLP_PATH
 from pathlib import Path
 from PIL import Image
 import subprocess
@@ -9,7 +10,6 @@ import sys
 
 
 ROOT_DIR = Path(__file__).parent.parent.parent
-YT_DLP_PATH = ROOT_DIR / "yt-dlp.exe"
 url = "https://www.youtube.com/watch?v=1wYNFfgrXTI&list=RD1wYNFfgrXTI&start_radio=1"
 
 fetched_title = subprocess.run([
@@ -43,7 +43,7 @@ def create_extension_icons(source_ico: Path, output_folder: Path) -> None:
 
     print(f"✓ Created icon-48.png and icon-96.png in {output_folder}")
 
-source = ROOT_DIR / "ico/mp3.ico"
+source = ROOT_DIR / "packaging/assets/mp3.ico"
 output = ROOT_DIR / "extension/icons"
 
 
@@ -67,7 +67,7 @@ def test_native_messaging():
         cmd = [str(exe_path)]
         print("exe found.")
     else:
-        cmd = [sys.executable, str(ROOT_DIR / "MP3.py")]
+        cmd = [sys.executable, "-m", "ytmp3_host.MP3"]
         print("Native messaging executable not found.")
         # return
 
@@ -103,4 +103,3 @@ def test_native_messaging():
 if __name__ == "__main__":
     test_native_messaging()
 
-# pyinstaller --onefile --add-binary "yt-dlp.exe;." native_messaging.py

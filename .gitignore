@@ -1,5 +1,20 @@
-# exclude virtual environment files
+# IDE
 .idea/
 *.iml
-.dist/
+
+# Python
+.venv/
+__pycache__/
 *.egg-info/
+*.log
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Dev-only binaries (ffmpeg.exe, yt-dlp.exe)
+host/bin/
+
+# Inno Setup output
+packaging/installer/output/

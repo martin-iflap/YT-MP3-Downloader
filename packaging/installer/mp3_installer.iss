@@ -26,6 +26,10 @@
 #define YtDlpURL          "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 #define YtDlpTempName     "yt-dlp.exe"
 
+; Repo root, relative to this script (packaging\installer\).
+; mp3.exe comes from PyInstaller's dist\, ffmpeg.exe from host\bin\.
+#define RepoRoot          AddBackslash(SourcePath) + "..\.."
+
 
 [Setup]
 AppName={#MyAppName}
@@ -54,19 +58,19 @@ SolidCompression=yes
 PrivilegesRequired=lowest
 
 ; Installer icon.
-SetupIconFile=C:\Users\User\PycharmProjects\MP3\ico\mp3.ico
+SetupIconFile={#RepoRoot}\packaging\assets\mp3.ico
 
 
 [Files]
 
 ; Your native application
-Source: "C:\Users\User\PycharmProjects\MP3\dist\mp3.exe"; DestDir: "{app}"
+Source: "{#RepoRoot}\dist\mp3.exe"; DestDir: "{app}"
 
 ; Your application icon
-Source: "C:\Users\User\PycharmProjects\MP3\ico\mp3.ico"; DestDir: "{app}"
+Source: "{#RepoRoot}\packaging\assets\mp3.ico"; DestDir: "{app}"
 
 ; FFmpeg
-Source: "C:\Users\User\PycharmProjects\MP3\ffmpeg-7.1.1-essentials_build\bin\ffmpeg.exe"; DestDir: "{app}"
+Source: "{#RepoRoot}\host\bin\ffmpeg.exe"; DestDir: "{app}"
 
 
 [Registry]

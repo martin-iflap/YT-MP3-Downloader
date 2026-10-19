@@ -1,4 +1,4 @@
-from mp3.config import FFMPEG_PATH, YT_DLP_PATH, DEFAULT_FOLDER
+from ytmp3_host.config import FFMPEG_PATH, YT_DLP_PATH, DEFAULT_FOLDER
 from pathlib import Path
 from PIL import Image
 import subprocess

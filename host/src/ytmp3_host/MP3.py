@@ -1,6 +1,6 @@
-from mp3.config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
-from mp3.native_messaging import send_message, read_message, run_native
-from mp3.core import safe_filename, embed_thumbnail, ensure_default_folder
+from ytmp3_host.config import FFMPEG_PATH, YT_DLP_PATH, ICON_PATH, DEFAULT_FOLDER
+from ytmp3_host.native_messaging import send_message, read_message, run_native
+from ytmp3_host.core import safe_filename, embed_thumbnail, ensure_default_folder
 from tkinter import filedialog
 import customtkinter as ctk
 from pathlib import Path
@@ -358,7 +358,7 @@ if __name__ == "__main__": # remove logging and add icon for production
 # We could make popup stay alive by spamming progress messages
 # Improve logging paths and overall logs for future.
 
-# COMPILE: pyinstaller --onefile --add-binary "yt-dlp.exe;." --icon "ico\mp3.ico" src/mp3/mp3.py
+# COMPILE (from repo root): uv run pyinstaller --onefile --name mp3 --icon "packaging\assets\mp3.ico" host\src\ytmp3_host\MP3.py
 
 # RECEIVING
 # {"url": "..."} - url only

@@ -1,5 +1,5 @@
-from mp3.core import download_audio_headless, safe_filename, ensure_default_folder
-from mp3.config import YT_DLP_PATH
+from ytmp3_host.core import download_audio_headless, safe_filename, ensure_default_folder
+from ytmp3_host.config import YT_DLP_PATH
 from pathlib import Path
 import subprocess
 import logging

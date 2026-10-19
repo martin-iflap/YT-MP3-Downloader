@@ -20,7 +20,7 @@ The extension and backend communicate through Firefox native messaging.
 
 ### Backend responsibilities
 
-The Python code under `src/mp3` is responsible for:
+The Python code under `host/src/ytmp3_host` is responsible for:
 
 - validating and normalizing filenames,
 - creating the default download folder,
@@ -31,7 +31,7 @@ The Python code under `src/mp3` is responsible for:
 
 ### Extension responsibilities
 
-The Firefox extension under `src/extension` is responsible for:
+The Firefox extension under `extension/` is responsible for:
 
 - exposing the sidebar UI,
 - adding the YouTube link context menu item,
@@ -85,18 +85,27 @@ The default output directory is:
 
 ## Repository layout
 
-- `src/extension/` — Firefox extension source files.
-- `src/mp3/` — Python backend and native-messaging implementation.
-- `installer/` — Inno Setup script for the Windows installer.
-- `app_manifest.json` — native host manifest template used by Firefox.
+- `extension/` — Firefox extension source files.
+- `host/src/ytmp3_host/` — Python backend and native-messaging implementation.
+- `host/tests/` — manual smoke tests for the native host.
+- `host/bin/` — local `ffmpeg.exe` / `yt-dlp.exe` for development (not committed).
+- `packaging/installer/` — Inno Setup script for the Windows installer.
+- `packaging/assets/` — application icons.
+- `packaging/app_manifest.dev.json` — native host manifest template for local development.
+- `legacy/` — earlier standalone scripts (`v0/`) and the MP4 experiment (`mp4/`); not part of the shipped host.
 
-## Development dependencies
+## Development setup
 
-The Python package metadata is defined in `pyproject.toml`. The backend depends on:
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) (Python 3.14+):
 
-- `customtkinter`
-- `pillow`
-- `pyinstaller`
-- `win10toast-click`
+```
+uv sync
+```
 
-The packaged runtime also expects `yt-dlp` and `ffmpeg` to be present alongside the native host executable.
+Put `ffmpeg.exe` and `yt-dlp.exe` into `host/bin/` to run the host unpackaged. Build the executable from the repo root with:
+
+```
+uv run pyinstaller --onefile --name mp3 --icon "packaging\assets\mp3.ico" host\src\ytmp3_host\MP3.py
+```
+
+Then compile `packaging/installer/mp3_installer.iss` with [Inno Setup 6](https://jrsoftware.org/isinfo.php). It picks up `dist\mp3.exe` and `host\bin\ffmpeg.exe` relative to the repo root.
