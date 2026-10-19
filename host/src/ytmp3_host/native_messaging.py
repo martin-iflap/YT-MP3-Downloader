@@ -1,6 +1,6 @@
-from ytmp3_host.core import download_audio_headless, safe_filename, ensure_default_folder
-from ytmp3_host.config import YT_DLP_PATH
+from ytmp3_host.core import download_audio, safe_filename, ensure_default_folder
 from pathlib import Path
+from typing import Any
 import subprocess
 import logging
 import struct
@@ -13,7 +13,9 @@ logging.basicConfig( # remove logging for .exe?
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-def read_message() -> dict:
+type Message = dict[str, Any]
+
+def read_message() -> Message:
     """Read a JSON message from stdin (Firefox → Python)
      - first 4 bytes contain the length of the following JSON message
     """
@@ -24,7 +26,7 @@ def read_message() -> dict:
     message = sys.stdin.buffer.read(length).decode('utf-8')
     return json.loads(message)
 
-def send_message(message_content: dict, exit_code: int = 1) -> None:
+def send_message(message_content: Message, exit_code: int = 1) -> None:
     """Send a JSON message to stdout (Python → Firefox)
      - encode the length as first 4 bytes followed by the JSON message
      - on failure, log the error and exit with the given exit_code
@@ -43,11 +45,26 @@ def send_message(message_content: dict, exit_code: int = 1) -> None:
             pass
         sys.exit(exit_code)
 
+def send_current_folder(folder: str) -> None:
+    """Send the given folder path via native messaging"""
+    folder = folder.strip()
+    if not folder:
+        folder_path = ensure_default_folder()
+        send_message({"status": "success", "folder": str(folder_path), "final": True})
+        return
+
+    f_path = Path(folder).expanduser()
+    if not f_path.is_dir():
+        send_message({"status": "error", "message": f"Path doesn't exist", "final": True})
+        return
+
+    send_message({"status": "success", "folder": str(f_path), "final": True})
+
 def run_native(url: str, folder: str, i_filename: str) -> None:
     """Native messaging loop
      - read JSON requests and send JSON responses
      - each request should contain 'url' and optional 'folder'
-     - basically mp3_2.download_audio_headless wrapped for native messaging
+     - basically core.download_audio wrapped for native messaging
      """
     if not url or not any(host in url for host in ("youtube.com", "youtu.be/")):
         send_message({"status": "error", "message": "Invalid YouTube URL", "final": True})
@@ -61,34 +78,21 @@ def run_native(url: str, folder: str, i_filename: str) -> None:
     else:
         input_folder = ensure_default_folder()
 
-    if safe_filename(i_filename).strip() and safe_filename(i_filename).lower() != "youtube mp3":
-        filename = safe_filename(i_filename)
-    else:
-        try:
-            title = subprocess.run([
-                str(YT_DLP_PATH),
-                "--no-playlist",
-                "--skip-download",
-                "--get-title",
-                url
-            ], capture_output=True, text=True, check=True, timeout=15)
-            filename = safe_filename(title.stdout.strip() or "Youtube MP3")
-        except Exception as e:
-            logging.error(f"Failed to fetch title: {e}")
-            send_message({"status": "warning", "message": "Could not fetch title, using default", "final": False})
-            filename = "Youtube MP3"
+    # empty filename: core names the file after the video title, fetched in the same yt-dlp call
+    filename = safe_filename(i_filename)
+    if filename.lower() == "youtube mp3":
+        filename = ""
 
-    mp3_path = input_folder / f"{filename}.mp3"
-    if mp3_path.exists():
+    try:
+        mp3_path = download_audio(url, input_folder, filename)
+    except FileExistsError as e:
         send_message({
             "status": "error",
             "message": "File with this name already exists",
-            "filename": filename,
+            "filename": Path(e.filename).stem,
             "final": True
         })
         return
-    try:
-        download_audio_headless(url, str(input_folder), filename)
     except subprocess.TimeoutExpired as e:
         send_message({"status": "error", "message": f"Download timed out: {e}", "final": True})
         logging.error(f"Download timed out: {e}")
@@ -101,7 +105,7 @@ def run_native(url: str, folder: str, i_filename: str) -> None:
     if mp3_path.exists():
         send_message({
             "status": "success",
-            "filename": filename,
+            "filename": mp3_path.stem,
             "path": str(mp3_path),
             "final": True
         })

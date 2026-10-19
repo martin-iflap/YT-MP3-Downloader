@@ -6,12 +6,12 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "customtkinter==5.2.2",
-    "pillow==12.3.0",
     "pyrefly>=0.60.0",
 ]
 
 [dependency-groups]
 dev = [
+    "pillow==12.3.0",
     "pyinstaller>=6.22.2",
 ]
 
@@ -24,3 +24,8 @@ packages = ["host/src/ytmp3_host"]
 
 [tool.uv]
 package = true
+
+[tool.pyrefly]
+project-includes = ["host/**/*.py"]
+project-excludes = ["legacy/**"]
+search-path = ["host/src"]

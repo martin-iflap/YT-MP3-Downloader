@@ -27,7 +27,7 @@
 #define YtDlpTempName     "yt-dlp.exe"
 
 ; Repo root, relative to this script (packaging\installer\).
-; mp3.exe comes from PyInstaller's dist\, ffmpeg.exe from host\bin\.
+; mp3.exe comes from PyInstaller's dist\mp3\, ffmpeg.exe from host\bin\.
 #define RepoRoot          AddBackslash(SourcePath) + "..\.."
 
 
@@ -63,8 +63,8 @@ SetupIconFile={#RepoRoot}\packaging\assets\mp3.ico
 
 [Files]
 
-; Your native application
-Source: "{#RepoRoot}\dist\mp3.exe"; DestDir: "{app}"
+; Your native application (PyInstaller --onedir: mp3.exe + _internal\)
+Source: "{#RepoRoot}\dist\mp3\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 ; Your application icon
 Source: "{#RepoRoot}\packaging\assets\mp3.ico"; DestDir: "{app}"

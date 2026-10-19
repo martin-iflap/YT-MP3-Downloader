@@ -1,4 +1,4 @@
-from ytmp3_host.MP3 import safe_filename
+from ytmp3_host.core import safe_filename
 from ytmp3_host.config import YT_DLP_PATH
 from pathlib import Path
 from PIL import Image
@@ -49,7 +49,7 @@ output = ROOT_DIR / "extension/icons"
 
 
 def test_native_messaging():
-    def send_native_message(message_dict):
+    def send_native_message(message_dict: dict[str, str]) -> bytes:
         encoded = json.dumps(message_dict).encode('utf-8')
         length = struct.pack('@I', len(encoded))  # little-endian unsigned int
         return length + encoded
@@ -62,7 +62,7 @@ def test_native_messaging():
     }
 
     # prefer the bundled exe if present, otherwise run the local python module
-    exe_path = ROOT_DIR / "dist" / "mp3.exe"
+    exe_path = ROOT_DIR / "dist" / "mp3" / "mp3.exe"
     if exe_path.exists():
         cmd = [str(exe_path)]
         print("exe found.")
