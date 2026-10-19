@@ -1,122 +1,145 @@
-from ytmp3_host.core import download_audio, safe_filename, ensure_default_folder
-from pathlib import Path
-from typing import Any
-import subprocess
+"""Firefox native-messaging framing and the headless request handlers.
+stdout is the protocol channel: nothing else may write to it (no print()).
+"""
+
+import json
 import logging
 import struct
-import json
+import subprocess
 import sys
+from pathlib import Path
+from typing import Any
 
-logging.basicConfig( # remove logging for .exe?
-    filename="mp3.log", # for now at least
-    level=logging.ERROR,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+from ytmp3_host.core import (
+    describe_error,
+    download_audio,
+    ensure_default_folder,
+    is_youtube_url,
+    requested_filename,
+    resolve_folder,
 )
+
+LENGTH_PREFIX = struct.Struct("@I")  # 4-byte unsigned int, native byte order
 
 type Message = dict[str, Any]
 
-def read_message() -> Message:
-    """Read a JSON message from stdin (Firefox → Python)
-     - first 4 bytes contain the length of the following JSON message
-    """
-    raw_length = sys.stdin.buffer.read(4)
-    if not raw_length:
-        sys.exit(0)
-    length = struct.unpack('@I', raw_length)[0]
-    message = sys.stdin.buffer.read(length).decode('utf-8')
-    return json.loads(message)
 
-def send_message(message_content: Message, exit_code: int = 1) -> None:
-    """Send a JSON message to stdout (Python → Firefox)
-     - encode the length as first 4 bytes followed by the JSON message
-     - on failure, log the error and exit with the given exit_code
+def _read_exact(size: int) -> bytes | None:
+    """Read exactly size bytes from stdin.
+    Args:
+        size: The number of bytes to read.
+    Returns:
+        The bytes, or None if stdin was closed before all of them arrived.
+    """
+    data = b""
+    while len(data) < size:
+        chunk = sys.stdin.buffer.read(size - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return data
+
+
+def read_message() -> Message:
+    """Read one length-prefixed JSON message from stdin (Firefox to host).
+    Exits the process with code 0 when stdin is closed, which is how Firefox ends
+    the host after port.disconnect().
+
+    Returns:
+        The decoded message.
+    Raises:
+        ValueError: If the message is not valid UTF-8 JSON or not a JSON object.
+    """
+    raw_length = _read_exact(LENGTH_PREFIX.size)
+    if raw_length is None:
+        sys.exit(0)
+    (length,) = LENGTH_PREFIX.unpack(raw_length)
+    raw_message = _read_exact(length)
+    if raw_message is None:
+        sys.exit(0)
+    message = json.loads(raw_message.decode("utf-8"))
+    if not isinstance(message, dict):
+        raise ValueError("Message is not a JSON object")
+    return message
+
+
+def send_message(message: Message, exit_code: int = 1) -> None:
+    """Write one length-prefixed JSON message to stdout (host to Firefox).
+
+    Args:
+        message: The response to send. Must be JSON serializable.
+        exit_code: Exit code used if the message cannot be sent. A host that cannot
+            talk to Firefox is useless, so it exits instead of raising.
     """
     try:
-        encoded = json.dumps(message_content, separators=(',', ':')).encode('utf-8')
-
-        sys.stdout.buffer.write(struct.pack('@I', len(encoded)))
+        encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
+        sys.stdout.buffer.write(LENGTH_PREFIX.pack(len(encoded)))
         sys.stdout.buffer.write(encoded)
         sys.stdout.buffer.flush()
-    except (BrokenPipeError, OSError, TypeError, ValueError, struct.error) as e:
-        logging.error(f"Failed to send error message, exiting: {e}")
-        try:
-            sys.stdout.buffer.flush()
-        except (OSError, AttributeError):
-            pass
+    except (OSError, TypeError, ValueError, struct.error) as e:
+        logging.error("Failed to send message, exiting: %s", e)
         sys.exit(exit_code)
 
+
 def send_current_folder(folder: str) -> None:
-    """Send the given folder path via native messaging"""
-    folder = folder.strip()
-    if not folder:
-        folder_path = ensure_default_folder()
-        send_message({"status": "success", "folder": str(folder_path), "final": True})
+    """Send a folder as the final response of a folder action.
+    Args:
+        folder: The folder to report. Empty or the default folder sends the default
+            folder, created if missing.
+    """
+    folder_path = resolve_folder(folder)
+    if folder_path is None:
+        send_message({"status": "error", "message": "Path doesn't exist", "final": True})
         return
+    send_message({"status": "success", "folder": str(folder_path), "final": True})
 
-    f_path = Path(folder).expanduser()
-    if not f_path.is_dir():
-        send_message({"status": "error", "message": f"Path doesn't exist", "final": True})
-        return
 
-    send_message({"status": "success", "folder": str(f_path), "final": True})
+def run_native(url: str, folder: str, filename: str) -> None:
+    """Handle a headless download request and send its responses.
+    Sends intermediate warnings (invalid folder, so the default is used; no title;
+    no thumbnail), then exactly one final success or error response.
 
-def run_native(url: str, folder: str, i_filename: str) -> None:
-    """Native messaging loop
-     - read JSON requests and send JSON responses
-     - each request should contain 'url' and optional 'folder'
-     - basically core.download_audio wrapped for native messaging
-     """
-    if not url or not any(host in url for host in ("youtube.com", "youtu.be/")):
+    Args:
+        url: The YouTube video URL.
+        folder: The target folder; empty means the default folder.
+        filename: The requested filename; empty means name it after the video title.
+    """
+    if not url or not is_youtube_url(url):
         send_message({"status": "error", "message": "Invalid YouTube URL", "final": True})
         return
 
-    if folder:
-        input_folder = Path(folder).resolve()
-        if not input_folder.is_dir():
-            send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
-            input_folder = ensure_default_folder()
-    else:
-        input_folder = ensure_default_folder()
+    folder_path = resolve_folder(folder)
+    if folder_path is None:
+        send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
+        folder_path = ensure_default_folder()
 
-    # empty filename: core names the file after the video title, fetched in the same yt-dlp call
-    filename = safe_filename(i_filename)
-    if filename.lower() == "youtube mp3":
-        filename = ""
+    warnings: list[str] = []
+
+    def _send_warning(message: str) -> None:
+        warnings.append(message)
+        send_message({"status": "warning", "message": message, "final": False})
 
     try:
-        mp3_path = download_audio(url, input_folder, filename)
+        mp3_path = download_audio(url, folder_path, requested_filename(filename), on_warning=_send_warning)
     except FileExistsError as e:
         send_message({
             "status": "error",
-            "message": "File with this name already exists",
+            "message": describe_error(e),
             "filename": Path(e.filename).stem,
-            "final": True
+            "final": True,
         })
         return
     except subprocess.TimeoutExpired as e:
-        send_message({"status": "error", "message": f"Download timed out: {e}", "final": True})
-        logging.error(f"Download timed out: {e}")
+        logging.error("Download timed out: %s", e)
+        send_message({"status": "error", "message": describe_error(e), "final": True})
         return
     except Exception as e:
-        logging.error(f"Download failed: {e}")
-        send_message({"status": "error", "message": f"Download failed: {e}", "final": True})
+        logging.error("Download failed: %s", e)
+        send_message({"status": "error", "message": f"Download failed: {describe_error(e)}", "final": True})
         return
 
-    if mp3_path.exists():
-        send_message({
-            "status": "success",
-            "filename": mp3_path.stem,
-            "path": str(mp3_path),
-            "final": True
-        })
-    else:
-        send_message({
-            "status": "error",
-            "message": "Download failed, file not created",
-            "final": True
-        })
-
-
-# remove logging for .exe
-# add right click context menu
-# tests? add video and playlist download options?
+    response: Message = {"status": "success", "filename": mp3_path.stem, "path": str(mp3_path), "final": True}
+    if warnings:
+        # the final message replaces the warnings in the sidebar, so repeat them there
+        response["message"] = f"Downloaded: {mp3_path.stem}. {'. '.join(warnings)}."
+    send_message(response)

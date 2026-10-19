@@ -4,8 +4,8 @@ const NATIVE_HOST_NAME = 'app_manifest';
 const MENU_ID = 'download-mp3';
 const NOTIFICATION_ICON = 'icons/icon-48.png';
 
-// Per-action timeouts. The host allows 15s for the title lookup plus 300s for yt-dlp,
-// and select_folder waits on the user, so these must stay well above that.
+// Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
+// and select_folder waits on the user, so these must stay above that.
 const ACTION_TIMEOUTS_MS = {
   download: 6 * 60 * 1000,
   download_gui: 30 * 1000,
@@ -14,7 +14,8 @@ const ACTION_TIMEOUTS_MS = {
 };
 
 // download_gui keeps the host process alive to run the Tk window after its final
-// response; disconnecting the port would make Firefox kill it.
+// response; disconnecting the port would make Firefox kill it. The host exits by
+// itself once the window is closed.
 const KEEP_ALIVE_ACTIONS = new Set(['download_gui']);
 
 // Menus are not persisted across browser restarts for MV2 persistent backgrounds,

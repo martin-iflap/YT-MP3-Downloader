@@ -15,7 +15,7 @@ A Firefox extension (`extension/`) paired with a Windows-only Python native-mess
 
 - `extension/` — the Firefox add-on (zip this folder for AMO).
 - `host/src/ytmp3_host/` — the native host package; `host/tests/` — manual smoke test; `host/bin/` — dev-only `ffmpeg.exe`/`yt-dlp.exe` (gitignored).
-- `packaging/installer/` — Inno Setup script (+ `.build/*.build.xml` IDE configs); `packaging/assets/` — icons; `packaging/app_manifest.dev.json` — dev native-host manifest template.
+- `packaging/installer/` — Inno Setup script; `packaging/assets/` — icons; `packaging/app_manifest.dev.json` — dev native-host manifest template.
 - `legacy/v0/`, `legacy/mp4/`, `legacy/popup/` (old toolbar popup) — superseded/experimental code kept for reference. Not packaged; `legacy/v0` still imports the old `mp3` package name, so it does not run as-is.
 
 ## Commands
@@ -54,7 +54,7 @@ There is no Python test suite. `host/tests/smoke_native.py` is not pytest-safe: 
 
 ### Message flow
 1. `sidebar.js` / context menu → `browser.runtime.sendMessage({type: 'native_action', action, url, folder, filename})`.
-2. `background.js` whitelists actions (`download`, `download_gui`, `select_folder`, `get_current_folder`) with a per-action timeout (`ACTION_TIMEOUTS_MS`), opens a **new** `connectNative('app_manifest')` port per request, and tags responses with the caller's `requestId`. After the final response it disconnects the port (which ends the host process), except for `download_gui`, whose process must stay alive to run the Tk window.
+2. `background.js` whitelists actions (`download`, `download_gui`, `select_folder`, `get_current_folder`) with a per-action timeout (`ACTION_TIMEOUTS_MS`), opens a **new** `connectNative('app_manifest')` port per request, and tags responses with the caller's `requestId`. After the final response it disconnects the port (which ends the host process), except for `download_gui`, whose process must stay alive to run the Tk window; that host exits by itself (`sys.exit(0)` in `MP3.download_gui`) when the window closes.
 3. `MP3.main()` loops on `read_message()` and dispatches by `action` (unknown/missing action falls back to `download`).
 4. Responses are dicts with `status` (`success`/`error`/`warning`), optional `message`/`filename`/`path`/`folder`, and `final`. `background.js` relays every response to the UI as `type: 'native_response'` and guarantees exactly one `final: true` message per request: the host's own, a synthesized error on timeout, or one on port disconnect (Firefox puts the reason, e.g. host not installed, on `port.error`). Intermediate warnings must use `final: false`.
 5. Context-menu downloads send the sidebar's saved folder (`storage.local.lastFolder`) when there is one. Desktop notifications are shown for `download` results only: always for context-menu downloads, and for sidebar downloads only if the sidebar is closed when the result arrives.
@@ -66,9 +66,10 @@ There is no Python test suite. `host/tests/smoke_native.py` is not pytest-safe: 
 - `core.py` — shared logic: `safe_filename` (strips invalid chars and YouTube title noise like "Official Video"), `ensure_default_folder`, and `download_audio`, the single download pipeline used by both the headless and GUI paths:
   1. **One** `yt-dlp` call (`build_download_command`) downloads the audio, encodes MP3 V0, writes the raw thumbnail, and prints the title after `TITLE_MARKER`. Output goes to a unique `_ytmp3_<hex>` temp stem, so the title is only needed afterwards; there is no separate `--get-title` call. When the title decides the name, the "file already exists" check runs after the download.
   2. **One** `ffmpeg` pass (`embed_thumbnail`) copies the audio (no re-encode), center-crops the thumbnail to 1:1, encodes it as JPEG ID3v2.3 cover art, sets the artist, and writes the final `<filename>.mp3` directly. Artist metadata is the text before the first `-` in the filename.
-  3. Temp files are always removed in `finally`. Raises `FileExistsError` (with `.filename`), `subprocess.TimeoutExpired` (`DOWNLOAD_TIMEOUT_S`, enforced by a watchdog) or `CalledProcessError`.
+  3. Temp files are always removed in `finally` (`remove_temp_files` retries files Windows still locks after a kill). Raises `FileExistsError` (with `.filename`), `FileNotFoundError` (ffmpeg/yt-dlp missing), `subprocess.TimeoutExpired` (`DOWNLOAD_TIMEOUT_S` for yt-dlp, enforced by a watchdog; `EMBED_TIMEOUT_S` for ffmpeg) or `CalledProcessError`.
+  - Folder and filename helpers shared by both paths: `resolve_folder` (empty/default → created default folder, invalid → `None`), `requested_filename` (`""` = name after the title), `is_youtube_url`.
 - `MP3.py` — entry point: the `ACTIONS` dispatch table and `main()` loop. It imports `gui` only inside the `download_gui`/`select_folder` handlers, so headless `download`/`get_current_folder` requests never load customtkinter/Tk.
-- `gui.py` — the customtkinter window (`DownloaderApp(ctk.CTk)`) plus `open_gui`/`select_folder`. Downloads go through `core.download_audio` (`on_progress`/`on_start` callbacks for the progress bar and cancel). Tk variables are read from the download thread, which only works while `mainloop()` is running.
+- `gui.py` — the customtkinter window (`DownloaderApp(ctk.CTk)`) plus `open_gui`/`select_folder`. Downloads go through `core.download_audio` (`on_progress`/`on_start` callbacks for the progress bar and cancel). Tk is touched only on the main thread: `start_download` reads the fields and passes them to the worker thread, which updates widgets only via `after(0, ...)`.
 
 ### Constraints to keep in mind
 - **stdout is the native-messaging channel.** Never `print()` in backend code that runs under the host; use `logging` (writes `mp3.log` in the CWD, ERROR level). Child processes must get `stdin=subprocess.DEVNULL` (and ffmpeg `-nostdin`), or they can consume bytes from the native-messaging stdin.
@@ -76,5 +77,5 @@ There is no Python test suite. `host/tests/smoke_native.py` is not pytest-safe: 
 - Keep the host startup path light: no heavy imports (customtkinter, Pillow) at module level in anything the headless `download` path imports. Pillow is a dev-only dependency (icon helper in the smoke test).
 - The identifiers `app_manifest` (native host name) and `yt.downloader@converter.org` (extension ID) must match across `background.js`, `extension/manifest.json`, `packaging/app_manifest.dev.json`, and the `#define`s in `packaging/installer/mp3_installer.iss`. Changing either breaks existing v1 installs and AMO updates.
 - The installer writes the native-messaging manifest to `%APPDATA%\Mozilla\NativeMessagingHosts\app_manifest.json` and registers it under `HKCU\Software\Mozilla\NativeMessagingHosts\app_manifest`; it downloads the latest `yt-dlp.exe` at install time rather than bundling it.
-- URL validation differs between halves: the extension parses the URL strictly (`youtube.js`), while the Python side only checks for `"youtube.com"` or `"youtu.be/"` in the string.
+- URL validation differs between halves: the extension parses the URL strictly (`youtube.js`), while the Python side (`core.is_youtube_url`) only checks for `"youtube.com"` or `"youtu.be/"` in the string.
 - Downloads can legitimately run for minutes (host: 300s `DOWNLOAD_TIMEOUT_S` for the whole yt-dlp call); keep `ACTION_TIMEOUTS_MS.download` above that.

@@ -96,7 +96,8 @@ folderInput.addEventListener('change', () => saveFolder(folderInput.value.trim()
 
 selectFolderBtn.addEventListener('click', () => {
   showResult('Opening folder chooser...', 'info');
-  sendNativeAction({ action: 'select_folder' }, (resp) => {
+  // The picker starts at the current folder and returns it unchanged on cancel.
+  sendNativeAction({ action: 'select_folder', folder: folderInput.value.trim() || undefined }, (resp) => {
     if (resp.status === 'success' && resp.folder) {
       setFolder(resp.folder);
       showResult('Folder selected', 'success');

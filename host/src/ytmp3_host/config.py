@@ -1,13 +1,18 @@
-from pathlib import Path
+"""Paths to the bundled binaries, the window icon and the default download folder.
+
+Installed (PyInstaller build), everything sits next to mp3.exe. In a source
+checkout the binaries come from host/bin/ (placed there manually) and the icon from
+packaging/assets/.
+"""
+
 import sys
+from pathlib import Path
 
-
-if getattr(sys, 'frozen', False):
-    # installed: everything sits next to mp3.exe
+if getattr(sys, "frozen", False):
     BIN_DIR = Path(sys.executable).parent
     ICON_DIR = BIN_DIR
 else:
-    # dev checkout: host/src/ytmp3_host/config.py -> repo root is parents[3]
+    # host/src/ytmp3_host/config.py -> the repo root is parents[3]
     REPO_ROOT = Path(__file__).resolve().parents[3]
     BIN_DIR = REPO_ROOT / "host" / "bin"
     ICON_DIR = REPO_ROOT / "packaging" / "assets"
