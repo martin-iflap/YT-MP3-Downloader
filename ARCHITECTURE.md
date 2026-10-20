@@ -92,6 +92,7 @@ packaging/
   assets/                       mp3.ico
 
 tests/extension/            Node test-runner tests; outside extension/ so they are not shipped
+tests/host/                 pytest tests of the native host, fake_yt_dlp.py (§9.2)
 legacy/                     Superseded code, reference only. Not packaged or imported.
 pyproject.toml, uv.lock     Python dependencies (pyinstaller in the dev group)
 ```
@@ -448,19 +449,19 @@ yt-dlp's own last `ERROR:` line (e.g. "This video is unavailable"), never the co
 
 ### 6.6 `core.py`
 
-| Function                                                                            | Behaviour                                                                                                                                                                                                                                                                                        |
-|-------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `is_youtube_url(url)`                                                               | Substring check for `youtube.com` / `youtu.be/`.                                                                                                                                                                                                                                                 |
-| `safe_filename(name)`                                                               | Strips `\/*?:"<>\|`; removes whole-word noise (`NOISE_WORDS`: `Official`, `Music`, `Video`, `HD`, `Lyrics`, …); removes resulting empty `()`/`[]`; collapses whitespace. Empty → `DEFAULT_FILENAME` (`"Youtube MP3"`).                                                                           |
-| `requested_filename(name)`                                                          | `safe_filename`, but returns `""` when nothing meaningful is left, meaning "name it after the title".                                                                                                                                                                                            |
-| `ensure_default_folder()`                                                           | Creates `DEFAULT_FOLDER` if missing; returns it.                                                                                                                                                                                                                                                 |
-| `resolve_folder(folder)`                                                            | Empty or the default folder → `ensure_default_folder()`; an existing directory → itself; otherwise `None`.                                                                                                                                                                                       |
-| `artist_from_filename(filename)`                                                    | Text before the first `-`, else `<unknown>`.                                                                                                                                                                                                                                                     |
-| `download_audio(url, folder, filename, on_progress, on_start, on_warning, timeout)` | The single pipeline (§6.7). `on_warning` reports a missing title or thumbnail. Verifies the final MP3 exists before returning it. Raises `FileExistsError`, `FileNotFoundError` (ffmpeg/yt-dlp missing, no MP3 produced), `TimeoutExpired`, `CalledProcessError`. Temp files are always removed. |
-| `describe_error(error)`                                                             | One-line user message for a `download_audio` exception (headless and GUI).                                                                                                                                                                                                                       |
-| `embed_thumbnail(temp_mp3, thumb, artist, output)`                                  | One ffmpeg pass (50 s timeout): audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3, artist. Writes `output` directly (`-n`), removes it on failure.                                                                                                                            |
-| `kill_process_tree(process)`                                                        | `taskkill /F /T`; yt-dlp.exe is a onefile build, `Popen.kill()` only stops its bootloader.                                                                                                                                                                                                       |
-| `remove_temp_files(temp_stem)`                                                      | Deletes `<temp_stem>.*`, retrying files Windows still locks after a kill.                                                                                                                                                                                                                        |
+| Function                                                                            | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|-------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `is_youtube_url(url)`                                                               | Substring check for `youtube.com` / `youtu.be/`.                                                                                                                                                                                                                                                                                                                                                                                   |
+| `safe_filename(name)`                                                               | Strips `\/*?:"<>\|` and control characters; removes bracket groups made only of noise words (`NOISE_WORDS`: `Official`, `Music`, `Video`, `HD`, `Lyrics`, `Live`, …), e.g. `(Official Music Video)`, `[HD]`, while noise words elsewhere stay (`Live and Let Die`); removes empty `()`/`[]`; collapses whitespace; prefixes Windows device names (`CON`, `NUL`, `COM1`, …) with `_`. Empty → `DEFAULT_FILENAME` (`"Youtube MP3"`). |
+| `requested_filename(name)`                                                          | `safe_filename`, but returns `""` when nothing meaningful is left, meaning "name it after the title".                                                                                                                                                                                                                                                                                                                              |
+| `ensure_default_folder()`                                                           | Creates `DEFAULT_FOLDER` if missing; returns it.                                                                                                                                                                                                                                                                                                                                                                                   |
+| `resolve_folder(folder)`                                                            | Empty or the default folder → `ensure_default_folder()`; an existing directory → itself; otherwise `None`.                                                                                                                                                                                                                                                                                                                         |
+| `artist_from_filename(filename)`                                                    | Text before the first spaced dash (` - `, ` – `, ` — `), so `Jay-Z - Song` gives `Jay-Z`; else before the first `-`; else `<unknown>`.                                                                                                                                                                                                                                                                                             |
+| `download_audio(url, folder, filename, on_progress, on_start, on_warning, timeout)` | The single pipeline (§6.7). `on_warning` reports a missing title or thumbnail. Verifies the final MP3 exists before returning it. Raises `FileExistsError`, `FileNotFoundError` (ffmpeg/yt-dlp missing, no MP3 produced), `TimeoutExpired`, `CalledProcessError`. Temp files are always removed.                                                                                                                                   |
+| `describe_error(error)`                                                             | One-line user message for a `download_audio` exception (headless and GUI).                                                                                                                                                                                                                                                                                                                                                         |
+| `embed_thumbnail(temp_mp3, thumb, artist, output)`                                  | One ffmpeg pass (50 s timeout): audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3, artist. Writes `output` directly, removes it on failure. Raises `FileExistsError` itself if `output` exists: ffmpeg 7 exits 0 when `-n` refuses to overwrite.                                                                                                                                                                |
+| `kill_process_tree(process)`                                                        | `taskkill /F /T`; yt-dlp.exe is a onefile build, `Popen.kill()` only stops its bootloader.                                                                                                                                                                                                                                                                                                                                         |
+| `remove_temp_files(temp_stem)`                                                      | Deletes `<temp_stem>.*`, retrying files Windows still locks after a kill.                                                                                                                                                                                                                                                                                                                                                          |
 
 ### 6.7 Download pipeline
 
@@ -663,6 +664,9 @@ flowchart TB
 | Test the host without Firefox     | `uv run python host/tests/smoke_native.py`. Sends one hard-coded message to `dist/mp3/mp3.exe` (fallback: `python -m ytmp3_host.MP3`) and prints the reply. Edit `message` to change the action. Not pytest-safe: calls yt-dlp at import.                                                            |
 | Load the extension                | `about:debugging` → Load Temporary Add-on → `extension/manifest.json`.                                                                                                                                                                                                                               |
 | Extension tests                   | `node --test tests/extension/`                                                                                                                                                                                                                                                                       |
+| Host tests                        | `uv run pytest` (about 5 s; ffmpeg tests need `ffmpeg.exe` in `host/bin/` or on `PATH`, else they are skipped). `uv run pytest -m network` runs one real download with `host/bin/yt-dlp.exe`.                                                                                                        |
+
+### 9.1 Extension tests
 
 Extension test harness:
 
@@ -676,7 +680,78 @@ flowchart LR
 
 `background.test.js` covers the request lifecycle: single final response, keep-alive,
 timeouts, disconnect errors, notifications, context menu. `youtube.test.js` covers
-`isYouTubeUrl`. `sidebar.js` and the Python host have no automated tests.
+`isYouTubeUrl`. `sidebar.js` has no automated tests.
+
+### 9.2 Host tests
+
+pytest, in `tests/host/`. The rule: replace only what needs the network, the user's
+folders or a real YouTube video; everything else runs for real. Real `Popen` and pipes,
+real `taskkill /T`, the real request loop and framing, the real file system (inside
+pytest's `tmp_path`), and the real `ffmpeg.exe` when available.
+
+```mermaid
+flowchart LR
+    T["test_*.py"] --> MAIN["MP3.main()<br/>(real loop + framing)"]
+    T --> DA["core.download_audio()<br/>(real pipeline)"]
+    MAIN -- "sys.stdin / sys.stdout<br/>= BytesIO wrappers" --> FR["framed request bytes in,<br/>parsed response frames out"]
+    MAIN --> DA
+    DA -- "build_download_command<br/>wrapped" --> FY["python fake_yt_dlp.py<br/>+ the real yt-dlp arguments"]
+    DA -- "embed_thumbnail" --> FE{"fake_embed<br/>or real ffmpeg.exe"}
+    DA --> TMP[("tmp_path/out,<br/>tmp_path/default")]
+```
+
+**What is replaced** (all via pytest's `monkeypatch`, undone after each test). `core`
+imports `DEFAULT_FOLDER`, `FFMPEG_PATH` and `YT_DLP_PATH` by name, so they are patched
+on `core`, not on `config`.
+
+| Target                                 | Replaced with                                            | Fixture / place                       | Why                                                                                                                                       |
+|----------------------------------------|----------------------------------------------------------|---------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
+| `core.DEFAULT_FOLDER`                  | `tmp_path/default` (not created up front)                | `default_folder`, autouse             | No test touches `~/Documents/YT-MP3-Downloads`; "folder gets created" stays testable.                                                     |
+| `core.YT_DLP_PATH`, `core.FFMPEG_PATH` | Empty dummy files in `tmp_path/bin/`                     | `fake_yt_dlp`                         | The "binary missing" checks in `download_audio` pass. `FFMPEG_PATH` is set to the real binary in the ffmpeg tests.                        |
+| `core.build_download_command`          | Wrapper: `[python, fake_yt_dlp.py, *real_command[1:]]`   | `fake_yt_dlp`                         | Only the executable changes. The fake reads the real `-o` and `--print` templates, so the argument contract is checked too.               |
+| `core.embed_thumbnail`                 | Records its arguments, copies the temp MP3 to the output | `fake_embed`                          | Pipeline and protocol tests need no ffmpeg; the real function has its own tests.                                                          |
+| `sys.stdin`, `sys.stdout`              | `io.TextIOWrapper` over `BytesIO`                        | `run_host()` in `test_native_host.py` | `native_messaging` uses `sys.stdin.buffer` / `sys.stdout.buffer` at call time. The text layer is flushed too, so a stray `print()` fails. |
+| `native_messaging.download_audio`      | `functools.partial(core.download_audio, timeout=1)`      | one timeout test                      | The 300 s default argument is bound at definition time, so patching `DOWNLOAD_TIMEOUT_S` would not work.                                  |
+| An `MP3.ACTIONS` entry                 | A handler that raises                                    | `monkeypatch.setitem`                 | Checks that `main()` still sends exactly one final error.                                                                                 |
+| `FAKE_YTDLP_*` env vars                | Fake behavior (below)                                    | `FakeYtDlp.set(mode, title)`          | Environment variables reach the child process; no files or arguments needed.                                                              |
+| `USERPROFILE`, `YTMP3_LOG_LEVEL`       | `tmp_path`, `CRITICAL`                                   | `host_env()`, subprocess tests        | A spawned host has no monkeypatch: this keeps its default folder in `tmp_path` and stops it writing `mp3.log` into the repo.              |
+
+**`fake_yt_dlp.py`** prints yt-dlp-style progress lines, writes a `.webm.part` file
+(so cleanup is tested), then acts according to `FAKE_YTDLP_MODE`:
+
+| Mode                               | Behavior                                                                        |
+|------------------------------------|---------------------------------------------------------------------------------|
+| `success` (default)                | Writes `<stem>.mp3` + thumbnail, prints the title after the `--print` template. |
+| `fail`                             | Prints a `WARNING:` and an `ERROR:` line, exits 1 (`.part` left behind).        |
+| `hang`                             | Starts a grandchild that holds stdout open for 30 s, then sleeps 30 s itself.   |
+| `no_title` / `no_thumb` / `no_mp3` | Leaves out that one output.                                                     |
+
+`FAKE_YTDLP_MP3` / `FAKE_YTDLP_THUMB` make it copy real media instead of junk bytes
+(full-pipeline test with real ffmpeg). The process structure matches the real binary:
+the venv `python.exe` is a launcher that starts the real interpreter as a child, like
+yt-dlp.exe's PyInstaller bootloader, and `hang` adds a process that keeps the pipe open.
+If `kill_process_tree` only killed the direct child, the hang tests would block for 30 s
+and fail their time limit.
+
+**Real ffmpeg.** The session fixture `ffmpeg` looks in `host/bin/`, then on `PATH`, and
+skips the test if there is none. `media` generates a 1 s LAME V0 sine MP3 and a 320×180
+PNG with ffmpeg's `lavfi` sources. The tests read the result back with ffmpeg: a square
+`mjpeg` cover, the `artist` tag, an `ID3\x03` header, and the MD5 of the audio packets
+equal to the input's (copied, not re-encoded).
+
+**Two tests spawn the real entry point** (`python -m ytmp3_host.MP3` over real pipes, and
+an import check that the headless path never loads `customtkinter`, `tkinter`, `PIL` or
+`ytmp3_host.gui`).
+
+**Temp files.** Everything is written below `tmp_path`. `tmp_path_retention_policy =
+"failed"` in `pyproject.toml` deletes the directories of passing tests after the run;
+only failing tests keep theirs for inspection.
+
+**Not covered:** `gui.py` (Tk), `config.py`, `setup_logging()`.
+
+**Adding a test:** use the fixtures above instead of real paths. Never write outside
+`tmp_path`. A new yt-dlp behavior is a new `FAKE_YTDLP_MODE`. Anything that needs the
+internet or the real binaries gets `@pytest.mark.network`.
 
 ---
 
@@ -706,7 +781,8 @@ timeouts, disconnect errors, notifications, context menu. `youtube.test.js` cove
 3. Caller in `sidebar.js`.
 4. `KEEP_ALIVE_ACTIONS` if the host must outlive its final response (then exit the host
    from the handler when done, like `download_gui`).
-5. A test in `tests/extension/background.test.js` if lifecycle behavior changes.
+5. A test in `tests/extension/background.test.js` if lifecycle behavior changes, and one
+   in `tests/host/test_native_host.py` for the host's responses.
 
 **Changing yt-dlp arguments:** `core.build_download_command`. Measure download time
 before and after (see the project priorities in `CLAUDE.md`).
@@ -718,7 +794,11 @@ install folder), ERROR level.
 
 ## 11. Known issues
 
-None currently tracked. Resolved:
+| Issue                                                           | Details                                                                                                                                                                                                                                        |
+|-----------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Cancel right after the download starts can leave yt-dlp running | If `kill_process_tree` runs before yt-dlp.exe's bootloader has started its real child, only the bootloader dies. The orphan keeps the pipe open and the cancel waits until it finishes. Possible fix: kill the tree again after a short delay. |
+
+Resolved:
 
 | Former issue                                                                                                                     | Resolution                                                                                                                                                                  |
 |----------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -732,3 +812,6 @@ None currently tracked. Resolved:
 | "Could not fetch title" warning lost in the file split; missing thumbnail only logged                                            | `download_audio(on_warning=…)`, shown in the sidebar and the GUI.                                                                                                           |
 | Error messages contained the raw yt-dlp command line                                                                             | `core.describe_error`.                                                                                                                                                      |
 | GUI said "canceled" when Cancel came after the file was already saved                                                            | The GUI reports the saved file.                                                                                                                                             |
+| ffmpeg 7 exits 0 when `-n` refuses to overwrite, so an existing file was reported as a fresh download                            | `embed_thumbnail` raises `FileExistsError` itself.                                                                                                                          |
+| Noise-word removal cut real titles ("Live and Let Die" → "and Let Die"); "Jay-Z - Song" got the artist "Jay"                     | Only bracket groups made entirely of noise words are removed; the artist ends at the first spaced dash.                                                                     |
+| Control characters and Windows device names (`CON`, `NUL`, …) passed through `safe_filename`                                     | Removed / prefixed with `_`.                                                                                                                                                |

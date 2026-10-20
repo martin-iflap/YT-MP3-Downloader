@@ -27,15 +27,24 @@ THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 DEFAULT_FILENAME = "Youtube MP3"
 UNKNOWN_ARTIST = "<unknown>"
 YOUTUBE_HOSTS = ("youtube.com", "youtu.be/")
-NOISE_WORDS = ("Official Music Video", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean")
+NOISE_WORDS = ("Official", "Music", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean", "Live")
+
+WINDOWS_RESERVED_NAMES = frozenset(
+    ["CON", "PRN", "AUX", "NUL"] + [f"{port}{i}" for port in ("COM", "LPT") for i in range(1, 10)]
+)
 
 PROGRESS_RE = re.compile(r"(\d+\.?\d*)%")
-INVALID_CHARS_RE = re.compile(r'[\\/*?:"<>|]')
-# the group is needed (\b must wrap the whole alternation); PyCharm can't see the joined words
-# noinspection RegExpUnnecessaryNonCapturingGroup
-NOISE_WORDS_RE = re.compile(r"\b(?:" + "|".join(map(re.escape, NOISE_WORDS)) + r")\b", flags=re.IGNORECASE)
+# control characters \x1c-\x1f count as whitespace and are collapsed by WHITESPACE_RE
+INVALID_CHARS_RE = re.compile(r'[\\/*?:"<>|\x00-\x08\x0e-\x1b]')
+_NOISE_WORD = "(?:" + "|".join(map(re.escape, NOISE_WORDS)) + ")"
+# a bracket group made only of noise words, e.g. "(Official Music Video)" or "[HD]";
+# noise words outside brackets are part of the title ("Live and Let Die")
+NOISE_GROUP_RE = re.compile(
+    rf"[(\[]\s*{_NOISE_WORD}(?:[\s,&/+-]+{_NOISE_WORD})*\s*[)\]]", flags=re.IGNORECASE
+)
 EMPTY_BRACKETS_RE = re.compile(r"[(\[]\s*[)\]]")
 WHITESPACE_RE = re.compile(r"\s+")
+ARTIST_SEPARATOR_RE = re.compile(r"\s+[-–—]\s+")
 
 
 def is_youtube_url(url: str) -> bool:
@@ -53,9 +62,9 @@ def is_youtube_url(url: str) -> bool:
 
 def safe_filename(name: object) -> str:
     """Turn a video title or user input into a valid Windows filename.
-    Removes characters Windows forbids in filenames, common YouTube title noise
-    ("Official Video", "Lyrics", ...), the empty brackets that removal leaves
-    behind, and repeated whitespace.
+    Removes characters Windows forbids in filenames, bracketed YouTube title noise
+    ("(Official Video)", "[Lyrics]", ...), empty brackets and repeated whitespace.
+    A name Windows reserves for a device (CON, NUL, COM1, ...) gets a "_" prefix.
 
     Args:
         name: The raw name. Anything that is not a non-empty string is treated as empty.
@@ -69,9 +78,12 @@ def safe_filename(name: object) -> str:
     if not isinstance(name, str):
         return DEFAULT_FILENAME
     name = INVALID_CHARS_RE.sub("", name)
-    name = NOISE_WORDS_RE.sub("", name)
+    name = NOISE_GROUP_RE.sub("", name)
     name = EMPTY_BRACKETS_RE.sub("", name)
     name = WHITESPACE_RE.sub(" ", name).strip()
+    # Windows ignores everything after the first dot (and trailing spaces) here
+    if name.split(".", 1)[0].rstrip().upper() in WINDOWS_RESERVED_NAMES:
+        name = f"_{name}"
     return name or DEFAULT_FILENAME
 
 
@@ -125,9 +137,14 @@ def artist_from_filename(filename: str) -> str:
     Args:
         filename: The final filename without extension, e.g. "Artist - Song".
     Returns:
-        The text before the first "-", or UNKNOWN_ARTIST if there is none.
+        The text before the first spaced dash (" - ", " – ", " — "), so "Jay-Z - Song"
+        gives "Jay-Z"; without one the text before the first "-"; UNKNOWN_ARTIST if
+        there is no dash at all.
     """
-    artist = filename.split("-", 1)[0].strip() if "-" in filename else ""
+    if match := ARTIST_SEPARATOR_RE.search(filename):
+        artist = filename[:match.start()].strip()
+    else:
+        artist = filename.split("-", 1)[0].strip() if "-" in filename else ""
     return artist or UNKNOWN_ARTIST
 
 
@@ -245,8 +262,8 @@ def describe_error(error: Exception) -> str:
             return f"Download timed out after {error.timeout:.0f} s ({_tool(error.cmd)})"
         case subprocess.CalledProcessError():
             tool = _tool(error.cmd)
-            # yt-dlp's output is merged into stdout; ffmpeg reports on stderr
-            details = error.output if tool == YT_DLP_PATH.name else error.stderr
+            # ffmpeg reports on stderr; yt-dlp's stderr is merged into output
+            details = error.stderr or error.output
             lines = [line.strip() for line in str(details or "").splitlines() if line.strip()]
             errors = [line.removeprefix("ERROR:").strip() for line in lines if line.startswith("ERROR:")]
             reason = (errors or lines or [f"exit code {error.returncode}"])[-1]
@@ -270,6 +287,7 @@ def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, output
         artist: The artist metadata value.
         output: The final MP3 path. Must not exist yet (ffmpeg runs with -n).
     Raises:
+        FileExistsError: If output already exists; it is left untouched.
         subprocess.CalledProcessError: If ffmpeg fails. A partial output is removed.
         subprocess.TimeoutExpired: If ffmpeg takes longer than EMBED_TIMEOUT_S.
     """
@@ -290,6 +308,8 @@ def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, output
         "-metadata", f"artist={artist}",
         str(output),
     ]
+    # -n alone is not enough: ffmpeg 7 exits 0 when it refuses to overwrite
+    _ensure_not_exists(output)
     try:
         subprocess.run(
             cmd,

@@ -13,6 +13,7 @@ dependencies = [
 dev = [
     "pillow==12.3.0",
     "pyinstaller>=6.22.2",
+    "pytest>=9.1.1",
 ]
 
 [build-system]
@@ -24,6 +25,14 @@ packages = ["host/src/ytmp3_host"]
 
 [tool.uv]
 package = true
+
+[tool.pytest.ini_options]
+# host/tests/smoke_native.py is a manual script, not a pytest module
+testpaths = ["tests/host"]
+addopts = "-m 'not network'"
+# temp dirs of passing tests are deleted; only failures are kept to inspect
+tmp_path_retention_policy = "failed"
+markers = ["network: downloads a real video with the real yt-dlp.exe and ffmpeg.exe (opt-in: -m network)"]
 
 [tool.pyrefly]
 project-includes = ["host/**/*.py"]

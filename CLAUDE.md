@@ -49,7 +49,14 @@ Type-check the host with pyrefly (configured in `pyproject.toml` `[tool.pyrefly]
 uv run pyrefly check
 ```
 
-There is no Python test suite. `host/tests/smoke_native.py` is not pytest-safe: it shells out to `yt-dlp.exe` at import time and spawns `dist/mp3/mp3.exe` (falling back to `python -m ytmp3_host.MP3`) with a hardcoded message.
+Host tests use pytest (`dev` group) and live in `tests/host/` (`testpaths` in `pyproject.toml`). yt-dlp is replaced by `tests/host/fake_yt_dlp.py` (a script that takes the real yt-dlp arguments and behaves according to `FAKE_YTDLP_*` env vars); `MP3.main()` is driven with framed bytes on a fake stdin/stdout. Tests that need the real `ffmpeg.exe` (from `host/bin/` or `PATH`) are skipped without it. The `network` tests (a real download with the real binaries) are opt-in.
+
+```
+uv run pytest                 # all host tests except network
+uv run pytest -m network      # real download with host/bin/yt-dlp.exe + ffmpeg.exe
+```
+
+`host/tests/smoke_native.py` is a manual script and not pytest-safe: it shells out to `yt-dlp.exe` at import time and spawns `dist/mp3/mp3.exe` (falling back to `python -m ytmp3_host.MP3`) with a hardcoded message.
 
 ## Architecture
 
@@ -64,9 +71,9 @@ There is no Python test suite. `host/tests/smoke_native.py` is not pytest-safe: 
 ### Backend modules (`host/src/ytmp3_host/`)
 - `config.py` — resolves `ffmpeg.exe`, `yt-dlp.exe`, `mp3.ico` next to `sys.executable` when frozen (PyInstaller). Unfrozen, the binaries come from `host/bin/` (place them there manually) and the icon from `packaging/assets/`. `DEFAULT_FOLDER` is `~/Documents/YT-MP3-Downloads`. `setup_logging()` (called once from `MP3.py`'s `__main__`) writes one rotating `mp3.log` (1 MB, plus `mp3.log.1`): next to `mp3.exe` at ERROR when frozen, in the repo root at DEBUG (and to stderr, which Firefox shows in the Browser Console) unfrozen. The `YTMP3_LOG_LEVEL` env var overrides the level. The level applies to the `ytmp3_host` loggers; third-party libraries log WARNING and up.
 - `native_messaging.py` — stdio framing (`read_message`/`send_message`, 4-byte native-endian length prefix) and `run_native()`, the headless download path: validates URL, resolves folder (falls back to default with a warning), then calls `core.download_audio` (an empty filename means "name it after the video title").
-- `core.py` — shared logic: `safe_filename` (strips invalid chars and YouTube title noise like "Official Video"), `ensure_default_folder`, and `download_audio`, the single download pipeline used by both the headless and GUI paths:
+- `core.py` — shared logic: `safe_filename` (strips invalid and control chars and bracket groups made only of noise words like "(Official Video)"; noise words elsewhere stay, e.g. "Live and Let Die"; prefixes Windows device names like `CON` with `_`), `ensure_default_folder`, and `download_audio`, the single download pipeline used by both the headless and GUI paths:
   1. **One** `yt-dlp` call (`build_download_command`) downloads the audio, encodes MP3 V0, writes the raw thumbnail, and prints the title after `TITLE_MARKER`. Output goes to a unique `_ytmp3_<hex>` temp stem, so the title is only needed afterwards; there is no separate `--get-title` call. When the title decides the name, the "file already exists" check runs after the download.
-  2. **One** `ffmpeg` pass (`embed_thumbnail`) copies the audio (no re-encode), center-crops the thumbnail to 1:1, encodes it as JPEG ID3v2.3 cover art, sets the artist, and writes the final `<filename>.mp3` directly. Artist metadata is the text before the first `-` in the filename.
+  2. **One** `ffmpeg` pass (`embed_thumbnail`) copies the audio (no re-encode), center-crops the thumbnail to 1:1, encodes it as JPEG ID3v2.3 cover art, sets the artist, and writes the final `<filename>.mp3` directly. Artist metadata is the text before the first spaced dash (` - `, ` – `, ` — `) in the filename, else before the first `-`. `embed_thumbnail` refuses an existing output itself: ffmpeg 7 exits 0 when `-n` declines to overwrite.
   3. Temp files are always removed in `finally` (`remove_temp_files` retries files Windows still locks after a kill). Raises `FileExistsError` (with `.filename`), `FileNotFoundError` (ffmpeg/yt-dlp missing), `subprocess.TimeoutExpired` (`DOWNLOAD_TIMEOUT_S` for yt-dlp, enforced by a watchdog; `EMBED_TIMEOUT_S` for ffmpeg) or `CalledProcessError`.
   - Folder and filename helpers shared by both paths: `resolve_folder` (empty/default → created default folder, invalid → `None`), `requested_filename` (`""` = name after the title), `is_youtube_url`.
 - `MP3.py` — entry point: the `ACTIONS` dispatch table and `main()` loop. It imports `gui` with a PEP 810 `lazy from ... import` (module level only), so it loads on first use in the `download_gui`/`select_folder` handlers and headless `download`/`get_current_folder` requests never load customtkinter/Tk.
