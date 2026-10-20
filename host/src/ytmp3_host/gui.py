@@ -9,6 +9,7 @@ import logging
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from tkinter import filedialog
 
@@ -31,16 +32,47 @@ from ytmp3_host.native_messaging import send_current_folder, send_message
 logger = logging.getLogger(__name__)
 
 FONT = "Segoe UI"
+FONT_SEMIBOLD = "Segoe UI Semibold"
 CLEANUP_DELAY_S = 2
+
+# Palette of extension/sidebar.html (its translucent whites blended onto the background)
+BG = "#17181a"
+CARD = "#1c1d1f"
+CARD_BORDER = "#242528"
+INPUT = "#202123"
+INPUT_BORDER = "#2a2c2f"
+INPUT_BORDER_FOCUS = "#45484d"
+TEXT = "#e6e6e6"
+TEXT_MUTED = "#9aa0a6"
+PLACEHOLDER = "#7e8488"
+PILL = "#26282a"
+PILL_HOVER = "#2e3033"
+PILL_BORDER = "#34363a"
+# Primary pill: the sidebar's .action-pill.primary, Apple system blue (#0a84ff) blended onto BG
+ACCENT = "#14304c"
+ACCENT_HOVER = "#13385f"
+ACCENT_BORDER = "#114e8c"
+ACCENT_TEXT = "#eaf3ff"
+
+# Status pill styles, as #result.<kind> in the sidebar: (dot, text, border)
+STATUS_STYLES = {
+    "success": ("#2ecc71", "#bfecc8", "#1c3c2b"),
+    "error": ("#ff6b6b", "#ffd6d6", "#45292a"),
+    "warning": ("#f39c12", "#ffecc5", "#433218"),
+    "info": ("#4a90e2", "#cfe9ff", "#213042"),
+}
+
+DWMWA_BORDER_COLOR = 34
+DWMWA_CAPTION_COLOR = 35
 
 
 class DownloaderApp(ctk.CTk):
     """The YouTube MP3 Converter window.
 
     Attributes:
-        url_var: The URL field.
+        url_entry: The URL field.
         folder_var: The folder field, initially the default folder.
-        filename_var: The filename field; empty means name the file after the video title.
+        name_entry: The filename field; empty means name the file after the video title.
         current_process: The running yt-dlp process, used to cancel it.
         current_stem: The temp output stem of the running download, used for cleanup.
         download_cancelled: Set by cancel_download, read by the download thread.
@@ -50,10 +82,11 @@ class DownloaderApp(ctk.CTk):
         """Build the window and its widgets (shown once mainloop() runs)."""
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("green")
-        super().__init__()
+        super().__init__(fg_color=BG)
 
         self.title("YouTube MP3 Converter")
-        self.geometry("650x430")
+        self.geometry("560x470")
+        self.minsize(420, 470)
         self.current_process: subprocess.Popen[str] | None = None
         self.current_stem: Path | None = None
         self.download_cancelled = False
@@ -63,62 +96,137 @@ class DownloaderApp(ctk.CTk):
             self.iconbitmap(str(ICON_PATH))
         except Exception as e:
             logger.error("Icon not found: %s", e)
+        self._match_title_bar()
 
-        # Variables
-        self.url_var = ctk.StringVar()
         self.folder_var = ctk.StringVar(value=str(ensure_default_folder()))
-        self.filename_var = ctk.StringVar()
 
-        main_frame = ctk.CTkFrame(self, fg_color="#17181a", corner_radius=12)
-        main_frame.pack(fill="both", expand=True, padx=14, pady=14)
+        main_frame = ctk.CTkFrame(self, fg_color="transparent")
+        main_frame.pack(fill="both", expand=True, padx=18, pady=(16, 18))
 
-        # Layout
-        ctk.CTkLabel(main_frame, text="YouTube URL:", font=(FONT, 20, "bold")).pack(pady=(12, 6))
-        self.url_entry = ctk.CTkEntry(
-            main_frame, textvariable=self.url_var, width=580, height=35, font=(FONT, 14), corner_radius=999
+        ctk.CTkLabel(main_frame, text="YouTube MP3 Downloader", text_color="#ffffff", font=(FONT_SEMIBOLD, 17)).pack(
+            pady=(0, 12)
         )
-        self.url_entry.pack()
 
-        ctk.CTkLabel(main_frame, text="Folder:", font=(FONT, 20, "bold")).pack(pady=(12, 6))
-        folder_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
-        folder_frame.pack()
-        ctk.CTkEntry(
-            folder_frame, textvariable=self.folder_var, width=450, height=35, font=(FONT, 14), corner_radius=999
-        ).pack(side="left", padx=5)
+        card = ctk.CTkFrame(main_frame, fg_color=CARD, corner_radius=12, border_width=1, border_color=CARD_BORDER)
+        card.pack(fill="x")
+        fields = ctk.CTkFrame(card, fg_color="transparent")
+        fields.pack(fill="x", padx=14, pady=14)
+
+        self._field_label(fields, "YOUTUBE URL", top=0)
+        self.url_entry = self._entry(fields, placeholder="https://www.youtube.com/watch?v=...")
+        self.url_entry.pack(fill="x")
+
+        self._field_label(fields, "DOWNLOAD FOLDER")
+        folder_row = ctk.CTkFrame(fields, fg_color="transparent")
+        folder_row.pack(fill="x")
         ctk.CTkButton(
-            folder_frame, text="Choose", command=self.choose_folder, width=120, height=35, font=(FONT, 14, "bold")
-        ).pack(side="left")
+            folder_row,
+            text="Choose",
+            command=self.choose_folder,
+            fg_color="transparent",
+            hover_color=INPUT,
+            text_color="#d7dadd",
+            border_width=1,
+            border_color=INPUT_BORDER,
+            corner_radius=8,
+            font=(FONT, 13),
+            width=84,
+            height=36,
+        ).pack(side="right")
+        self._entry(folder_row, textvariable=self.folder_var).pack(side="left", fill="x", expand=True, padx=(0, 8))
 
-        ctk.CTkLabel(main_frame, text="Filename:", font=(FONT, 20, "bold")).pack(pady=(12, 6))
-        self.name_entry = ctk.CTkEntry(
-            main_frame, textvariable=self.filename_var, width=580, height=35, font=(FONT, 14), corner_radius=999
-        )
-        self.name_entry.pack()
+        self._field_label(fields, "FILENAME (OPTIONAL)")
+        self.name_entry = self._entry(fields, placeholder="Leave empty to use video title")
+        self.name_entry.pack(fill="x")
 
         self.main_button = ctk.CTkButton(
-            main_frame,
-            text="Download MP3",
-            command=self.start_download,
-            fg_color="#26282a",
-            hover_color="#1f2022",
-            text_color="#f3f4f6",
-            corner_radius=999,
-            border_width=1,
-            border_color="#555555",
-            font=(FONT, 15, "bold"),
-            width=220,
-            height=45,
+            main_frame, corner_radius=999, border_width=1, font=(FONT_SEMIBOLD, 14), width=180, height=42
         )
-        self.main_button.pack(pady=20)
+        self._set_main_button("Download MP3", self.start_download, primary=True)
+        self.main_button.pack(pady=(18, 0))
 
-        self.status_label = ctk.CTkLabel(main_frame, text="", font=(FONT, 16, "bold"), wraplength=580)
-        self.status_label.pack()
+        self.progress_bar = ctk.CTkProgressBar(
+            main_frame, height=4, corner_radius=2, fg_color=PILL, progress_color="#cfd6da", border_width=0
+        )
 
-        self.progress_bar = ctk.CTkProgressBar(main_frame, width=580, height=15)
+        self.status_frame = ctk.CTkFrame(main_frame, fg_color=CARD, corner_radius=10, border_width=1)
+        self.status_dot = ctk.CTkLabel(self.status_frame, text="●", font=(FONT, 11), width=10)
+        self.status_dot.pack(side="left", padx=(12, 8), pady=10)
+        self.status_label = ctk.CTkLabel(
+            self.status_frame, text="", font=(FONT, 13), justify="left", anchor="w", wraplength=440
+        )
+        self.status_label.pack(side="left", fill="x", expand=True, padx=(0, 12), pady=10)
 
-    def show_status(self, text: str, color: str) -> None:
-        """Show a status message below the main button. Main thread only."""
+    @staticmethod
+    def _field_label(master: ctk.CTkFrame, text: str, top: int = 12) -> None:
+        """Add a small uppercase caption above a field, like the sidebar's input labels."""
+        ctk.CTkLabel(master, text=text, text_color=TEXT_MUTED, font=(FONT_SEMIBOLD, 10), anchor="w", height=14).pack(
+            fill="x", pady=(top, 6)
+        )
+
+    @staticmethod
+    def _entry(master: ctk.CTkFrame, placeholder: str | None = None, textvariable: ctk.StringVar | None = None) -> ctk.CTkEntry:
+        """Create a sidebar-styled entry whose border brightens while it has focus."""
+        entry = ctk.CTkEntry(
+            master,
+            textvariable=textvariable,
+            placeholder_text=placeholder,
+            placeholder_text_color=PLACEHOLDER,
+            fg_color=INPUT,
+            border_color=INPUT_BORDER,
+            border_width=1,
+            text_color=TEXT,
+            corner_radius=8,
+            height=36,
+            font=(FONT, 13),
+        )
+        entry.bind("<FocusIn>", lambda _: entry.configure(border_color=INPUT_BORDER_FOCUS))
+        entry.bind("<FocusOut>", lambda _: entry.configure(border_color=INPUT_BORDER))
+        return entry
+
+    def _match_title_bar(self) -> None:
+        """Color the Windows 11 title bar and border like the window background.
+        Older Windows ignores these attributes and keeps the dark title bar ctk sets.
+        """
+        try:
+            import ctypes
+
+            self.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            for attribute, color in ((DWMWA_CAPTION_COLOR, BG), (DWMWA_BORDER_COLOR, CARD_BORDER)):
+                colorref = ctypes.c_int(int(color[5:7] + color[3:5] + color[1:3], 16))  # COLORREF is 0x00BBGGRR
+                ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                    hwnd, attribute, ctypes.byref(colorref), ctypes.sizeof(colorref)
+                )
+        except Exception as e:
+            logger.debug("Could not color the title bar: %s", e)
+
+    def _set_main_button(self, text: str, command: Callable[[], None], primary: bool = False) -> None:
+        """Switch the main button's label and action; only the Download state is blue. Main thread only."""
+        self.main_button.configure(
+            text=text,
+            command=command,
+            fg_color=ACCENT if primary else PILL,
+            hover_color=ACCENT_HOVER if primary else PILL_HOVER,
+            border_color=ACCENT_BORDER if primary else PILL_BORDER,
+            text_color=ACCENT_TEXT if primary else "#f3f4f6",
+        )
+
+    def show_status(self, text: str, kind: str) -> None:
+        """Show a status pill below the main button; empty text hides it. Main thread only.
+
+        Args:
+            text: The message, possibly multi-line.
+            kind: A STATUS_STYLES key: success, error, warning or info.
+        """
+        if not text:
+            self.status_frame.pack_forget()
+            return
+        dot, color, border = STATUS_STYLES[kind]
+        self.status_dot.configure(text_color=dot)
         self.status_label.configure(text=text, text_color=color)
+        self.status_frame.configure(border_color=border)
+        self.status_frame.pack(fill="x", pady=(14, 0))
 
     def choose_folder(self) -> None:
         """Let the user pick a folder, starting at the current one; keep it on cancel."""
@@ -134,14 +242,14 @@ class DownloaderApp(ctk.CTk):
         button to Cancel before the thread starts, so a second click cannot start
         a second download.
         """
-        url = self.url_var.get().strip()
+        url = self.url_entry.get().strip()
         if not url or not is_youtube_url(url):
-            self.show_status("❌ Enter valid YouTube URL", "red")
+            self.show_status("Enter a valid YouTube URL", "error")
             return
 
         folder_path = resolve_folder(self.folder_var.get())
         if folder_path is None:
-            self.show_status("❌ Path doesn't exist", "red")
+            self.show_status("Folder doesn't exist", "error")
             return
         self.folder_var.set(str(folder_path))
 
@@ -149,11 +257,11 @@ class DownloaderApp(ctk.CTk):
         self.current_process = None
         self.current_stem = None
         self.progress_bar.set(0)
-        self.progress_bar.pack(pady=10)
-        self.show_status("⏳ Downloading...", "white")
-        self.main_button.configure(text="Cancel", command=self.cancel_download)
+        self.progress_bar.pack(fill="x", padx=60, pady=(16, 0), after=self.main_button)
+        self.show_status("Downloading...", "info")
+        self._set_main_button("Cancel", self.cancel_download)
 
-        filename = requested_filename(self.filename_var.get())
+        filename = requested_filename(self.name_entry.get())
         threading.Thread(target=self._download_thread, args=(url, folder_path, filename), daemon=True).start()
 
     def _download_thread(self, url: str, folder_path: Path, filename: str) -> None:
@@ -183,15 +291,15 @@ class DownloaderApp(ctk.CTk):
         except Exception as e:
             if self.download_cancelled:
                 return
-            msg = f"❌ {describe_error(e)}"
+            msg = describe_error(e)
             logger.error("%s: %s", msg, e)
-            self.after(0, self.show_status, msg, "red")
-            self.after(0, lambda: self.main_button.configure(text="Download MP3", command=self.start_download))
+            self.after(0, self.show_status, msg, "error")
+            self.after(0, lambda: self._set_main_button("Download MP3", self.start_download, primary=True))
         else:
-            # also after a late Cancel: the file is saved, so say so instead of "canceled"
-            msg = "\n".join([f"✅ Saved {mp3_path.name}", *(f"⚠️ {w}" for w in warnings)])
-            self.after(0, self.show_status, msg, "orange" if warnings else "green")
-            self.after(0, lambda: self.main_button.configure(text="Next", command=self.reset_fields))
+            # also after a late Cancel: the file is saved, say so instead of "canceled"
+            msg = "\n".join([f"Saved {mp3_path.name}", *warnings])
+            self.after(0, self.show_status, msg, "warning" if warnings else "success")
+            self.after(0, lambda: self._set_main_button("Next", self.reset_fields))
         finally:
             self.current_process = None
             self.after(0, self.progress_bar.pack_forget)
@@ -203,8 +311,8 @@ class DownloaderApp(ctk.CTk):
             kill_process_tree(self.current_process)
             self.current_process = None
 
-        self.show_status("❌ Download canceled", "red")
-        self.main_button.configure(text="Next", command=self.reset_fields)
+        self.show_status("Download canceled", "error")
+        self._set_main_button("Next", self.reset_fields)
         self.progress_bar.pack_forget()
 
         if self.current_stem:
@@ -214,8 +322,8 @@ class DownloaderApp(ctk.CTk):
         """Clear the URL and filename fields for the next download."""
         self.url_entry.delete(0, "end")
         self.name_entry.delete(0, "end")
-        self.show_status("", "white")
-        self.main_button.configure(text="Download MP3", command=self.start_download)
+        self.show_status("", "info")
+        self._set_main_button("Download MP3", self.start_download, primary=True)
 
     def run_native_gui(self, url: str, folder: str, filename: str) -> None:
         """Prefill the form from a `download_gui` request and run the window.
@@ -229,16 +337,16 @@ class DownloaderApp(ctk.CTk):
         """
         opened_message = "GUI opened"
         if url:
-            self.url_var.set(url)
+            self.url_entry.insert(0, url)
         if folder:
             folder_path = resolve_folder(folder)
             if folder_path is None:
-                self.show_status("⚠️ Folder not found, using the default folder", "orange")
+                self.show_status("Folder not found, using the default folder", "warning")
                 opened_message = "GUI opened, folder not found so the default folder is used"
             else:
                 self.folder_var.set(str(folder_path))
         if filename.strip():
-            self.filename_var.set(safe_filename(filename))
+            self.name_entry.insert(0, safe_filename(filename))
 
         self.after(100, lambda: send_message({"status": "success", "message": opened_message, "final": True}))
         self.mainloop()
