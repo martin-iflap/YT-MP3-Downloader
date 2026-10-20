@@ -90,6 +90,7 @@ Root: HKCU; \
 ; uninstaller has no record of them unless declared here.
 Type: files; Name: "{app}\yt-dlp.exe"
 Type: files; Name: "{app}\mp3.log"
+Type: files; Name: "{app}\mp3.log.1"
 Type: files; Name: "{userappdata}\Mozilla\NativeMessagingHosts\{#NativeManifestName}"
 
 [Code]

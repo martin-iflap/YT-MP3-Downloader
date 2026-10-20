@@ -28,6 +28,8 @@ from ytmp3_host.core import (
 )
 from ytmp3_host.native_messaging import send_current_folder, send_message
 
+logger = logging.getLogger(__name__)
+
 FONT = "Segoe UI"
 CLEANUP_DELAY_S = 2
 
@@ -60,7 +62,7 @@ class DownloaderApp(ctk.CTk):
         try:
             self.iconbitmap(str(ICON_PATH))
         except Exception as e:
-            logging.error("Icon not found: %s", e)
+            logger.error("Icon not found: %s", e)
 
         # Variables
         self.url_var = ctk.StringVar()
@@ -182,7 +184,7 @@ class DownloaderApp(ctk.CTk):
             if self.download_cancelled:
                 return
             msg = f"❌ {describe_error(e)}"
-            logging.error("%s: %s", msg, e)
+            logger.error("%s: %s", msg, e)
             self.after(0, self.show_status, msg, "red")
             self.after(0, lambda: self.main_button.configure(text="Download MP3", command=self.start_download))
         else:

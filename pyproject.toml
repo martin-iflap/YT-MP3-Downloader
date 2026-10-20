@@ -3,7 +3,7 @@ name = "ytmp3-host"
 version = "0.1.0"
 description = "Native messaging host for the YouTube MP3 Downloader Firefox extension"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 dependencies = [
     "customtkinter==5.2.2",
     "pyrefly>=0.60.0",

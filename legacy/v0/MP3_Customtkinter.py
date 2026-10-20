@@ -12,7 +12,7 @@ import re
 import os
 
 # ----------------------------------------   Logging   --------------------------------------------
-logging.basicConfig(filename="MP3_Customtkinter.log", # use absolute path for log files
+logging.basicConfig(filename="", # use absolute path for log files
                     level=logging.ERROR,
                     format="%(asctime)s [%(levelname)s] %(message)s")
 # -----------------------------------------   Functions   ------------------------------------------

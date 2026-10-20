@@ -16,6 +16,8 @@ from pathlib import Path
 
 from ytmp3_host.config import DEFAULT_FOLDER, FFMPEG_PATH, YT_DLP_PATH
 
+logger = logging.getLogger(__name__)
+
 DOWNLOAD_TIMEOUT_S = 300
 EMBED_TIMEOUT_S = 50
 REMOVE_ATTEMPTS = 6
@@ -25,10 +27,12 @@ THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 DEFAULT_FILENAME = "Youtube MP3"
 UNKNOWN_ARTIST = "<unknown>"
 YOUTUBE_HOSTS = ("youtube.com", "youtu.be/")
-NOISE_WORDS = ("Official", "Music", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean", "Live")
+NOISE_WORDS = ("Official Music Video", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean")
 
 PROGRESS_RE = re.compile(r"(\d+\.?\d*)%")
 INVALID_CHARS_RE = re.compile(r'[\\/*?:"<>|]')
+# the group is needed (\b must wrap the whole alternation); PyCharm can't see the joined words
+# noinspection RegExpUnnecessaryNonCapturingGroup
 NOISE_WORDS_RE = re.compile(r"\b(?:" + "|".join(map(re.escape, NOISE_WORDS)) + r")\b", flags=re.IGNORECASE)
 EMPTY_BRACKETS_RE = re.compile(r"[(\[]\s*[)\]]")
 WHITESPACE_RE = re.compile(r"\s+")
@@ -193,7 +197,7 @@ def kill_process_tree(process: subprocess.Popen[str]) -> None:
             check=True,
         )
     except (OSError, subprocess.CalledProcessError) as e:
-        logging.error("taskkill failed, killing only the main process: %s", e)
+        logger.error("taskkill failed, killing only the main process: %s", e)
         process.kill()
 
 
@@ -212,11 +216,11 @@ def remove_temp_files(temp_stem: Path) -> None:
                 break
             except PermissionError as e:
                 if attempt == REMOVE_ATTEMPTS:
-                    logging.error("Could not delete locked file %s: %s", f, e)
+                    logger.error("Could not delete locked file %s: %s", f, e)
                 else:
                     time.sleep(REMOVE_RETRY_DELAY_S)
             except OSError as e:
-                logging.error("Error deleting file %s: %s", f, e)
+                logger.error("Error deleting file %s: %s", f, e)
                 break
 
 
@@ -297,7 +301,7 @@ def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, output
             timeout=EMBED_TIMEOUT_S,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        logging.error("Error with thumbnail embedding: %s\n%s", e, e.stderr or "")
+        logger.error("Error with thumbnail embedding: %s\n%s", e, e.stderr or "")
         output.unlink(missing_ok=True)
         raise
 
@@ -415,7 +419,7 @@ def download_audio(
         subprocess.CalledProcessError: If yt-dlp or ffmpeg failed.
     """
     def _warn(message: str) -> None:
-        logging.warning(message)
+        logger.warning(message)
         if on_warning:
             on_warning(message)
 
@@ -427,8 +431,11 @@ def download_audio(
         raise FileNotFoundError(errno.ENOENT, "yt-dlp.exe not found, please reinstall the app", str(YT_DLP_PATH))
 
     temp_stem = folder / f"_ytmp3_{uuid.uuid4().hex[:12]}"
+    start = time.perf_counter()
     try:
         title = _run_yt_dlp(url, temp_stem, on_progress, on_start, timeout)
+        downloaded = time.perf_counter()
+        logger.debug("yt-dlp took %.2f s, title: %r", downloaded - start, title)
 
         if not filename:
             if not title:
@@ -447,12 +454,14 @@ def download_audio(
         embed_thumbnail(temp_mp3, thumb_file, artist_from_filename(filename), output)
         if not output.exists():  # cheap guard: never report success for a file that is not there
             raise FileNotFoundError(errno.ENOENT, "ffmpeg did not create the MP3", str(output))
+        end = time.perf_counter()
+        logger.debug("ffmpeg took %.2f s, total %.2f s: %s", end - downloaded, end - start, output)
         return output
     except subprocess.CalledProcessError as e:
-        logging.error("Error while downloading: %s\n%s", e, e.output or "")
+        logger.error("Error while downloading: %s\n%s", e, e.output or "")
         raise
     except Exception as e:
-        logging.error("Download error: %s", e)
+        logger.error("Download error: %s", e)
         raise
     finally:
         remove_temp_files(temp_stem)

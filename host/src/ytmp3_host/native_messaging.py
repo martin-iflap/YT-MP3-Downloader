@@ -19,6 +19,8 @@ from ytmp3_host.core import (
     resolve_folder,
 )
 
+logger = logging.getLogger(__name__)
+
 LENGTH_PREFIX = struct.Struct("@I")  # 4-byte unsigned int, native byte order
 
 type Message = dict[str, Any]
@@ -71,13 +73,14 @@ def send_message(message: Message, exit_code: int = 1) -> None:
         exit_code: Exit code used if the message cannot be sent. A host that cannot
             talk to Firefox is useless, so it exits instead of raising.
     """
+    logger.debug("Response: %s", message)
     try:
         encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
         sys.stdout.buffer.write(LENGTH_PREFIX.pack(len(encoded)))
         sys.stdout.buffer.write(encoded)
         sys.stdout.buffer.flush()
     except (OSError, TypeError, ValueError, struct.error) as e:
-        logging.error("Failed to send message, exiting: %s", e)
+        logger.error("Failed to send message, exiting: %s", e)
         sys.exit(exit_code)
 
 
@@ -130,11 +133,11 @@ def run_native(url: str, folder: str, filename: str) -> None:
         })
         return
     except subprocess.TimeoutExpired as e:
-        logging.error("Download timed out: %s", e)
+        logger.error("Download timed out: %s", e)
         send_message({"status": "error", "message": describe_error(e), "final": True})
         return
     except Exception as e:
-        logging.error("Download failed: %s", e)
+        logger.error("Download failed: %s", e)
         send_message({"status": "error", "message": f"Download failed: {describe_error(e)}", "final": True})
         return
 
