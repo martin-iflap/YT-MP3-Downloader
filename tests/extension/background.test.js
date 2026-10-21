@@ -59,15 +59,28 @@ test('unsupported actions are rejected without starting the host', () => {
   assert.ok(finals(state).every(m => m.status === 'error' && m.message === 'Unsupported action'));
 });
 
-test('host not installed: reports the port error immediately, exactly once', async () => {
+test('host not installed: reports it with the installer link immediately, exactly once', async () => {
   const { browser, state } = loadBackground();
   sidebarAction(browser, 'get_current_folder');
   state.ports[0].exit('No such native application app_manifest');
   mock.timers.tick(60 * 60 * 1000);
   await flush();
 
+  const [final] = finals(state);
+  assert.equal(finals(state).length, 1);
+  assert.equal(final.status, 'error');
+  assert.match(final.message, /not installed/);
+  assert.equal(final.helpUrl, 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest');
+});
+
+test('other port errors are relayed as they are', async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'get_current_folder');
+  state.ports[0].exit('Error reading from native app');
+  await flush();
+
   assert.deepStrictEqual(finals(state), [
-    { type: 'native_response', status: 'error', message: 'No such native application app_manifest', requestId: 'req-1', final: true }
+    { type: 'native_response', status: 'error', message: 'Error reading from native app', requestId: 'req-1', final: true }
   ]);
 });
 

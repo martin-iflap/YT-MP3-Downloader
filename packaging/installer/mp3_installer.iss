@@ -144,7 +144,7 @@ begin
   if not DownloadYtDlp() then
   begin
     Result :=
-      'The latest version of yt-dlp could not be downloaded.' +
+      'The latest version of yt-dlp could not be downloaded. ' +
       'Please check your internet connection and try again.';
   end;
 end;

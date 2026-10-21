@@ -105,7 +105,7 @@ uv sync
 Put `ffmpeg.exe` and `yt-dlp.exe` into `host/bin/` to run the host unpackaged. Build the executable from the repo root with:
 
 ```
-uv run pyinstaller --onefile --name mp3 --icon "packaging\assets\mp3.ico" host\src\ytmp3_host\MP3.py
+uv run pyinstaller --onedir --noconfirm --name mp3 --icon "packaging\assets\mp3.ico" host\src\ytmp3_host\MP3.py
 ```
 
-Then compile `packaging/installer/mp3_installer.iss` with [Inno Setup 6](https://jrsoftware.org/isinfo.php). It picks up `dist\mp3.exe` and `host\bin\ffmpeg.exe` relative to the repo root.
+Then compile `packaging/installer/mp3_installer.iss` with [Inno Setup 6](https://jrsoftware.org/isinfo.php). It picks up `dist\mp3\` (`mp3.exe` plus `_internal\`) and `host\bin\ffmpeg.exe` relative to the repo root.

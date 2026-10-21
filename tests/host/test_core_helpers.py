@@ -16,6 +16,7 @@ from ytmp3_host.core import (
     requested_filename,
     resolve_folder,
     safe_filename,
+    title_from_filename,
 )
 
 
@@ -87,6 +88,23 @@ def test_artist_from_filename(filename: str, expected: str) -> None:
     assert artist_from_filename(filename) == expected
 
 
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("Artist - Song", "Song"),
+        ("Jay-Z - Empire State of Mind", "Empire State of Mind"),
+        ("AC-DC - Thunderstruck - Live", "Thunderstruck - Live"),
+        ("Artist – Song", "Song"),
+        ("Artist-Song", "Song"),
+        ("Song without artist", "Song without artist"),
+        ("- Song", "Song"),
+        ("Artist -", "Artist -"),
+    ],
+)
+def test_title_from_filename(filename: str, expected: str) -> None:
+    assert title_from_filename(filename) == expected
+
+
 def test_resolve_folder_empty_creates_default(default_folder: Path) -> None:
     assert not default_folder.exists()
     assert resolve_folder("  ") == default_folder
@@ -139,7 +157,8 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path) -> No
     assert value("--audio-format") == "mp3"
     assert value("--audio-quality") == "0"  # LAME V0, see CLAUDE.md priorities
     assert value("-o") == f"{stem}.%(ext)s"
-    assert value("--print") == f"after_move:{core.TITLE_MARKER}%(title)s"
+    assert value("--print") == f"before_dl:{core.TITLE_MARKER}%(title)s"
+    assert "--no-simulate" in cmd  # --print must never turn the call into a dry run
     assert value("--ffmpeg-location") == str(core.FFMPEG_PATH)
     assert {"--no-playlist", "--write-thumbnail", "-x", "--newline", "--progress"} <= set(cmd)
 

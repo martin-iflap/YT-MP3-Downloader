@@ -29,13 +29,14 @@ def audio_md5(ffmpeg: Path, file: Path) -> str:
     return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
 
 
-def test_embeds_square_jpeg_cover_and_artist(ffmpeg: Path, media: Media, tmp_path: Path) -> None:
+def test_embeds_square_jpeg_cover_artist_and_title(ffmpeg: Path, media: Media, tmp_path: Path) -> None:
     output = tmp_path / "Artist - Song.mp3"
 
-    embed_thumbnail(media.mp3, media.cover, "Artíst", output)
+    embed_thumbnail(media.mp3, media.cover, "Artíst", "Søng", output)
 
     info = probe(ffmpeg, output)
     assert re.search(r"^\s*artist\s*: Artíst$", info, re.MULTILINE)
+    assert re.search(r"^\s*title\s*: Søng$", info, re.MULTILINE)
     video = re.search(r"Video: mjpeg.*?(\d+)x(\d+)", info)
     assert video, info
     assert video.group(1) == video.group(2) == "180"  # 320x180 center-cropped to 1:1
@@ -44,12 +45,13 @@ def test_embeds_square_jpeg_cover_and_artist(ffmpeg: Path, media: Media, tmp_pat
     assert audio_md5(ffmpeg, output) == audio_md5(ffmpeg, media.mp3)
 
 
-def test_without_thumbnail_only_sets_the_artist(ffmpeg: Path, media: Media, tmp_path: Path) -> None:
+def test_without_thumbnail_only_sets_the_tags(ffmpeg: Path, media: Media, tmp_path: Path) -> None:
     output = tmp_path / "out.mp3"
-    embed_thumbnail(media.mp3, None, "Someone", output)
+    embed_thumbnail(media.mp3, None, "Someone", "Something", output)
     info = probe(ffmpeg, output)
     assert "Video:" not in info
     assert re.search(r"^\s*artist\s*: Someone$", info, re.MULTILINE)
+    assert re.search(r"^\s*title\s*: Something$", info, re.MULTILINE)
     assert audio_md5(ffmpeg, output) == audio_md5(ffmpeg, media.mp3)
 
 
@@ -59,7 +61,7 @@ def test_broken_input_raises_and_leaves_no_partial_file(tmp_path: Path, media: M
     output = tmp_path / "out.mp3"
 
     with pytest.raises(subprocess.CalledProcessError) as info:
-        embed_thumbnail(broken, media.cover, "x", output)
+        embed_thumbnail(broken, media.cover, "x", "y", output)
 
     assert not output.exists()
     assert core.describe_error(info.value).startswith(f"{core.FFMPEG_PATH.name} failed: ")
@@ -71,7 +73,7 @@ def test_never_overwrites_or_deletes_an_existing_file(tmp_path: Path, media: Med
 
     # ffmpeg 7 exits 0 when -n refuses to overwrite, so this must not depend on ffmpeg
     with pytest.raises(FileExistsError):
-        embed_thumbnail(media.mp3, media.cover, "x", output)
+        embed_thumbnail(media.mp3, media.cover, "x", "y", output)
 
     assert output.read_bytes() == b"user's file"
 
@@ -87,4 +89,5 @@ def test_full_pipeline(fake_yt_dlp: FakeYtDlp, ffmpeg: Path, media: Media, out_d
     assert [p.name for p in out_dir.iterdir()] == ["Jay-Z - Empire State of Mind.mp3"]
     info = probe(ffmpeg, result)
     assert re.search(r"^\s*artist\s*: Jay-Z$", info, re.MULTILINE)
+    assert re.search(r"^\s*title\s*: Empire State of Mind$", info, re.MULTILINE)
     assert "Video: mjpeg" in info

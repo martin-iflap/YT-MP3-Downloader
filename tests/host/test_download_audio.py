@@ -1,5 +1,6 @@
 """core.download_audio with the fake yt-dlp: naming, warnings, errors, timeout and cleanup."""
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ def test_names_the_file_after_the_cleaned_title(
     assert warnings == []
     [call] = fake_embed
     assert call.artist == "Jay-Z"
+    assert call.title == "Empire State of Mind"
     assert call.thumb_file is not None and call.thumb_file.suffix == ".webp"
     assert call.output == result
     assert leftovers(out_dir) == []
@@ -47,6 +49,7 @@ def test_requested_filename_wins_over_the_title(
     fake_yt_dlp.set(title="Some Title")
     assert download_audio(URL, out_dir, "My Name - Mine") == out_dir / "My Name - Mine.mp3"
     assert fake_embed[0].artist == "My Name"
+    assert fake_embed[0].title == "Mine"
 
 
 def test_missing_title_warns_and_uses_the_default_name(
@@ -89,19 +92,36 @@ def test_existing_requested_file_fails_before_downloading(
     assert existing.read_bytes() == b"user's file"
 
 
-def test_existing_title_file_fails_after_downloading(
+def test_existing_title_file_stops_before_downloading(
     fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
-    fake_yt_dlp.set(title="Artist - Song")
+    fake_yt_dlp.set(title="Artist - Song (Official Video)")
     existing = out_dir / "Artist - Song.mp3"
     existing.write_bytes(b"user's file")
+    progress: list[float] = []
 
-    with pytest.raises(FileExistsError):
-        download_audio(URL, out_dir)
+    with pytest.raises(FileExistsError) as info:
+        download_audio(URL, out_dir, on_progress=progress.append)
 
+    assert info.value.filename == str(existing)
+    assert progress == []  # the title comes before any progress line, so the download never ran
     assert existing.read_bytes() == b"user's file"
     assert fake_embed == []
     assert leftovers(out_dir) == []
+
+
+def test_removes_stale_temp_files_but_keeps_recent_ones(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    stale, recent = out_dir / "_ytmp3_old.webm.part", out_dir / "_ytmp3_new.webm.part"
+    stale.write_bytes(b"killed host")
+    recent.write_bytes(b"running download")
+    old = time.time() - core.STALE_TEMP_AGE_S - 60
+    os.utime(stale, (old, old))
+
+    download_audio(URL, out_dir, "Song")
+
+    assert leftovers(out_dir) == [recent.name]
 
 
 def test_yt_dlp_failure_raises_with_its_output_and_cleans_up(

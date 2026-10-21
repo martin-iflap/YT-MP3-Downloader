@@ -85,6 +85,7 @@ async function loadFolder() {
   }
   sendNativeAction({ action: 'get_current_folder' }, (resp) => {
     if (resp.status === 'success' && resp.folder) setFolder(resp.folder);
+    else if (resp.helpUrl) showResult(resp.message, 'error', resp.helpUrl); // first run: tell the user right away
     else if (resp.status === 'error') console.error('Could not get default folder:', resp.message);
   });
 }
@@ -102,7 +103,7 @@ selectFolderBtn.addEventListener('click', () => {
       setFolder(resp.folder);
       showResult('Folder selected', 'success');
     } else if (resp.status === 'error') {
-      showResult(resp.message || 'Folder selection failed', 'error');
+      showResult(resp.message || 'Folder selection failed', 'error', resp.helpUrl);
     }
   });
 });
@@ -142,7 +143,7 @@ downloadBtn.addEventListener('click', () => {
       filenameInput.value = '';
       showResult(resp.message || `Downloaded: ${resp.filename || 'YouTube MP3'}`, 'success');
     } else {
-      showResult(resp.message || 'Download failed', 'error');
+      showResult(resp.message || 'Download failed', 'error', resp.helpUrl);
     }
   });
 });
@@ -157,7 +158,7 @@ openInAppBtn.addEventListener('click', () => {
     filename: filenameInput.value.trim() || undefined
   }, (resp) => {
     if (resp.status === 'success') showResult(resp.message || 'App launched', 'success');
-    else if (resp.status === 'error') showResult(resp.message || 'Failed to launch app', 'error');
+    else if (resp.status === 'error') showResult(resp.message || 'Failed to launch app', 'error', resp.helpUrl);
   });
 });
 
@@ -171,9 +172,20 @@ function clearResult() {
   resultDiv.textContent = '';
 }
 
-function showResult(message, type) {
+// helpUrl (set by background.js, e.g. when the app is not installed) adds a link after the message.
+function showResult(message, type, helpUrl) {
   clearTimeout(hideTimer);
-  resultDiv.textContent = message;
+  const text = document.createElement('span');
+  text.textContent = message;
+  if (helpUrl) {
+    const link = document.createElement('a');
+    link.href = helpUrl;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'Download';
+    text.append(' ', link);
+  }
+  resultDiv.replaceChildren(text);
   resultDiv.className = `show ${type}`;
   resultDiv.scrollIntoView({ block: 'nearest' });
   if (type === 'success') hideTimer = setTimeout(clearResult, 5000);

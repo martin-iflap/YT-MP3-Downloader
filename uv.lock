@@ -280,27 +280,25 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "customtkinter" },
-    { name = "pyrefly" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "pillow" },
     { name = "pyinstaller" },
+    { name = "pyrefly" },
     { name = "pytest" },
     { name = "pytest-cov" },
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "customtkinter", specifier = "==5.2.2" },
-    { name = "pyrefly", specifier = ">=0.60.0" },
-]
+requires-dist = [{ name = "customtkinter", specifier = "==5.2.2" }]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "pillow", specifier = "==12.3.0" },
     { name = "pyinstaller", specifier = ">=6.22.2" },
+    { name = "pyrefly", specifier = ">=0.60.0" },
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
 ]

@@ -26,11 +26,13 @@ def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")  # yt-dlp runs with --encoding utf-8
     args = sys.argv[1:]
     stem = args[args.index("-o") + 1].removesuffix(".%(ext)s")
-    title_template = args[args.index("--print") + 1].removeprefix("after_move:")
+    title_template = args[args.index("--print") + 1].removeprefix("before_dl:")
     mode = os.environ.get("FAKE_YTDLP_MODE", "success")
     title = os.environ.get("FAKE_YTDLP_TITLE", "Artist - Song (Official Video)")
 
     emit(f"[youtube] Extracting URL: {args[-1]}")
+    if mode != "no_title":
+        emit(title_template.replace("%(title)s", title))
     partial = Path(f"{stem}.webm.part")
     partial.write_bytes(b"partial download")
     for percent in ("0.0", "42.5", "100.0"):
@@ -58,8 +60,6 @@ def main() -> None:
             shutil.copyfile(source, f"{stem}.png")
         else:
             Path(f"{stem}.webp").write_bytes(b"fake webp")
-    if mode != "no_title":
-        emit(title_template.replace("%(title)s", title))
 
 
 if __name__ == "__main__":

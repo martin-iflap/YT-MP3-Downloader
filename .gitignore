@@ -17,6 +17,7 @@ dist/
 
 # Dev-only binaries (ffmpeg.exe, yt-dlp.exe)
 host/bin/
+.coverage
 
 # Inno Setup output
 packaging/installer/output/

@@ -12,5 +12,6 @@ function isYouTubeUrl(value) {
   }
   if ((url.protocol !== 'http:' && url.protocol !== 'https:') || !YOUTUBE_HOSTS.has(url.hostname)) return false;
   if (url.hostname === 'youtu.be') return url.pathname.length > 1;
-  return (url.pathname === '/watch' && url.searchParams.has('v')) || url.pathname.startsWith('/shorts/');
+  return (url.pathname === '/watch' && url.searchParams.has('v')) ||
+    /^\/(shorts|live)\/[^/]+/.test(url.pathname);
 }

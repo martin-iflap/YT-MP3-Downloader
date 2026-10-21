@@ -100,6 +100,7 @@ class EmbedCall:
     temp_mp3: Path
     thumb_file: Path | None
     artist: str
+    title: str
     output: Path
 
 
@@ -114,8 +115,8 @@ def fake_embed(monkeypatch: pytest.MonkeyPatch) -> list[EmbedCall]:
     """
     calls: list[EmbedCall] = []
 
-    def _embed(temp_mp3: Path, thumb_file: Path | None, artist: str, output: Path) -> None:
-        calls.append(EmbedCall(temp_mp3, thumb_file, artist, output))
+    def _embed(temp_mp3: Path, thumb_file: Path | None, artist: str, title: str, output: Path) -> None:
+        calls.append(EmbedCall(temp_mp3, thumb_file, artist, title, output))
         output.write_bytes(temp_mp3.read_bytes())
 
     monkeypatch.setattr(core, "embed_thumbnail", _embed)

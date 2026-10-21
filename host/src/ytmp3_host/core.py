@@ -22,6 +22,8 @@ DOWNLOAD_TIMEOUT_S = 300
 EMBED_TIMEOUT_S = 50
 REMOVE_ATTEMPTS = 6
 REMOVE_RETRY_DELAY_S = 0.5
+# temp files older than this belong to a host that was killed (e.g. Firefox closed mid-download)
+STALE_TEMP_AGE_S = 3600
 TITLE_MARKER = "YTMP3_TITLE:"
 THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 DEFAULT_FILENAME = "Youtube MP3"
@@ -148,13 +150,31 @@ def artist_from_filename(filename: str) -> str:
     return artist or UNKNOWN_ARTIST
 
 
+def title_from_filename(filename: str) -> str:
+    """Derive the title metadata from a filename, the counterpart of artist_from_filename.
+
+    Args:
+        filename: The final filename without extension, e.g. "Artist - Song".
+    Returns:
+        The text after the dash that artist_from_filename splits at, or the whole
+        filename if there is no dash (or nothing after it).
+    """
+    if match := ARTIST_SEPARATOR_RE.search(filename):
+        title = filename[match.end():].strip()
+    else:
+        title = filename.split("-", 1)[1].strip() if "-" in filename else ""
+    return title or filename
+
+
 def build_download_command(url: str, temp_stem: Path) -> list[str]:
     """Build the yt-dlp command for one download.
 
-    A single call fetches the title (printed after TITLE_MARKER), the audio and
-    the raw thumbnail. `--audio-quality 0` is LAME V0, the best VBR preset, which
-    encodes as fast as the default V5. `--print` implies `--quiet`, so `--progress`
-    keeps the progress lines the GUI parses.
+    A single call fetches the title, the audio and the raw thumbnail. The title is
+    printed after TITLE_MARKER before the download starts (`before_dl`), so an
+    existing file can stop it early. `--audio-quality 0` is LAME V0, the best VBR
+    preset, which encodes as fast as the default V5. `--print` implies `--quiet`,
+    so `--progress` keeps the progress lines the GUI parses; `--no-simulate` makes
+    sure printing never turns the call into a dry run.
 
     Args:
         url: The YouTube video URL.
@@ -169,7 +189,8 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
         "-x", "--audio-format", "mp3", "--audio-quality", "0",
         "--write-thumbnail",
         "--ffmpeg-location", str(FFMPEG_PATH),
-        "--print", f"after_move:{TITLE_MARKER}%(title)s",
+        "--print", f"before_dl:{TITLE_MARKER}%(title)s",
+        "--no-simulate",
         "--progress", "--newline",
         "--encoding", "utf-8",
         "-o", f"{temp_stem}.%(ext)s",
@@ -241,6 +262,25 @@ def remove_temp_files(temp_stem: Path) -> None:
                 break
 
 
+def remove_stale_temp_files(folder: Path) -> None:
+    """Remove temp files that killed hosts left in folder.
+    When Firefox closes during a download it kills the host, so download_audio's
+    cleanup never runs. Files younger than STALE_TEMP_AGE_S may belong to a running
+    download and are kept; locked files are skipped. Failures are logged, not raised.
+
+    Args:
+        folder: The download folder.
+    """
+    cutoff = time.time() - STALE_TEMP_AGE_S
+    for f in folder.glob("_ytmp3_*.*"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+                logger.info("Removed stale temp file %s", f)
+        except OSError as e:
+            logger.warning("Could not remove stale temp file %s: %s", f, e)
+
+
 def describe_error(error: Exception) -> str:
     """Turn a download_audio exception into a short message for the user.
 
@@ -274,17 +314,18 @@ def describe_error(error: Exception) -> str:
             return f"Unexpected error: {error}"
 
 
-def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, output: Path) -> None:
-    """Write the final MP3 with cover art and artist in a single ffmpeg pass.
+def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, title: str, output: Path) -> None:
+    """Write the final MP3 with cover art, artist and title in a single ffmpeg pass.
 
     The audio stream is copied, never re-encoded. The thumbnail is center-cropped
     to 1:1 and encoded as high-quality JPEG ID3v2.3 cover art. Without a thumbnail
-    only the artist metadata is added.
+    only the artist and title metadata are added.
 
     Args:
         temp_mp3: The MP3 yt-dlp produced.
         thumb_file: The thumbnail to embed, or None.
         artist: The artist metadata value.
+        title: The title metadata value.
         output: The final MP3 path. Must not exist yet (ffmpeg runs with -n).
     Raises:
         FileExistsError: If output already exists; it is left untouched.
@@ -306,6 +347,7 @@ def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, output
         "-c:a", "copy",
         "-id3v2_version", "3",
         "-metadata", f"artist={artist}",
+        "-metadata", f"title={title}",
         str(output),
     ]
     # -n alone is not enough: ffmpeg 7 exits 0 when it refuses to overwrite
@@ -331,6 +373,7 @@ def _run_yt_dlp(
     temp_stem: Path,
     on_progress: Callable[[float], object] | None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None,
+    on_title: Callable[[str], None],
     timeout: float,
 ) -> str:
     """Run the yt-dlp download and return the video title.
@@ -340,6 +383,8 @@ def _run_yt_dlp(
         temp_stem: Output path without extension.
         on_progress: Optional callback receiving the progress as 0.0-1.0.
         on_start: Optional callback receiving the process and temp stem once started.
+        on_title: Callback receiving the title before the download starts; raising
+            from it stops yt-dlp and propagates.
         timeout: Seconds after which the whole process tree is killed.
 
     Returns:
@@ -377,6 +422,7 @@ def _run_yt_dlp(
             for line in process.stdout:
                 if line.startswith(TITLE_MARKER):
                     title = line[len(TITLE_MARKER):].strip()
+                    on_title(title)
                     continue
                 output_lines.append(line)
                 if on_progress:
@@ -412,8 +458,10 @@ def download_audio(
     timeout: float = DOWNLOAD_TIMEOUT_S,
 ) -> Path:
     """Download a YouTube video's audio as an MP3 with cover art.
-    yt-dlp writes to a unique temp name in folder, so the title is only needed
-    after the download. Temp files are always removed, also on failure.
+    yt-dlp writes to a unique temp name in folder and prints the title before it
+    downloads, so a title-named file that already exists stops the download early.
+    Temp files are always removed, also on failure; stale ones that killed hosts
+    left in folder are removed first.
 
     Args:
         url: The YouTube video URL.
@@ -443,6 +491,10 @@ def download_audio(
         if on_warning:
             on_warning(message)
 
+    def _check_title(t: str) -> None:
+        if not filename:
+            _ensure_not_exists(folder / f"{safe_filename(t)}.mp3")
+
     if filename:
         _ensure_not_exists(folder / f"{filename}.mp3")
     if not FFMPEG_PATH.exists():
@@ -450,10 +502,11 @@ def download_audio(
     if not YT_DLP_PATH.exists():
         raise FileNotFoundError(errno.ENOENT, "yt-dlp.exe not found, please reinstall the app", str(YT_DLP_PATH))
 
+    remove_stale_temp_files(folder)
     temp_stem = folder / f"_ytmp3_{uuid.uuid4().hex[:12]}"
     start = time.perf_counter()
     try:
-        title = _run_yt_dlp(url, temp_stem, on_progress, on_start, timeout)
+        title = _run_yt_dlp(url, temp_stem, on_progress, on_start, _check_title, timeout)
         downloaded = time.perf_counter()
         logger.debug("yt-dlp took %.2f s, title: %r", downloaded - start, title)
 
@@ -462,7 +515,7 @@ def download_audio(
                 _warn(f"Could not fetch the video title, using '{DEFAULT_FILENAME}'")
             filename = safe_filename(title)
         output = folder / f"{filename}.mp3"
-        _ensure_not_exists(output)
+        _ensure_not_exists(output)  # again: it may have appeared during the download
 
         temp_mp3 = temp_stem.with_name(f"{temp_stem.name}.mp3")
         if not temp_mp3.exists():
@@ -471,7 +524,7 @@ def download_audio(
         thumb_file = find_thumbnail(temp_stem)
         if thumb_file is None:
             _warn("No thumbnail found, the MP3 is saved without cover art")
-        embed_thumbnail(temp_mp3, thumb_file, artist_from_filename(filename), output)
+        embed_thumbnail(temp_mp3, thumb_file, artist_from_filename(filename), title_from_filename(filename), output)
         if not output.exists():  # cheap guard: never report success for a file that is not there
             raise FileNotFoundError(errno.ENOENT, "ffmpeg did not create the MP3", str(output))
         end = time.perf_counter()

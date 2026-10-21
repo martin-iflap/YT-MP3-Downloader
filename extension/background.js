@@ -3,6 +3,8 @@
 const NATIVE_HOST_NAME = 'app_manifest';
 const MENU_ID = 'download-mp3';
 const NOTIFICATION_ICON = 'icons/icon-48.png';
+const INSTALLER_URL = 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest';
+const HOST_MISSING_MESSAGE = 'The YT MP3 Downloader app is not installed. Install it from GitHub, then restart Firefox.';
 
 // Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
 // and select_folder waits on the user, so these must stay above that.
@@ -28,10 +30,14 @@ browser.contextMenus.create({
     '*://www.youtube.com/watch*',
     '*://youtube.com/watch*',
     '*://m.youtube.com/watch*',
+    '*://music.youtube.com/watch*',
     '*://youtu.be/*',
     '*://www.youtube.com/shorts/*',
     '*://youtube.com/shorts/*',
-    '*://m.youtube.com/shorts/*'
+    '*://m.youtube.com/shorts/*',
+    '*://www.youtube.com/live/*',
+    '*://youtube.com/live/*',
+    '*://m.youtube.com/live/*'
   ]
 }, () => {
   if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
@@ -63,6 +69,16 @@ async function notifyDownloadResult(origin, response) {
   } else {
     notify('Download Failed', response.message || 'An error occurred during download');
   }
+}
+
+// Turn a port error into a response. Firefox says "No such native application <name>"
+// when the host is not registered, the most common first-run failure.
+function disconnectResponse(error) {
+  if (!error) return { status: 'error', message: 'Native host exited unexpectedly' };
+  if (/no such native application/i.test(error.message)) {
+    return { status: 'error', message: HOST_MISSING_MESSAGE, helpUrl: INSTALLER_URL };
+  }
+  return { status: 'error', message: error.message };
 }
 
 // Run one action on a fresh host process. Guarantees exactly one final response
@@ -106,7 +122,7 @@ function runNativeAction(payload, requestId, origin) {
 
   // Firefox reports why the host went away (e.g. not installed) on port.error, not runtime.lastError.
   port.onDisconnect.addListener((p) => {
-    finish({ status: 'error', message: p.error ? p.error.message : 'Native host exited unexpectedly' }, false);
+    finish(disconnectResponse(p.error), false);
   });
 
   try {
