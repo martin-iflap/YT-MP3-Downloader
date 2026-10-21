@@ -23,6 +23,7 @@ URL = "https://www.youtube.com/watch?v=abc123"
 
 
 def frame(message: object) -> bytes:
+    """Encode message the way Firefox sends it: 4-byte native-endian length, then UTF-8 JSON."""
     data = json.dumps(message).encode("utf-8")
     return LENGTH_PREFIX.pack(len(data)) + data
 
@@ -40,7 +41,12 @@ def parse_frames(data: bytes) -> list[dict[str, Any]]:
 
 
 def run_host(monkeypatch: pytest.MonkeyPatch, stdin: bytes) -> list[dict[str, Any]]:
-    """Run MP3.main() until stdin is exhausted and return what it wrote to stdout."""
+    """Run MP3.main() in this process until stdin is exhausted and return the decoded responses.
+
+    sys.stdin/sys.stdout are replaced with in-memory text streams over bytes, which is
+    what read_message/send_message use (through .buffer). End of stdin is what Firefox
+    does when it closes the port, so main() must exit with code 0.
+    """
     stdout = io.BytesIO()
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(stdin)))
     fake_stdout = io.TextIOWrapper(stdout, write_through=True)
@@ -53,6 +59,7 @@ def run_host(monkeypatch: pytest.MonkeyPatch, stdin: bytes) -> list[dict[str, An
 
 
 def requests(*messages: object) -> bytes:
+    """Several framed requests back to back, as one stdin."""
     return b"".join(frame(m) for m in messages)
 
 
@@ -61,6 +68,7 @@ def finals(responses: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def assert_one_final_per_request(responses: list[dict[str, Any]], request_count: int) -> None:
+    """The contract background.js relies on: one final per request, last message final, warnings never final."""
     assert len(finals(responses)) == request_count
     assert responses[-1]["final"] is True
     assert all(r["status"] in {"success", "error", "warning"} for r in responses)
@@ -236,6 +244,7 @@ def test_several_requests_in_one_session(
 
 
 def host_env(tmp_path: Path) -> dict[str, str]:
+    """Environment for a host started as a child process, where monkeypatch can't reach."""
     env = dict(os.environ)
     env["USERPROFILE"] = str(tmp_path)  # Path.home(): keep the default folder out of Documents
     env["YTMP3_LOG_LEVEL"] = "CRITICAL"  # don't write mp3.log into the repo

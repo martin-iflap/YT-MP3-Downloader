@@ -13,6 +13,7 @@ from ytmp3_host.core import download_audio, embed_thumbnail
 
 @pytest.fixture(autouse=True)
 def real_ffmpeg(ffmpeg: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make core use the real ffmpeg.exe in every test of this file (skips them all without one)."""
     monkeypatch.setattr(core, "FFMPEG_PATH", ffmpeg)
 
 
