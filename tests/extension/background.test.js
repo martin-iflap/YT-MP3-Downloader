@@ -70,7 +70,7 @@ test('host not installed: reports it with the installer link immediately, exactl
   assert.equal(finals(state).length, 1);
   assert.equal(final.status, 'error');
   assert.match(final.message, /not installed/);
-  assert.equal(final.helpUrl, 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest');
+  assert.equal(final.helpUrl, 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest/download/YT-MP3-Downloader-Setup.exe');
 });
 
 test('other port errors are relayed as they are', async () => {

@@ -240,7 +240,11 @@ def recover_yt_dlp(exe: Path) -> None:
         logger.warning("%s is missing, restoring %s", exe.name, old[0].name)
         old[0].replace(exe)
         old = old[1:]
-    for leftover in [_new_path(exe), *old]:
+    _remove_leftovers([_new_path(exe), *old])
+
+
+def _remove_leftovers(paths: list[Path]) -> None:
+    for leftover in paths:
         try:
             leftover.unlink(missing_ok=True)
         except OSError as e:
@@ -248,13 +252,21 @@ def recover_yt_dlp(exe: Path) -> None:
 
 
 def _swap_in(new: Path, exe: Path) -> None:
-    """Make new the installed exe by two renames, keeping the current one as an old copy."""
+    """Make new the installed exe by two renames, then delete the replaced one.
+
+    The old copy is only needed between the renames (recover_yt_dlp puts it back
+    after a kill there). If another host still runs it, Windows can't delete it,
+    and a later update removes it.
+    """
+    old = None
     if exe.exists():
         old = exe.with_name(f"{exe.stem}.old{exe.suffix}")
         if old.exists():  # recover_yt_dlp could not remove it: it still runs
             old = exe.with_name(f"{exe.stem}.old-{uuid.uuid4().hex[:8]}{exe.suffix}")
         exe.rename(old)
     new.rename(exe)
+    if old:
+        _remove_leftovers([old])
 
 
 def update_yt_dlp() -> str:

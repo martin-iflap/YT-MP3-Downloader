@@ -203,7 +203,7 @@ function messageWithLink(message, helpUrl) {
     link.href = helpUrl;
     link.target = '_blank';
     link.rel = 'noopener';
-    link.textContent = 'Download';
+    link.textContent = 'Download the installer';
     text.append(' ', link);
   }
   return text;

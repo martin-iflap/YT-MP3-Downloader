@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import MP3, __version__, core, health, native_messaging, updater
+from ytmp3_host import MP3, __version__, config, core, health, native_messaging, updater
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -328,12 +328,28 @@ def test_host_process_over_real_pipes(tmp_path: Path) -> None:
     assert responses[1]["folder"] == str(tmp_path / "Documents" / "YT-MP3-Downloads")
 
 
+def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:
+    # what the installer runs; stdin stays open, so the request loop would block
+    result = subprocess.run(
+        [sys.executable, "-m", "ytmp3_host.MP3", MP3.SELF_CHECK_ARG],
+        stdin=subprocess.PIPE, capture_output=True, text=True, env=host_env(tmp_path), timeout=60,
+    )
+    assert result.stdout == ""
+    if config.FFMPEG_PATH.exists():
+        assert (result.returncode, result.stderr) == (0, "")
+    else:
+        assert result.returncode == 1
+        [problem] = result.stderr.strip().splitlines()  # the modules and the framing are fine
+        assert problem.startswith(f"{config.FFMPEG_PATH} does not run")
+
+
 def test_headless_path_does_not_load_the_gui_health_or_updater(tmp_path: Path) -> None:
     # host startup must stay light: customtkinter/Tk only load for the GUI actions,
     # health and the updater (and urllib with them) only for get_version and the updates
     code = (
         "import sys, ytmp3_host.MP3, ytmp3_host.native_messaging\n"
-        "heavy = ('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'ytmp3_host.updater', 'urllib.request')\n"
+        "heavy = ('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'ytmp3_host.updater',\n"
+        "         'ytmp3_host.selfcheck', 'urllib.request')\n"
         "loaded = [m for m in heavy if m in sys.modules]\n"
         "assert not loaded, loaded\n"
     )

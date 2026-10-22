@@ -5,12 +5,14 @@ repeat it, and the extension's MIN_HOST_VERSION must never ask for a host that d
 not exist yet (every user would be told to update to a version they can't get).
 """
 
+import json
 import re
 import sys
 import tomllib
 from pathlib import Path
 
-from ytmp3_host import __version__, config, updater
+from ytmp3_host import MP3, __version__, config, github, updater
+from ytmp3_host.github import HOST_REPO
 from ytmp3_host.health import is_outdated, parse_version
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -61,6 +63,28 @@ def test_installer_file_name_is_the_asset_the_updater_downloads() -> None:
 def test_installer_version_folder_is_the_one_config_recognizes() -> None:
     folder = iss_setting(r'^#define\s+VersionDir\s+"([^"\\]+)\\"')
     assert folder == config.VERSIONS_DIR_NAME
+
+
+def test_the_extension_links_the_installer_the_updater_downloads() -> None:
+    background = (REPO_ROOT / "extension" / "background.js").read_text(encoding="utf-8")
+    url = re.search(r"^const INSTALLER_URL = '([^']+)';", background, flags=re.MULTILINE)
+    assert url, "INSTALLER_URL not found in background.js"
+    assert url.group(1) == f"{github.GITHUB_URL}/{HOST_REPO}/releases/latest/download/{updater.INSTALLER_ASSET}"
+
+
+def test_the_installer_runs_the_self_check_the_host_knows() -> None:
+    assert f"'{MP3.SELF_CHECK_ARG}'" in INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+
+# The permissions of the extension 1.x users have. Firefox holds back an update that asks
+# for a new one until the user approves it, so users who never do would stay on 1.x.
+# Ask for a new permission at runtime (optional_permissions) instead.
+V1_PERMISSIONS = {"contextMenus", "nativeMessaging", "notifications", "activeTab", "tabs", "storage"}
+
+
+def test_the_extension_asks_for_no_new_permissions() -> None:
+    manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+    assert set(manifest["permissions"]) <= V1_PERMISSIONS
 
 
 def test_release_checksum_file_is_the_one_the_updater_reads(tmp_path: Path) -> None:

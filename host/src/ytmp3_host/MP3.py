@@ -1,5 +1,5 @@
 """Entry point of the native host: the request loop and the action dispatch table.
-The GUI, health and updater modules are lazy imports (PEP 810): they load on first
+The GUI, health, updater and selfcheck modules are lazy imports (PEP 810): they load on first
 use inside their actions, so headless downloads never import customtkinter, create a
 Tk window or load urllib (faster host startup).
 """
@@ -12,11 +12,16 @@ from ytmp3_host.config import setup_logging
 lazy from ytmp3_host.gui import open_gui, select_folder as pick_folder
 lazy from ytmp3_host.health import host_status
 from ytmp3_host.native_messaging import Message, read_message, run_native, send_current_folder, send_message
+lazy from ytmp3_host.selfcheck import self_check
 lazy from ytmp3_host.updater import UpdateError, update_host as install_host_update, update_yt_dlp as install_yt_dlp
 
 # not __name__: run as a script (and when frozen) that is "__main__", outside the
 # "ytmp3_host" logger whose level setup_logging() sets
 logger = logging.getLogger("ytmp3_host.MP3")
+
+# The installer runs `mp3.exe --self-check` before switching Firefox to a new version.
+# Firefox starts the host with other arguments (the manifest path and the extension ID).
+SELF_CHECK_ARG = "--self-check"
 
 
 def download(request: Message) -> None:
@@ -121,6 +126,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     setup_logging()
+    if sys.argv[1:] == [SELF_CHECK_ARG]:
+        sys.exit(self_check())
     main()
 
 

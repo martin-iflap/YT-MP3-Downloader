@@ -154,23 +154,34 @@ def test_an_outdated_yt_dlp_is_replaced_by_the_checked_download(
     new_exe = publish_yt_dlp(server)
     assert updater.update_yt_dlp() == NEW
     assert install.exe.read_bytes() == new_exe
-    # the previous exe is kept until the next update (another host may still run it)
-    assert install.files == ["yt-dlp.exe", "yt-dlp.old.exe"]
+    assert install.files == ["yt-dlp.exe"]  # the replaced exe is deleted right away
     assert server.requests == [
         f"/{YT_DLP_REPO}/releases/download/{NEW}/SHA2-256SUMS",
         f"/{YT_DLP_REPO}/releases/download/{NEW}/yt-dlp.exe",
     ]
 
 
-def test_the_next_update_removes_the_kept_old_copy(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_replaced_exe_still_running_is_removed_by_the_next_update(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_unlink = Path.unlink
+
+    def running(path: Path, missing_ok: bool = False) -> None:
+        if path.name.startswith("yt-dlp.old"):
+            raise PermissionError(13, "Access is denied")  # like a running exe
+        real_unlink(path, missing_ok=missing_ok)
+
     latest(monkeypatch, yt_dlp=NEW)
     publish_yt_dlp(server)
-    updater.update_yt_dlp()
+    with monkeypatch.context() as m:
+        m.setattr(Path, "unlink", running)
+        assert updater.update_yt_dlp() == NEW
+    assert install.files == ["yt-dlp.exe", "yt-dlp.old.exe"]
+    assert updater.read_version(updater.yt_dlp_version_command(install.exe.with_name("yt-dlp.old.exe"))) == OLD
     latest(monkeypatch, yt_dlp="2026.10.01")
     publish_yt_dlp(server, "2026.10.01", script("2026.10.01"))
     assert updater.update_yt_dlp() == "2026.10.01"
-    assert install.files == ["yt-dlp.exe", "yt-dlp.old.exe"]
-    assert updater.read_version(updater.yt_dlp_version_command(install.exe.with_name("yt-dlp.old.exe"))) == NEW
+    assert install.files == ["yt-dlp.exe"]
 
 
 def test_a_current_yt_dlp_is_not_downloaded_again(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -300,16 +311,16 @@ def test_killed_mid_download_leaves_only_a_partial_that_is_removed(install: Inst
     assert install.files == ["yt-dlp.exe"]
 
 
-def test_an_old_copy_still_in_use_gets_a_unique_name(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_old_copy_still_in_use_is_left_alone(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
     old = install.exe.with_name("yt-dlp.old.exe")
     old.write_bytes(script("2026.01.01"))
     latest(monkeypatch, yt_dlp=NEW)
     publish_yt_dlp(server)
     with old.open("rb"):  # an open file can't be deleted on Windows, like a running exe
         assert updater.update_yt_dlp() == NEW
-    names = install.files
-    assert "yt-dlp.exe" in names and "yt-dlp.old.exe" in names
-    assert len([n for n in names if n.startswith("yt-dlp.old-")]) == 1
+    # the swap moved the replaced exe to a unique name instead, and deleted it
+    assert install.files == ["yt-dlp.exe", "yt-dlp.old.exe"]
+    assert old.read_bytes() == script("2026.01.01")
 
 
 # --- the update lock ----------------------------------------------------------

@@ -3,7 +3,10 @@
 const NATIVE_HOST_NAME = 'app_manifest';
 const MENU_ID = 'download-mp3';
 const NOTIFICATION_ICON = 'icons/icon-48.png';
-const INSTALLER_URL = 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest';
+// The installer of the latest release, downloaded directly: the one link that fixes every
+// host problem, including hosts that can't update themselves (1.x, broken installs).
+// Every release must carry this asset name (updater.INSTALLER_ASSET, checked by test_versions.py).
+const INSTALLER_URL = 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest/download/YT-MP3-Downloader-Setup.exe';
 const HOST_MISSING_MESSAGE = 'The YT MP3 Downloader app is not installed. Install it from GitHub, then restart Firefox.';
 
 // The oldest host this extension works with. Raise it when the extension starts to rely on
@@ -13,6 +16,7 @@ const HOST_OUTDATED_MESSAGE = `The YT MP3 Downloader app is out of date (version
 const HOST_BROKEN_MESSAGE = 'The YT MP3 Downloader app is not working (it closed without answering). Reinstall it from GitHub.';
 // What a 1.x host answers to get_version: it treats unknown actions as a download without a URL.
 const LEGACY_HOST_REPLY = 'Invalid YouTube URL';
+const LEGACY_HOST_MESSAGE = "This version of the YT MP3 Downloader app can't update itself. Install the new version once, from then on it keeps itself up to date.";
 
 // Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
 // and select_folder waits on the user, so these must stay above that. get_version waits
@@ -149,7 +153,7 @@ function assessHostStatus(response, source) {
     }
     // a v2+ host that failed is reported as it is; only a 1.x host answers like this
     if (response.message !== LEGACY_HOST_REPLY) return response;
-    return { status: 'warning', message: HOST_OUTDATED_MESSAGE, helpUrl: INSTALLER_URL };
+    return { status: 'warning', message: LEGACY_HOST_MESSAGE, helpUrl: INSTALLER_URL };
   }
   if (compareVersions(version, parseVersion(MIN_HOST_VERSION)) < 0) {
     return Object.assign({}, response, { status: 'warning', message: HOST_OUTDATED_MESSAGE, helpUrl: INSTALLER_URL });

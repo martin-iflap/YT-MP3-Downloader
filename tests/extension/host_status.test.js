@@ -4,7 +4,7 @@ const { test, afterEach, mock } = require('node:test');
 const assert = require('node:assert/strict');
 const { loadBackground, flush } = require('./harness');
 
-const INSTALLER_URL = 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest';
+const INSTALLER_URL = 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest/download/YT-MP3-Downloader-Setup.exe';
 
 afterEach(() => mock.timers.reset());
 
@@ -113,7 +113,7 @@ test('a missing JavaScript runtime is not reported yet (no fix is shipped)', asy
 test('a 1.x host (answers get_version as a download) is told to update, without repairs', async () => {
   const { final, calls } = await checkHost({ get_version: { status: 'error', message: 'Invalid YouTube URL' } });
   assert.equal(final.status, 'warning');
-  assert.match(final.message, /out of date \(version 2\.0\.0 or newer/);
+  assert.match(final.message, /can't update itself\. Install the new version once/);
   assert.equal(final.helpUrl, INSTALLER_URL);
   assert.deepStrictEqual(calls, ['get_version'], 'a 1.x host has no updater');
 });

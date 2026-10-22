@@ -73,6 +73,10 @@ SolidCompression=yes
 ; Modern Windows permissions.
 PrivilegesRequired=lowest
 
+; mp3.exe and yt-dlp.exe are 64-bit builds. x64compatible also
+; allows Windows on ARM, which runs them emulated.
+ArchitecturesAllowed=x64compatible
+
 ; Installer icon.
 SetupIconFile={#RepoRoot}\packaging\assets\mp3.ico
 
@@ -127,6 +131,10 @@ var
   // (see PrepareToInstall). Not a { } comment: those end at the
   // first closing brace, so they can't mention Inno constants.
   YtDlpDownloaded: Boolean;
+  // A reinstall of the installed version: its folder must stay
+  // even if the self-check fails, Firefox already runs it.
+  VersionDirExisted: Boolean;
+  SelfCheckFailed: Boolean;
 
 // Replaces a file in one step: the target is either the old or
 // the new file, never missing or half written.
@@ -182,14 +190,15 @@ end;
 ; except in a silent install that finds one in {app}: that is
 ; the host updating itself, and the host keeps yt-dlp current
 ; and repairs it. A manual (re)install always downloads it, so
-; reinstalling also fixes a broken yt-dlp.exe. If the download
-; fails, installation is stopped and the user gets an error
-; message instead of a broken installation.
+; reinstalling also fixes a broken yt-dlp.exe. A failed download
+; does not stop the installation: the host downloads a missing
+; yt-dlp.exe itself the next time the sidebar opens.
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
   YtDlpDownloaded := False;
+  VersionDirExisted := DirExists(ExpandConstant('{app}\{#VersionDir}'));
 
   if WizardSilent and FileExists(ExpandConstant('{app}\yt-dlp.exe')) then
   begin
@@ -198,12 +207,11 @@ begin
   end;
 
   YtDlpDownloaded := DownloadYtDlp();
-  if not YtDlpDownloaded then
-  begin
-    Result :=
-      'The latest version of yt-dlp could not be downloaded. ' +
-      'Please check your internet connection and try again.';
-  end;
+  if not YtDlpDownloaded and not FileExists(ExpandConstant('{app}\yt-dlp.exe')) then
+    SuppressibleMsgBox(
+      'yt-dlp could not be downloaded right now. The app will download it ' +
+      'by itself the next time you open its sidebar in Firefox.',
+      mbInformation, MB_OK, IDOK);
 end;
 
 ; ============================================================
@@ -296,13 +304,40 @@ begin
 end;
 
 ; ============================================================
+; NewVersionWorks
+; ============================================================
+; Runs the new version's mp3.exe --self-check (selfcheck.py):
+; it imports every host module and runs ffmpeg.exe. Exit code
+; 0 means it works; the problems are in {app}\mp3.log.
+
+function NewVersionWorks(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result :=
+    Exec(ExpandConstant('{app}\{#VersionDir}\{#NativeExeName}'), '--self-check',
+         ExpandConstant('{app}\{#VersionDir}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and
+    (ResultCode = 0);
+  if Result then
+    Log('Self-check passed.')
+  else
+    Log('Self-check failed (exit code ' + IntToStr(ResultCode) + '), see mp3.log.');
+end;
+
+; ============================================================
 ; CurStepChanged
 ; ============================================================
 ; After the version's files are installed, in this order:
+; 0. the new version checks itself. If it does not work,
+;    nothing is switched: its folder is removed (unless it is
+;    a reinstall of the version Firefox already runs) and the
+;    installed version stays, so a broken release never
+;    replaces a working host;
 ; 1. a downloaded yt-dlp.exe goes into {app} (copied next to
-;    it first, then moved in one step). If a running download
-;    keeps the installed one locked, that one stays: the host
-;    updates or repairs it later;
+;    it first, then moved in one step). If that fails (e.g. a
+;    running download keeps the installed one locked), the
+;    installation goes on: the host updates or repairs yt-dlp
+;    later;
 ; 2. the manifest is switched to the new version;
 ; 3. old versions are removed.
 ; A kill before step 2 leaves Firefox on the old version.
@@ -314,6 +349,18 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    if not NewVersionWorks() then
+    begin
+      SelfCheckFailed := True;
+      if not VersionDirExisted then
+        DelTree(ExpandConstant('{app}\{#VersionDir}'), True, True, True);
+      SuppressibleMsgBox(
+        'This version of the app did not start correctly, so it was not installed ' +
+        'and your current version was kept. Please try again later or report it on GitHub.',
+        mbCriticalError, MB_OK, IDOK);
+      exit;
+    end;
+
     if YtDlpDownloaded then
     begin
       YtDlpSource := ExpandConstant('{tmp}\{#YtDlpTempName}');
@@ -323,14 +370,21 @@ begin
          not ReplaceFile(YtDlpDestination + '.tmp', YtDlpDestination) then
       begin
         DeleteFile(YtDlpDestination + '.tmp');
-        if FileExists(YtDlpDestination) then
-          Log('Keeping the installed yt-dlp.exe, it is in use.')
-        else
-          RaiseException('Could not install yt-dlp.');
+        Log('Could not install the downloaded yt-dlp.exe, the host will repair it.');
       end;
     end;
 
     CreateNativeMessagingManifest();
     RemoveOldVersions();
   end;
+end;
+
+// Exit code 1 after a failed self-check, so whoever started the
+// installer can tell it apart from a finished install.
+function GetCustomSetupExitCode(): Integer;
+begin
+  if SelfCheckFailed then
+    Result := 1
+  else
+    Result := 0;
 end;
