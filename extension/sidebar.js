@@ -4,6 +4,7 @@ const downloadBtn = document.getElementById('DownloadBtn');
 const openInAppBtn = document.getElementById('openInAppBtn');
 const selectFolderBtn = document.getElementById('selectFolderBtn');
 const resultDiv = document.getElementById('result');
+const hostNotice = document.getElementById('hostNotice');
 const loader = document.getElementById('loader');
 const urlInput = document.getElementById('urlInput');
 const urlLabel = document.querySelector('label[for="urlInput"]');
@@ -84,8 +85,8 @@ async function loadFolder() {
     return;
   }
   sendNativeAction({ action: 'get_current_folder' }, (resp) => {
+    // a missing app is shown by checkHost()
     if (resp.status === 'success' && resp.folder) setFolder(resp.folder);
-    else if (resp.helpUrl) showResult(resp.message, 'error', resp.helpUrl); // first run: tell the user right away
     else if (resp.status === 'error') console.error('Could not get default folder:', resp.message);
   });
 }
@@ -107,6 +108,20 @@ selectFolderBtn.addEventListener('click', () => {
     }
   });
 });
+
+// ----- App status -----
+
+// Checked on every sidebar open. background.js turns the host's answer into one status:
+// success, or the most important problem (not installed, out of date, missing or broken tools).
+function checkHost() {
+  sendNativeAction({ action: 'get_version' }, (resp) => {
+    if (!resp.final || resp.status === 'success') return;
+    hostNotice.replaceChildren(messageWithLink(resp.message || 'Could not check the app', resp.helpUrl));
+    hostNotice.className = `show ${resp.status === 'warning' ? 'warning' : 'error'}`;
+  });
+}
+
+checkHost();
 
 // ----- Actions -----
 
@@ -173,8 +188,7 @@ function clearResult() {
 }
 
 // helpUrl (set by background.js, e.g. when the app is not installed) adds a link after the message.
-function showResult(message, type, helpUrl) {
-  clearTimeout(hideTimer);
+function messageWithLink(message, helpUrl) {
   const text = document.createElement('span');
   text.textContent = message;
   if (helpUrl) {
@@ -185,7 +199,12 @@ function showResult(message, type, helpUrl) {
     link.textContent = 'Download';
     text.append(' ', link);
   }
-  resultDiv.replaceChildren(text);
+  return text;
+}
+
+function showResult(message, type, helpUrl) {
+  clearTimeout(hideTimer);
+  resultDiv.replaceChildren(messageWithLink(message, helpUrl));
   resultDiv.className = `show ${type}`;
   resultDiv.scrollIntoView({ block: 'nearest' });
   if (type === 'success') hideTimer = setTimeout(clearResult, 5000);

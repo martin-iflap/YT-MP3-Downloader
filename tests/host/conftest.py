@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from ytmp3_host import config, core
+from ytmp3_host import config, core, health
 
 FAKE_YT_DLP = Path(__file__).with_name("fake_yt_dlp.py")
 
@@ -35,6 +35,17 @@ def default_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     folder = tmp_path / "default"
     monkeypatch.setattr(core, "DEFAULT_FOLDER", folder)
     return folder
+
+
+@pytest.fixture(autouse=True)
+def no_github(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep get_version from reaching GitHub in every test (autouse).
+
+    The latest yt-dlp release is unknown (None, as when offline) unless a test
+    patches health.latest_release_tag itself. test_github.py tests the real lookup
+    against a local server.
+    """
+    monkeypatch.setattr(health, "latest_release_tag", lambda repo: None)
 
 
 @pytest.fixture
@@ -55,11 +66,13 @@ class FakeYtDlp:
     """
     monkeypatch: pytest.MonkeyPatch
 
-    def set(self, mode: str = "success", title: str | None = None) -> None:
-        """Set the mode (see fake_yt_dlp.py) and the title the fake prints; None keeps its default title."""
+    def set(self, mode: str = "success", title: str | None = None, version: str | None = None) -> None:
+        """Set the mode (see fake_yt_dlp.py) and the title and version the fake prints; None keeps the defaults."""
         self.monkeypatch.setenv("FAKE_YTDLP_MODE", mode)
         if title is not None:
             self.monkeypatch.setenv("FAKE_YTDLP_TITLE", title)
+        if version is not None:
+            self.monkeypatch.setenv("FAKE_YTDLP_VERSION", version)
 
 
 @pytest.fixture
@@ -68,10 +81,11 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
 
     - Creates empty yt-dlp.exe and ffmpeg.exe in <tmp_path>/bin and points core at
       them, so the "binary exists" checks in download_audio pass. They never run.
-    - Wraps core.build_download_command: the real command is built, then only its
-      executable is swapped for `python fake_yt_dlp.py`. The fake reads the real
-      -o and --print arguments, so a broken output template or title marker fails
-      the tests.
+    - Wraps core.build_download_command and health.yt_dlp_version_command: the real
+      command is built, then only its executable is swapped for `python
+      fake_yt_dlp.py`. The fake reads the real -o and --print arguments, so a broken
+      output template or title marker fails the tests.
+    - Does the same for health (the get_version checks), including its BIN_DIR.
     - Clears FAKE_YTDLP_* variables left in the shell, so the fake starts in its
       default mode (success, title "Artist - Song (Official Video)").
     Returns a FakeYtDlp to change the mode or title.
@@ -80,8 +94,10 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     bin_dir.mkdir()
     for name in ("yt-dlp.exe", "ffmpeg.exe"):
         (bin_dir / name).write_bytes(b"")
-    monkeypatch.setattr(core, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
-    monkeypatch.setattr(core, "FFMPEG_PATH", bin_dir / "ffmpeg.exe")
+    for module in (core, health):
+        monkeypatch.setattr(module, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
+        monkeypatch.setattr(module, "FFMPEG_PATH", bin_dir / "ffmpeg.exe")
+    monkeypatch.setattr(health, "BIN_DIR", bin_dir)
 
     real_build = core.build_download_command
     monkeypatch.setattr(
@@ -89,7 +105,9 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
         "build_download_command",
         lambda url, temp_stem: [sys.executable, str(FAKE_YT_DLP), *real_build(url, temp_stem)[1:]],
     )
-    for var in ("FAKE_YTDLP_MODE", "FAKE_YTDLP_TITLE", "FAKE_YTDLP_MP3", "FAKE_YTDLP_THUMB"):
+    real_version = health.yt_dlp_version_command
+    monkeypatch.setattr(health, "yt_dlp_version_command", lambda: [sys.executable, str(FAKE_YT_DLP), *real_version()[1:]])
+    for var in ("FAKE_YTDLP_MODE", "FAKE_YTDLP_TITLE", "FAKE_YTDLP_VERSION", "FAKE_YTDLP_MP3", "FAKE_YTDLP_THUMB"):
         monkeypatch.delenv(var, raising=False)
     return FakeYtDlp(monkeypatch)
 

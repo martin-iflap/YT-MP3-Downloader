@@ -2,12 +2,15 @@
 
 Run as `python fake_yt_dlp.py <the arguments core.build_download_command builds>`.
 It honors the real `-o` output template and `--print` title template, so the
-tests also check the command contract. Behavior comes from environment variables:
+tests also check the command contract. With `--version` (health.yt_dlp_version_command)
+it only prints its version; fail, hang and bad_version apply there too.
+Behavior comes from environment variables:
 
-    FAKE_YTDLP_MODE   success (default) | fail | hang | no_title | no_thumb | no_mp3
-    FAKE_YTDLP_TITLE  the video title to print
-    FAKE_YTDLP_MP3    an MP3 to copy as the download (default: junk bytes)
-    FAKE_YTDLP_THUMB  an image to copy as the .png thumbnail (default: junk .webp)
+    FAKE_YTDLP_MODE     success (default) | fail | hang | no_title | no_thumb | no_mp3 | bad_version
+    FAKE_YTDLP_TITLE    the video title to print
+    FAKE_YTDLP_VERSION  the version to print (default 2026.08.19)
+    FAKE_YTDLP_MP3      an MP3 to copy as the download (default: junk bytes)
+    FAKE_YTDLP_THUMB    an image to copy as the .png thumbnail (default: junk .webp)
 """
 
 import os
@@ -22,12 +25,31 @@ def emit(line: str) -> None:
     print(line, flush=True)
 
 
+def hang() -> None:
+    """Like the real yt-dlp child behind the PyInstaller bootloader: a second process keeps stdout open."""
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=sys.stdout)
+    time.sleep(30)
+    sys.exit(0)
+
+
+def print_version(mode: str) -> None:
+    if mode == "fail":
+        emit("ERROR: something broke")
+        sys.exit(1)
+    if mode == "hang":
+        hang()
+    emit("[debug] not a version" if mode == "bad_version" else os.environ.get("FAKE_YTDLP_VERSION", "2026.08.19"))
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")  # yt-dlp runs with --encoding utf-8
     args = sys.argv[1:]
+    mode = os.environ.get("FAKE_YTDLP_MODE", "success")
+    if args == ["--version"]:
+        print_version(mode)
+        return
     stem = args[args.index("-o") + 1].removesuffix(".%(ext)s")
     title_template = args[args.index("--print") + 1].removeprefix("before_dl:")
-    mode = os.environ.get("FAKE_YTDLP_MODE", "success")
     title = os.environ.get("FAKE_YTDLP_TITLE", "Artist - Song (Official Video)")
 
     emit(f"[youtube] Extracting URL: {args[-1]}")
@@ -43,11 +65,7 @@ def main() -> None:
         emit("ERROR: [youtube] abc123: Video unavailable")
         sys.exit(1)
     if mode == "hang":
-        # like the real yt-dlp child behind the PyInstaller bootloader: a second
-        # process that keeps the stdout pipe open
-        subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=sys.stdout)
-        time.sleep(30)
-        sys.exit(0)
+        hang()
 
     partial.unlink()
     if mode != "no_mp3":

@@ -91,10 +91,11 @@ function loadScripts(files, globals) {
   return context;
 }
 
+// context exposes the scripts' top-level functions and constants, e.g. context.parseVersion.
 function loadBackground(options) {
   const { browser, state } = createFakeBrowser(options);
-  loadScripts(['youtube.js', 'background.js'], { browser });
-  return { browser, state };
+  const context = loadScripts(['youtube.js', 'background.js'], { browser });
+  return { browser, state, context };
 }
 
 // Let pending promise callbacks (async listeners, sendMessage, isOpen) run.

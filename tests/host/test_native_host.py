@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import MP3, core, native_messaging
+from ytmp3_host import MP3, __version__, core, health, native_messaging
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -147,6 +147,34 @@ def test_get_current_folder_creates_the_default(monkeypatch: pytest.MonkeyPatch,
     assert default_folder.is_dir()
 
 
+# --- get_version --------------------------------------------------------------
+
+
+def test_get_version_is_one_final_with_the_host_and_tool_state(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp
+) -> None:
+    monkeypatch.setattr(health.shutil, "which", lambda name: None)
+    responses = run_host(monkeypatch, requests({"action": "get_version"}, {"action": "download", "url": "bad"}))
+    assert_one_final_per_request(responses, 2)
+    assert responses[0] == {
+        "status": "success",
+        "version": __version__,
+        # the latest release is unknown: no_github (conftest) keeps tests off the network
+        "yt_dlp": {"installed": True, "version": "2026.08.19", "latest": None, "outdated": None},
+        "ffmpeg": {"installed": True},
+        "js_runtime": {"name": "deno", "installed": False},
+        "final": True,
+    }
+
+
+def test_get_version_with_a_broken_yt_dlp_still_succeeds(monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp) -> None:
+    # the report itself works; telling the user is the extension's job
+    fake_yt_dlp.set("fail")
+    [response] = run_host(monkeypatch, frame({"action": "get_version"}))
+    assert response["status"] == "success"
+    assert response["yt_dlp"]["version"] is None
+
+
 # --- headless download --------------------------------------------------------
 
 
@@ -262,11 +290,13 @@ def test_host_process_over_real_pipes(tmp_path: Path) -> None:
     assert responses[1]["folder"] == str(tmp_path / "Documents" / "YT-MP3-Downloads")
 
 
-def test_headless_path_does_not_load_the_gui(tmp_path: Path) -> None:
-    # host startup must stay light: customtkinter/Tk only load for the GUI actions
+def test_headless_path_does_not_load_the_gui_or_health(tmp_path: Path) -> None:
+    # host startup must stay light: customtkinter/Tk only load for the GUI actions,
+    # health (and urllib with it) only for get_version
     code = (
         "import sys, ytmp3_host.MP3, ytmp3_host.native_messaging\n"
-        "loaded = [m for m in ('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui') if m in sys.modules]\n"
+        "heavy = ('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'urllib.request')\n"
+        "loaded = [m for m in heavy if m in sys.modules]\n"
         "assert not loaded, loaded\n"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=host_env(tmp_path))

@@ -6,13 +6,22 @@ const NOTIFICATION_ICON = 'icons/icon-48.png';
 const INSTALLER_URL = 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest';
 const HOST_MISSING_MESSAGE = 'The YT MP3 Downloader app is not installed. Install it from GitHub, then restart Firefox.';
 
+// The oldest host this extension works with. Raise it when the extension starts to rely on
+// a new host action or response field; a newer host is always fine.
+const MIN_HOST_VERSION = '2.0.0';
+const HOST_OUTDATED_MESSAGE = `The YT MP3 Downloader app is out of date (version ${MIN_HOST_VERSION} or newer is needed). Install the update from GitHub.`;
+// What a 1.x host answers to get_version: it treats unknown actions as a download without a URL.
+const LEGACY_HOST_REPLY = 'Invalid YouTube URL';
+
 // Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
-// and select_folder waits on the user, so these must stay above that.
+// and select_folder waits on the user, so these must stay above that. get_version waits
+// up to 20s for `yt-dlp --version`.
 const ACTION_TIMEOUTS_MS = {
   download: 6 * 60 * 1000,
   download_gui: 30 * 1000,
   select_folder: 10 * 60 * 1000,
-  get_current_folder: 15 * 1000
+  get_current_folder: 15 * 1000,
+  get_version: 30 * 1000
 };
 
 // download_gui keeps the host process alive to run the Tk window after its final
@@ -81,6 +90,54 @@ function disconnectResponse(error) {
   return { status: 'error', message: error.message };
 }
 
+// "2.0.0", "v2.0.0" or yt-dlp's "2026.08.19" -> [2, 0, 0]; null if it is not a version.
+function parseVersion(text) {
+  const match = typeof text === 'string' ? /^v?(\d+(?:\.\d+)*)$/.exec(text.trim()) : null;
+  return match ? match[1].split('.').map(Number) : null;
+}
+
+// Compare two parsed versions numerically (missing parts count as 0): -1, 0 or 1.
+function compareVersions(a, b) {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff) return Math.sign(diff);
+  }
+  return 0;
+}
+
+// The most important problem with the host's tools, or null. The host reports the facts
+// (see health.host_status); this decides what the user is told.
+function toolProblem(response) {
+  const ytDlp = response.yt_dlp || {};
+  const reinstall = 'Reinstall the app from GitHub to fix it.';
+  if (!(response.ffmpeg || {}).installed) return { status: 'error', message: `ffmpeg.exe is missing. ${reinstall}` };
+  if (!ytDlp.installed) return { status: 'error', message: `yt-dlp.exe is missing. ${reinstall}` };
+  if (!ytDlp.version) return { status: 'error', message: `yt-dlp.exe is not working. ${reinstall}` };
+  if (ytDlp.outdated) {
+    return {
+      status: 'warning',
+      message: `yt-dlp is out of date (${ytDlp.version}, latest ${ytDlp.latest}), so downloads may fail. Reinstall the app from GitHub to update it.`
+    };
+  }
+  return null;
+}
+
+// Turn the host's get_version answer into one status: the answer itself when all is well,
+// otherwise its most important problem as a warning or error with the installer link.
+function assessHostStatus(response) {
+  const version = parseVersion(response.version);
+  if (!version) {
+    // a v2+ host that failed is reported as it is; only a 1.x host answers like this
+    if (response.message !== LEGACY_HOST_REPLY) return response;
+    return { status: 'warning', message: HOST_OUTDATED_MESSAGE, helpUrl: INSTALLER_URL };
+  }
+  if (compareVersions(version, parseVersion(MIN_HOST_VERSION)) < 0) {
+    return Object.assign({}, response, { status: 'warning', message: HOST_OUTDATED_MESSAGE, helpUrl: INSTALLER_URL });
+  }
+  const problem = toolProblem(response);
+  return problem ? Object.assign({}, response, problem, { helpUrl: INSTALLER_URL }) : response;
+}
+
 // Run one action on a fresh host process. Guarantees exactly one final response
 // per requestId: from the host, a disconnect, or the timeout.
 function runNativeAction(payload, requestId, origin) {
@@ -114,7 +171,7 @@ function runNativeAction(payload, requestId, origin) {
       ? Boolean(response.final)
       : response.status === 'success' || response.status === 'error';
     if (isFinal) {
-      finish(response, true);
+      finish(action === 'get_version' ? assessHostStatus(response) : response, true);
     } else {
       relay(Object.assign({}, response, { requestId, final: false }));
     }

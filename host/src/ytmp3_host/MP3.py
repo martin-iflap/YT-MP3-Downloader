@@ -1,7 +1,7 @@
 """Entry point of the native host: the request loop and the action dispatch table.
-The GUI module is a lazy import (PEP 810): it loads on first use inside the GUI
-actions, so headless requests never import customtkinter or create a Tk window
-(faster host startup).
+The GUI and health modules are lazy imports (PEP 810): they load on first use
+inside their actions, so headless downloads never import customtkinter, create a
+Tk window or load urllib (faster host startup).
 """
 
 import logging
@@ -10,6 +10,7 @@ from collections.abc import Callable
 
 from ytmp3_host.config import setup_logging
 lazy from ytmp3_host.gui import open_gui, select_folder as pick_folder
+lazy from ytmp3_host.health import host_status
 from ytmp3_host.native_messaging import Message, read_message, run_native, send_current_folder, send_message
 
 # not __name__: run as a script (and when frozen) that is "__main__", outside the
@@ -47,11 +48,21 @@ def get_current_folder(_request: Message) -> None:
     send_current_folder("")
 
 
+def get_version(_request: Message) -> None:
+    """Handle the `get_version` action: the host version and the state of its tools.
+
+    1.x hosts do not know this action and answer it as a download without a URL
+    ("Invalid YouTube URL"); the extension relies on that to recognize them.
+    """
+    send_message({"status": "success", **host_status(), "final": True})
+
+
 ACTIONS: dict[str, Callable[[Message], None]] = {
     "download": download,
     "download_gui": download_gui,
     "select_folder": select_folder,
     "get_current_folder": get_current_folder,
+    "get_version": get_version,
 }
 
 

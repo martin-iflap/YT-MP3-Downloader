@@ -7,7 +7,9 @@
 ; there is exactly one source of truth for each identifier.
 
 #define MyAppName         "YouTube MP3 Downloader"
-#define MyAppVersion      "1.0.0"
+; Must match __version__ in host\src\ytmp3_host\__init__.py
+; (tests\host\test_versions.py checks it).
+#define MyAppVersion      "2.0.0"
 #define MyAppPublisher    "Martin"
 
 ; Must match browser_specific_settings.gecko.id in the
