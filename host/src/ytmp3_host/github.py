@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 GITHUB_URL = "https://github.com"
 YT_DLP_REPO = "yt-dlp/yt-dlp"
+HOST_REPO = "martin-iflap/YT-MP3-Downloader"
 LOOKUP_TIMEOUT_S = 5
 TAG_PATH = "/releases/tag/"
 

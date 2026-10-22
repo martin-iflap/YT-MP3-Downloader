@@ -111,13 +111,20 @@ selectFolderBtn.addEventListener('click', () => {
 
 // ----- App status -----
 
-// Checked on every sidebar open. background.js turns the host's answer into one status:
-// success, or the most important problem (not installed, out of date, missing or broken tools).
+// Checked on every sidebar open. background.js repairs what it can (updates the app and
+// yt-dlp, reporting each step as an intermediate response) and then turns the result into
+// one status: success, or the most important problem left (not installed, out of date,
+// missing or broken tools).
 function checkHost() {
   sendNativeAction({ action: 'get_version' }, (resp) => {
-    if (!resp.final || resp.status === 'success') return;
+    if (resp.final && resp.status === 'success') {
+      hostNotice.className = '';
+      hostNotice.textContent = '';
+      return;
+    }
+    const type = !resp.final ? 'info' : resp.status === 'warning' ? 'warning' : 'error';
     hostNotice.replaceChildren(messageWithLink(resp.message || 'Could not check the app', resp.helpUrl));
-    hostNotice.className = `show ${resp.status === 'warning' ? 'warning' : 'error'}`;
+    hostNotice.className = `show ${type}`;
   });
 }
 

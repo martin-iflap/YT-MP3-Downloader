@@ -244,7 +244,7 @@
             padding: 8px 6px;
         }
 
-        /* Result pill message; #hostNotice (app missing/outdated/broken) shares the look but stays */
+        /* Result pill message; #hostNotice (app missing/outdated/broken, or updating) shares the look but stays */
         #result, #hostNotice {
             display: none; /* hidden until a message arrives */
             align-items: center;
@@ -279,7 +279,7 @@
         #result.success { --result-color: #2ecc71; --result-rgb: 46,204,113; color:#bfecc8; }
         #result.error, #hostNotice.error { --result-color: #ff6b6b; --result-rgb: 255,107,107; color:#ffd6d6; }
         #result.warning, #hostNotice.warning { --result-color: #f39c12; --result-rgb: 243,156,18; color:#ffecc5; }
-        #result.info { --result-color: #4a90e2; --result-rgb: 74,144,226; color:#cfe9ff; }
+        #result.info, #hostNotice.info { --result-color: #4a90e2; --result-rgb: 74,144,226; color:#cfe9ff; }
         #result a, #hostNotice a { color: inherit; font-weight: 600; text-decoration: underline; }
 
         .loader { display:none; width:18px; height:18px; border:2px solid rgba(255,255,255,0.08); border-top-color:#cfd6da; border-radius:50%; animation:spin 0.8s linear infinite; margin:10px auto; }

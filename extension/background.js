@@ -10,19 +10,32 @@ const HOST_MISSING_MESSAGE = 'The YT MP3 Downloader app is not installed. Instal
 // a new host action or response field; a newer host is always fine.
 const MIN_HOST_VERSION = '2.0.0';
 const HOST_OUTDATED_MESSAGE = `The YT MP3 Downloader app is out of date (version ${MIN_HOST_VERSION} or newer is needed). Install the update from GitHub.`;
+const HOST_BROKEN_MESSAGE = 'The YT MP3 Downloader app is not working (it closed without answering). Reinstall it from GitHub.';
 // What a 1.x host answers to get_version: it treats unknown actions as a download without a URL.
 const LEGACY_HOST_REPLY = 'Invalid YouTube URL';
 
 // Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
 // and select_folder waits on the user, so these must stay above that. get_version waits
-// up to 20s for `yt-dlp --version`.
+// up to 20s for `yt-dlp --version`. The updates may first wait 60s for another host's
+// update, then download for up to 180s (yt-dlp) or 360s (the installer).
 const ACTION_TIMEOUTS_MS = {
   download: 6 * 60 * 1000,
   download_gui: 30 * 1000,
   select_folder: 10 * 60 * 1000,
   get_current_folder: 15 * 1000,
-  get_version: 30 * 1000
+  get_version: 30 * 1000,
+  update_yt_dlp: 5 * 60 * 1000,
+  update_host: 8 * 60 * 1000
 };
+
+// What the sidebar shows while a repair runs.
+const REPAIR_MESSAGES = {
+  update_host: 'Updating the YT MP3 Downloader app...',
+  update_yt_dlp: 'Updating yt-dlp...'
+};
+// After update_host the installer runs on its own; poll until the new version answers.
+const HOST_UPDATE_POLL_MS = 5 * 1000;
+const HOST_UPDATE_WAIT_MS = 3 * 60 * 1000;
 
 // download_gui keeps the host process alive to run the Tk window after its final
 // response; disconnecting the port would make Firefox kill it. The host exits by
@@ -114,9 +127,10 @@ function toolProblem(response) {
   if (!ytDlp.installed) return { status: 'error', message: `yt-dlp.exe is missing. ${reinstall}` };
   if (!ytDlp.version) return { status: 'error', message: `yt-dlp.exe is not working. ${reinstall}` };
   if (ytDlp.outdated) {
+    // shown only when the automatic update did not work
     return {
       status: 'warning',
-      message: `yt-dlp is out of date (${ytDlp.version}, latest ${ytDlp.latest}), so downloads may fail. Reinstall the app from GitHub to update it.`
+      message: `yt-dlp is out of date (${ytDlp.version}, latest ${ytDlp.latest}), so downloads may fail.`
     };
   }
   return null;
@@ -124,9 +138,15 @@ function toolProblem(response) {
 
 // Turn the host's get_version answer into one status: the answer itself when all is well,
 // otherwise its most important problem as a warning or error with the installer link.
-function assessHostStatus(response) {
+// source is where the answer came from (see hostRequest).
+function assessHostStatus(response, source) {
   const version = parseVersion(response.version);
   if (!version) {
+    // closed without answering: the host can't start, so its install is broken
+    // ("not installed" already carries its own message and link)
+    if (source === 'disconnect' && !response.helpUrl) {
+      return { status: 'error', message: HOST_BROKEN_MESSAGE, helpUrl: INSTALLER_URL };
+    }
     // a v2+ host that failed is reported as it is; only a 1.x host answers like this
     if (response.message !== LEGACY_HOST_REPLY) return response;
     return { status: 'warning', message: HOST_OUTDATED_MESSAGE, helpUrl: INSTALLER_URL };
@@ -138,55 +158,148 @@ function assessHostStatus(response) {
   return problem ? Object.assign({}, response, problem, { helpUrl: INSTALLER_URL }) : response;
 }
 
-// Run one action on a fresh host process. Guarantees exactly one final response
-// per requestId: from the host, a disconnect, or the timeout.
-function runNativeAction(payload, requestId, origin) {
-  const action = payload.action;
-  let port = null;
-  let done = false;
+// The repairs a get_version answer calls for, most important first: a newer host release
+// (it may bring its own fixes), then a missing, broken or outdated yt-dlp. 1.x hosts, which
+// have no updater, and failed checks get none; a host that can't update itself (a source
+// checkout) gets no host update.
+function neededRepairs({ response, source }) {
+  if (source !== 'host' || !parseVersion(response.version)) return [];
+  const repairs = [];
+  if (response.self_update && response.outdated) repairs.push('update_host');
+  const ytDlp = response.yt_dlp || {};
+  if (!ytDlp.installed || !ytDlp.version || ytDlp.outdated) repairs.push('update_yt_dlp');
+  return repairs;
+}
 
-  const finish = (response, disconnect) => {
-    if (done) return;
-    done = true;
-    clearTimeout(timer);
-    relay(Object.assign({}, response, { requestId, final: true }));
-    if (action === 'download') notifyDownloadResult(origin, response);
-    if (disconnect && port && !KEEP_ALIVE_ACTIONS.has(action)) port.disconnect();
-  };
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  const timer = setTimeout(() => {
-    finish({ status: 'error', message: 'Native host did not respond in time' }, true);
-  }, ACTION_TIMEOUTS_MS[action]);
-
-  try {
-    port = browser.runtime.connectNative(NATIVE_HOST_NAME);
-  } catch (e) {
-    finish({ status: 'error', message: 'Could not connect to native host' }, false);
-    return;
+// After update_host started the installer of release tag: check until that version
+// answers, or give up after HOST_UPDATE_WAIT_MS. Returns the last check.
+async function waitForHostVersion(tag) {
+  const target = parseVersion(tag);
+  let check = null;
+  for (let waited = 0; waited < HOST_UPDATE_WAIT_MS; waited += HOST_UPDATE_POLL_MS) {
+    await sleep(HOST_UPDATE_POLL_MS);
+    check = await hostRequest({ action: 'get_version' });
+    const version = parseVersion(check.response.version);
+    if (version && compareVersions(version, target) >= 0) break;
   }
+  return check;
+}
 
-  port.onMessage.addListener((response) => {
-    if (done) return;
-    const isFinal = Object.prototype.hasOwnProperty.call(response, 'final')
-      ? Boolean(response.final)
-      : response.status === 'success' || response.status === 'error';
-    if (isFinal) {
-      finish(action === 'get_version' ? assessHostStatus(response) : response, true);
+// Add what the failed repairs reported to the status the user is shown.
+function withRepairFailures(status, failures) {
+  if (!failures.length) return status;
+  const reasons = failures.join('; ');
+  if (status.status === 'success') {
+    // only the host update failed; the current host works
+    return Object.assign({}, status, {
+      status: 'warning',
+      message: `The app could not update itself (${reasons}). Install the update from GitHub.`,
+      helpUrl: INSTALLER_URL
+    });
+  }
+  return Object.assign({}, status, { message: `${status.message} Automatic repair failed: ${reasons}.` });
+}
+
+// Ask the host for its state, repair what can be repaired (each repair at most once),
+// and turn the state after the last repair into the one status the user is told.
+async function checkAndRepairHost(onProgress) {
+  let check = await hostRequest({ action: 'get_version' });
+  const attempted = new Set();
+  const failures = [];
+  for (;;) {
+    const repair = neededRepairs(check).find(r => !attempted.has(r));
+    if (!repair) break;
+    attempted.add(repair);
+    onProgress({ status: 'info', message: REPAIR_MESSAGES[repair] });
+
+    const { response: result } = await hostRequest({ action: repair });
+    if (result.status !== 'success') {
+      failures.push(result.message || `${repair} failed`);
+      continue;
+    }
+    if (repair === 'update_host' && result.version) {
+      check = await waitForHostVersion(result.version);
+      if (compareVersions(parseVersion(check.response.version) || [0], parseVersion(result.version)) < 0) {
+        failures.push(`version ${result.version} did not finish installing`);
+      }
     } else {
-      relay(Object.assign({}, response, { requestId, final: false }));
+      check = await hostRequest({ action: 'get_version' });
+    }
+  }
+  return withRepairFailures(assessHostStatus(check.response, check.source), failures);
+}
+
+// One check (with its repairs) at a time: a sidebar that asks meanwhile, e.g. in a second
+// window, shares the running one and gets only its final answer.
+let runningCheck = null;
+
+function checkHost(onProgress) {
+  if (!runningCheck) runningCheck = checkAndRepairHost(onProgress).finally(() => { runningCheck = null; });
+  return runningCheck;
+}
+
+// Run one action on a fresh host process. Intermediate responses go to onProgress.
+// Resolves exactly once with { response, source }: the host's final response (source
+// 'host'), or one made up here when the host does not answer in time ('timeout'), goes
+// away without a final response ('disconnect') or can't be reached ('connect').
+function hostRequest(payload, onProgress = () => {}) {
+  return new Promise((resolve) => {
+    const action = payload.action;
+    let port = null;
+    let done = false;
+
+    const finish = (response, source, disconnect) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (disconnect && port && !KEEP_ALIVE_ACTIONS.has(action)) port.disconnect();
+      resolve({ response, source });
+    };
+
+    const timer = setTimeout(() => {
+      finish({ status: 'error', message: 'Native host did not respond in time' }, 'timeout', true);
+    }, ACTION_TIMEOUTS_MS[action]);
+
+    try {
+      port = browser.runtime.connectNative(NATIVE_HOST_NAME);
+    } catch (e) {
+      finish({ status: 'error', message: 'Could not connect to native host' }, 'connect', false);
+      return;
+    }
+
+    port.onMessage.addListener((response) => {
+      if (done) return;
+      const isFinal = Object.prototype.hasOwnProperty.call(response, 'final')
+        ? Boolean(response.final)
+        : response.status === 'success' || response.status === 'error';
+      if (isFinal) finish(response, 'host', true);
+      else onProgress(response);
+    });
+
+    // Firefox reports why the host went away (e.g. not installed) on port.error, not runtime.lastError.
+    port.onDisconnect.addListener((p) => {
+      finish(disconnectResponse(p.error), 'disconnect', false);
+    });
+
+    try {
+      port.postMessage(payload);
+    } catch (e) {
+      finish({ status: 'error', message: 'Failed to send to native host' }, 'connect', true);
     }
   });
+}
 
-  // Firefox reports why the host went away (e.g. not installed) on port.error, not runtime.lastError.
-  port.onDisconnect.addListener((p) => {
-    finish(disconnectResponse(p.error), false);
-  });
-
-  try {
-    port.postMessage(payload);
-  } catch (e) {
-    finish({ status: 'error', message: 'Failed to send to native host' }, true);
-  }
+// Answer one request from an extension page or the context menu: intermediate responses,
+// then exactly one final response for requestId. get_version runs the check-and-repair.
+async function runNativeAction(payload, requestId, origin) {
+  const progress = response => relay(Object.assign({}, response, { requestId, final: false }));
+  const response = payload.action === 'get_version'
+    ? await checkHost(progress)
+    : (await hostRequest(payload, progress)).response;
+  relay(Object.assign({}, response, { requestId, final: true }));
+  if (payload.action === 'download') notifyDownloadResult(origin, response);
 }
 
 browser.contextMenus.onClicked.addListener(async (info) => {

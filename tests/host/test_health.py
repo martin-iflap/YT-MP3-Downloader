@@ -1,17 +1,18 @@
-"""health: the facts the get_version action reports (host version, yt-dlp, ffmpeg, JS runtime).
+"""health: the facts the get_version action reports (host and yt-dlp versions, ffmpeg, JS runtime).
 
 yt-dlp is fake_yt_dlp.py (see the fake_yt_dlp fixture); the GitHub lookup is
 replaced per test, so nothing here touches the network.
 """
 
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
 
 from conftest import FakeYtDlp
 from ytmp3_host import __version__, health
-from ytmp3_host.github import YT_DLP_REPO
+from ytmp3_host.github import HOST_REPO, YT_DLP_REPO
 
 
 # --- versions -----------------------------------------------------------------
@@ -98,17 +99,24 @@ def test_read_version_of_a_missing_file_is_none(tmp_path: Path) -> None:
 # --- host_status --------------------------------------------------------------
 
 
-@pytest.fixture
-def latest(monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """Make the latest yt-dlp release 2026.08.19 (tests may patch it again); returns the repos looked up."""
-    looked_up: list[str] = []
+@dataclass
+class Latest:
+    """The latest release tag per repository that the fake lookup answers, and the repos it was asked for."""
+    tags: dict[str, str | None]
+    looked_up: list[str] = field(default_factory=list)
 
-    def _lookup(repo: str) -> str:
-        looked_up.append(repo)
-        return "2026.08.19"
+
+@pytest.fixture
+def latest(monkeypatch: pytest.MonkeyPatch) -> Latest:
+    """Make the latest releases: host v{__version__} (this one), yt-dlp 2026.08.19. Tests change latest.tags."""
+    state = Latest({HOST_REPO: f"v{__version__}", YT_DLP_REPO: "2026.08.19"})
+
+    def _lookup(repo: str) -> str | None:
+        state.looked_up.append(repo)
+        return state.tags[repo]
 
     monkeypatch.setattr(health, "latest_release_tag", _lookup)
-    return looked_up
+    return state
 
 
 @pytest.fixture(autouse=True)
@@ -119,18 +127,39 @@ def no_deno_on_path(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return looked_up
 
 
-def test_everything_installed_and_current(fake_yt_dlp: FakeYtDlp, latest: list[str]) -> None:
+def test_everything_installed_and_current(fake_yt_dlp: FakeYtDlp, latest: Latest) -> None:
     fake_yt_dlp.set(version="2026.08.19")
     assert health.host_status() == {
         "version": __version__,
+        "latest": f"v{__version__}",
+        "outdated": False,
+        "self_update": False,  # only an installed host updates itself, never a source checkout
         "yt_dlp": {"installed": True, "version": "2026.08.19", "latest": "2026.08.19", "outdated": False},
         "ffmpeg": {"installed": True},
         "js_runtime": {"name": "deno", "installed": False},
     }
-    assert latest == [YT_DLP_REPO]
+    assert sorted(latest.looked_up) == sorted([HOST_REPO, YT_DLP_REPO])
 
 
-def test_outdated_yt_dlp(fake_yt_dlp: FakeYtDlp, latest: list[str]) -> None:
+def test_newer_host_release_is_reported(fake_yt_dlp: FakeYtDlp, latest: Latest) -> None:
+    latest.tags[HOST_REPO] = "v99.0.0"
+    status = health.host_status()
+    assert (status["version"], status["latest"], status["outdated"]) == (__version__, "v99.0.0", True)
+
+
+@pytest.mark.parametrize("tag", [None, "v-1.1"], ids=["offline", "1.x-style-tag"])
+def test_unknown_host_release_is_not_outdated(fake_yt_dlp: FakeYtDlp, latest: Latest, tag: str | None) -> None:
+    latest.tags[HOST_REPO] = tag
+    status = health.host_status()
+    assert (status["latest"], status["outdated"]) == (tag, None)
+
+
+def test_an_installed_host_can_update_itself(fake_yt_dlp: FakeYtDlp, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(health, "INSTALLED", True)
+    assert health.host_status()["self_update"] is True
+
+
+def test_outdated_yt_dlp(fake_yt_dlp: FakeYtDlp, latest: Latest) -> None:
     fake_yt_dlp.set(version="2026.07.01")
     assert health.host_status()["yt_dlp"] == {
         "installed": True, "version": "2026.07.01", "latest": "2026.08.19", "outdated": True,
@@ -142,13 +171,13 @@ def test_offline_reports_the_installed_version_and_unknown_outdated(fake_yt_dlp:
     assert health.host_status()["yt_dlp"] == {"installed": True, "version": "2026.08.19", "latest": None, "outdated": None}
 
 
-def test_broken_yt_dlp_is_installed_without_a_version(fake_yt_dlp: FakeYtDlp, latest: list[str]) -> None:
+def test_broken_yt_dlp_is_installed_without_a_version(fake_yt_dlp: FakeYtDlp, latest: Latest) -> None:
     fake_yt_dlp.set("fail")
     assert health.host_status()["yt_dlp"] == {"installed": True, "version": None, "latest": "2026.08.19", "outdated": None}
 
 
 def test_missing_yt_dlp_is_not_run(
-    fake_yt_dlp: FakeYtDlp, latest: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    fake_yt_dlp: FakeYtDlp, latest: Latest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     (tmp_path / "bin" / "yt-dlp.exe").unlink()
 

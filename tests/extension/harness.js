@@ -17,7 +17,9 @@ function createEvent() {
   };
 }
 
-function createFakePort(name) {
+// nativeHost, if given, is called with each posted request and the port, to answer it
+// right away (see host_status.test.js); otherwise tests answer through state.ports.
+function createFakePort(name, nativeHost) {
   const port = {
     name,
     posted: [],
@@ -25,7 +27,10 @@ function createFakePort(name) {
     error: null,
     onMessage: createEvent(),
     onDisconnect: createEvent(),
-    postMessage(message) { port.posted.push(plain(message)); },
+    postMessage(message) {
+      port.posted.push(plain(message));
+      if (nativeHost) nativeHost(plain(message), port);
+    },
     disconnect() { port.disconnected = true; },
     // Host-side helpers
     reply(message) { port.onMessage.fire(message); },
@@ -37,7 +42,7 @@ function createFakePort(name) {
   return port;
 }
 
-function createFakeBrowser({ sidebarOpen = false, storage = {} } = {}) {
+function createFakeBrowser({ sidebarOpen = false, storage = {}, nativeHost = null } = {}) {
   const state = { sidebarOpen, storage: { ...storage }, sent: [], notifications: [], menus: [], ports: [] };
 
   const browser = {
@@ -46,7 +51,7 @@ function createFakeBrowser({ sidebarOpen = false, storage = {} } = {}) {
       onMessage: createEvent(),
       sendMessage: async (message) => { state.sent.push(plain(message)); },
       connectNative: (name) => {
-        const port = createFakePort(name);
+        const port = createFakePort(name, nativeHost);
         state.ports.push(port);
         return port;
       }

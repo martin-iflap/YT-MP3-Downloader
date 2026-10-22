@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import MP3, __version__, core, health, native_messaging
+from ytmp3_host import MP3, __version__, core, health, native_messaging, updater
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -159,7 +159,10 @@ def test_get_version_is_one_final_with_the_host_and_tool_state(
     assert responses[0] == {
         "status": "success",
         "version": __version__,
-        # the latest release is unknown: no_github (conftest) keeps tests off the network
+        # the latest releases are unknown: no_github (conftest) keeps tests off the network
+        "latest": None,
+        "outdated": None,
+        "self_update": False,
         "yt_dlp": {"installed": True, "version": "2026.08.19", "latest": None, "outdated": None},
         "ffmpeg": {"installed": True},
         "js_runtime": {"name": "deno", "installed": False},
@@ -173,6 +176,41 @@ def test_get_version_with_a_broken_yt_dlp_still_succeeds(monkeypatch: pytest.Mon
     [response] = run_host(monkeypatch, frame({"action": "get_version"}))
     assert response["status"] == "success"
     assert response["yt_dlp"]["version"] is None
+
+
+# --- update_yt_dlp / update_host ----------------------------------------------
+
+
+# MP3 binds the updater functions under its own names (a lazy import), so they are patched there
+UPDATE_FUNCTIONS = {"update_yt_dlp": "install_yt_dlp", "update_host": "install_host_update"}
+
+
+@pytest.mark.parametrize(
+    ("action", "result", "response"),
+    [
+        ("update_yt_dlp", "2026.09.01", {"yt_dlp": {"version": "2026.09.01"}}),
+        ("update_host", "v2.1.0", {"version": "v2.1.0"}),
+        ("update_host", None, {"version": None}),
+    ],
+    ids=["yt-dlp", "host", "host-already-latest"],
+)
+def test_update_actions_report_what_they_installed(
+    monkeypatch: pytest.MonkeyPatch, action: str, result: str | None, response: dict[str, object]
+) -> None:
+    monkeypatch.setattr(MP3, UPDATE_FUNCTIONS[action], lambda: result)
+    [answer] = run_host(monkeypatch, frame({"action": action}))
+    assert answer == {"status": "success", **response, "final": True}
+
+
+@pytest.mark.parametrize("action", ["update_yt_dlp", "update_host"])
+def test_a_failed_update_is_one_final_error_with_its_reason(monkeypatch: pytest.MonkeyPatch, action: str) -> None:
+    def _fail() -> None:
+        raise updater.UpdateError("GitHub could not be reached")
+
+    monkeypatch.setattr(MP3, UPDATE_FUNCTIONS[action], _fail)
+    responses = run_host(monkeypatch, requests({"action": action}, {"action": "get_current_folder"}))
+    assert_one_final_per_request(responses, 2)
+    assert responses[0] == {"status": "error", "message": "GitHub could not be reached", "final": True}
 
 
 # --- headless download --------------------------------------------------------
@@ -290,12 +328,12 @@ def test_host_process_over_real_pipes(tmp_path: Path) -> None:
     assert responses[1]["folder"] == str(tmp_path / "Documents" / "YT-MP3-Downloads")
 
 
-def test_headless_path_does_not_load_the_gui_or_health(tmp_path: Path) -> None:
+def test_headless_path_does_not_load_the_gui_health_or_updater(tmp_path: Path) -> None:
     # host startup must stay light: customtkinter/Tk only load for the GUI actions,
-    # health (and urllib with it) only for get_version
+    # health and the updater (and urllib with them) only for get_version and the updates
     code = (
         "import sys, ytmp3_host.MP3, ytmp3_host.native_messaging\n"
-        "heavy = ('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'urllib.request')\n"
+        "heavy = ('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'ytmp3_host.updater', 'urllib.request')\n"
         "loaded = [m for m in heavy if m in sys.modules]\n"
         "assert not loaded, loaded\n"
     )

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from ytmp3_host import config, core, health
+from ytmp3_host import config, core, health, updater
 
 FAKE_YT_DLP = Path(__file__).with_name("fake_yt_dlp.py")
 
@@ -39,13 +39,22 @@ def default_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture(autouse=True)
 def no_github(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep get_version from reaching GitHub in every test (autouse).
+    """Keep get_version and the updater from reaching GitHub in every test (autouse).
 
-    The latest yt-dlp release is unknown (None, as when offline) unless a test
-    patches health.latest_release_tag itself. test_github.py tests the real lookup
-    against a local server.
+    Every latest release is unknown (None, as when offline) unless a test patches
+    latest_release_tag itself, and the updater's downloads fail. test_github.py and
+    test_updater.py test the real network code against a local server.
     """
     monkeypatch.setattr(health, "latest_release_tag", lambda repo: None)
+    monkeypatch.setattr(updater, "latest_release_tag", lambda repo: None)
+    monkeypatch.setattr(updater, "_opener", None)  # any download raises instead of going online
+
+
+@pytest.fixture(autouse=True)
+def update_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point the updater's lock file and installer download folder into tmp_path (autouse)."""
+    monkeypatch.setattr(updater, "UPDATE_LOCK_PATH", tmp_path / "update.lock")
+    monkeypatch.setattr(updater, "UPDATE_DIR", tmp_path / "update")
 
 
 @pytest.fixture
@@ -85,7 +94,8 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
       command is built, then only its executable is swapped for `python
       fake_yt_dlp.py`. The fake reads the real -o and --print arguments, so a broken
       output template or title marker fails the tests.
-    - Does the same for health (the get_version checks), including its BIN_DIR.
+    - Does the same for health (the get_version checks), including its INSTALL_DIR,
+      and points the updater at the same yt-dlp.exe.
     - Clears FAKE_YTDLP_* variables left in the shell, so the fake starts in its
       default mode (success, title "Artist - Song (Official Video)").
     Returns a FakeYtDlp to change the mode or title.
@@ -97,7 +107,8 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     for module in (core, health):
         monkeypatch.setattr(module, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
         monkeypatch.setattr(module, "FFMPEG_PATH", bin_dir / "ffmpeg.exe")
-    monkeypatch.setattr(health, "BIN_DIR", bin_dir)
+    monkeypatch.setattr(health, "INSTALL_DIR", bin_dir)
+    monkeypatch.setattr(updater, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
 
     real_build = core.build_download_command
     monkeypatch.setattr(
@@ -106,7 +117,11 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
         lambda url, temp_stem: [sys.executable, str(FAKE_YT_DLP), *real_build(url, temp_stem)[1:]],
     )
     real_version = health.yt_dlp_version_command
-    monkeypatch.setattr(health, "yt_dlp_version_command", lambda: [sys.executable, str(FAKE_YT_DLP), *real_version()[1:]])
+    monkeypatch.setattr(
+        health,
+        "yt_dlp_version_command",
+        lambda exe=None: [sys.executable, str(FAKE_YT_DLP), *real_version(exe)[1:]],
+    )
     for var in ("FAKE_YTDLP_MODE", "FAKE_YTDLP_TITLE", "FAKE_YTDLP_VERSION", "FAKE_YTDLP_MP3", "FAKE_YTDLP_THUMB"):
         monkeypatch.delenv(var, raising=False)
     return FakeYtDlp(monkeypatch)
