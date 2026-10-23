@@ -27,14 +27,14 @@ class Repairs:
     bin_dir: Path
     fake_yt_dlp: FakeYtDlp
     new_yt_dlp: bool = False  # update_yt_dlp installs a new exe that downloads fine
-    update_error: bool = False  # update_yt_dlp raises UpdateError
+    update_error: type[Exception] | None = None  # update_yt_dlp raises this
     calls: list[str] = field(default_factory=list)
     infos: list[str] = field(default_factory=list)
 
     def update_yt_dlp(self) -> str:
         self.calls.append("update_yt_dlp")
         if self.update_error:
-            raise UpdateError("GitHub could not be reached")
+            raise self.update_error("GitHub could not be reached")
         if self.new_yt_dlp:
             (self.bin_dir / "yt-dlp.exe").write_bytes(b"a newer yt-dlp")
             self.fake_yt_dlp.set("success")
@@ -81,9 +81,12 @@ def test_without_a_new_yt_dlp_the_first_error_is_raised(repairs: Repairs, out_di
     assert repairs.infos == [CHECKING]
 
 
-def test_a_failed_update_raises_the_download_error(repairs: Repairs, out_dir: Path) -> None:
+@pytest.mark.parametrize("update_error", [UpdateError, PermissionError])
+def test_a_failed_update_raises_the_download_error(
+    repairs: Repairs, out_dir: Path, update_error: type[Exception]
+) -> None:
     repairs.fake_yt_dlp.set("fail")
-    repairs.update_error = True
+    repairs.update_error = update_error
     with pytest.raises(subprocess.CalledProcessError):
         repairs.download(out_dir)
 

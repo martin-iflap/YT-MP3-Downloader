@@ -76,6 +76,9 @@ class DownloaderApp(ctk.CTk):
         current_process: The running yt-dlp process, used to cancel it.
         current_stem: The temp output stem of the running download, used for cleanup.
         download_cancelled: Set by cancel_download, read by the download thread.
+        download_id: Raised by every start. A download thread whose id is no longer
+            current was canceled and a newer download owns the window (the old thread
+            may still be repairing yt-dlp), so it leaves the window alone.
     """
 
     def __init__(self) -> None:
@@ -90,6 +93,7 @@ class DownloaderApp(ctk.CTk):
         self.current_process: subprocess.Popen[str] | None = None
         self.current_stem: Path | None = None
         self.download_cancelled = False
+        self.download_id = 0
 
         # Window icon
         try:
@@ -254,6 +258,7 @@ class DownloaderApp(ctk.CTk):
         self.folder_var.set(str(folder_path))
 
         self.download_cancelled = False
+        self.download_id += 1
         self.current_process = None
         self.current_stem = None
         self.progress_bar.set(0)
@@ -262,17 +267,32 @@ class DownloaderApp(ctk.CTk):
         self._set_main_button("Cancel", self.cancel_download)
 
         filename = requested_filename(self.name_entry.get())
-        threading.Thread(target=self._download_thread, args=(url, folder_path, filename), daemon=True).start()
+        args = (url, folder_path, filename, self.download_id)
+        threading.Thread(target=self._download_thread, args=args, daemon=True).start()
 
-    def _download_thread(self, url: str, folder_path: Path, filename: str) -> None:
+    def _download_thread(self, url: str, folder_path: Path, filename: str, download_id: int) -> None:
         """Run core.download_with_repair and report the result in the window.
 
         Args:
             url: The YouTube video URL.
             folder_path: An existing folder to save the MP3 in.
             filename: The sanitized filename; empty means name it after the video title.
+            download_id: The download_id this download started with.
         """
+        def _owns_window() -> bool:
+            return self.download_id == download_id
+
+        def _cancelled() -> bool:
+            return self.download_cancelled or not _owns_window()
+
+        def _show(func: Callable[..., object], *args: object) -> None:
+            if _owns_window():
+                self.after(0, func, *args)
+
         def _on_start(process: subprocess.Popen[str], temp_stem: Path) -> None:
+            if not _owns_window():  # canceled during a repair and a newer download started
+                kill_process_tree(process)
+                return
             self.current_process = process
             self.current_stem = temp_stem
             if self.download_cancelled:  # canceled before yt-dlp was running
@@ -284,27 +304,29 @@ class DownloaderApp(ctk.CTk):
                 url,
                 folder_path,
                 filename,
-                on_progress=lambda p: self.after(0, self.progress_bar.set, p),
+                on_progress=lambda p: _show(self.progress_bar.set, p),
                 on_start=_on_start,
                 on_warning=warnings.append,
-                on_info=lambda message: self.after(0, self.show_status, message, "info"),
-                is_cancelled=lambda: self.download_cancelled,
+                # not after a Cancel: a running repair must not replace "Download canceled"
+                on_info=lambda message: _cancelled() or _show(self.show_status, message, "info"),
+                is_cancelled=_cancelled,
             )
         except Exception as e:
-            if self.download_cancelled:
+            if _cancelled():
                 return
             msg = describe_error(e)
             logger.error("%s: %s", msg, e)
-            self.after(0, self.show_status, msg, "error")
-            self.after(0, lambda: self._set_main_button("Download MP3", self.start_download, primary=True))
+            _show(self.show_status, msg, "error")
+            _show(lambda: self._set_main_button("Download MP3", self.start_download, primary=True))
         else:
             # also after a late Cancel: the file is saved, say so instead of "canceled"
             msg = "\n".join([f"Saved {mp3_path.name}", *warnings])
-            self.after(0, self.show_status, msg, "warning" if warnings else "success")
-            self.after(0, lambda: self._set_main_button("Next", self.reset_fields))
+            _show(self.show_status, msg, "warning" if warnings else "success")
+            _show(lambda: self._set_main_button("Next", self.reset_fields))
         finally:
-            self.current_process = None
-            self.after(0, self.progress_bar.pack_forget)
+            if _owns_window():
+                self.current_process = None
+                self.after(0, self.progress_bar.pack_forget)
 
     def cancel_download(self) -> None:
         """Cancel the running download, reset the UI and clean up its partial files."""

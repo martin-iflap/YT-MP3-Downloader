@@ -60,8 +60,8 @@ DENO_EXE = "deno.exe"  # the only file in the zip
 INSTALLER_ARGS = ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-")
 
 SOCKET_TIMEOUT_S = 30  # per connect or read
-YT_DLP_DOWNLOAD_S = 180  # whole download; the extension waits 5 min for update_yt_dlp
-INSTALLER_DOWNLOAD_S = 360  # and 8 min for update_host
+YT_DLP_DOWNLOAD_S = 180  # whole download; the extension waits 7 min for update_yt_dlp
+INSTALLER_DOWNLOAD_S = 360  # and 9 min for update_host (see ACTION_TIMEOUTS_MS for the sums)
 DENO_DOWNLOAD_S = 300  # ~43 MB, during a download the user waits for
 LOCK_TIMEOUT_S = 60  # waiting for another host's update
 LOCK_POLL_S = 0.5
@@ -272,7 +272,12 @@ def _swap_in(new: Path, exe: Path) -> None:
         if old.exists():  # recover_yt_dlp could not remove it: it still runs
             old = exe.with_name(f"{exe.stem}.old-{uuid.uuid4().hex[:8]}{exe.suffix}")
         exe.rename(old)
-    new.rename(exe)
+    try:
+        new.rename(exe)
+    except OSError:  # e.g. a virus scanner still holds the new file: keep the working one
+        if old:
+            old.rename(exe)
+        raise
     if old:
         _remove_leftovers([old])
 
@@ -314,6 +319,8 @@ def update_yt_dlp() -> str:
             if version is None:
                 raise UpdateError(f"The downloaded yt-dlp {tag} does not run")
             _swap_in(new, exe)
+        except OSError as e:
+            raise UpdateError(f"yt-dlp {tag} could not be installed: {e}") from e
         finally:
             new.unlink(missing_ok=True)
     logger.info("Installed yt-dlp %s (was %s)", version, current)
@@ -369,7 +376,7 @@ def install_deno() -> str:
             if actual != sums.group(0).lower():
                 raise UpdateError(f"The downloaded Deno {tag} is damaged (checksum mismatch)")
             _extract(archive, DENO_EXE, new)
-            archive.unlink()
+            _remove_leftovers([archive])  # frees 43 MB now; one a scanner holds goes in finally
             version = read_version(deno_version_command(new))
             if version is None:
                 raise UpdateError(f"The downloaded Deno {tag} does not run")
@@ -377,8 +384,7 @@ def install_deno() -> str:
         except UpdateError as e:
             raise UpdateError(f"Deno could not be installed: {e}") from e
         finally:
-            archive.unlink(missing_ok=True)
-            new.unlink(missing_ok=True)
+            _remove_leftovers([archive, new])
     logger.info("Installed Deno %s", version)
     return version
 

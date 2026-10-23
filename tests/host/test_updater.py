@@ -326,6 +326,23 @@ def test_an_old_copy_still_in_use_is_left_alone(install: Install, server: Releas
     assert old.read_bytes() == script("2026.01.01")
 
 
+def test_a_swap_that_fails_keeps_the_working_exe(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_yt_dlp(server)
+    rename = Path.rename
+
+    def locked_download(self: Path, target: Path) -> Path:
+        if self.name == "yt-dlp.download.exe":  # e.g. a virus scanner still holds it
+            raise PermissionError(13, "Access is denied", str(self))
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", locked_download)
+    with pytest.raises(UpdateError, match="could not be installed"):
+        updater.update_yt_dlp()
+    assert install.files == ["yt-dlp.exe"]
+    assert install.exe.read_bytes() == script(OLD)
+
+
 # --- the update lock ----------------------------------------------------------
 
 

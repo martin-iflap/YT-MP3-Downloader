@@ -33,7 +33,7 @@ UNKNOWN_ARTIST = "<unknown>"
 YOUTUBE_HOSTS = ("youtube.com", "youtu.be/")
 # what yt-dlp prints when YouTube asks for a JavaScript challenge it could not solve without a runtime
 JS_CHALLENGE_FAILURES = ("Signature solving failed", "n challenge solving failed", "Requested format is not available")
-NOISE_WORDS = ("Official", "Music", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean", "Live")
+NOISE_WORDS = ("Official", "Music", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean", "Live", "4K")
 
 WINDOWS_RESERVED_NAMES = frozenset(
     ["CON", "PRN", "AUX", "NUL"] + [f"{port}{i}" for port in ("COM", "LPT") for i in range(1, 10)]
@@ -578,9 +578,10 @@ def _repair_yt_dlp(error: Exception, on_info: Callable[[str], object]) -> bool:
     """
     before = _file_stamp(YT_DLP_PATH)
     on_info("The download failed, checking for a yt-dlp update...")
+    # OSError: e.g. the update lock or a file a virus scanner holds; never hides the download's own error
     try:
         updater.update_yt_dlp()
-    except updater.UpdateError as e:
+    except (updater.UpdateError, OSError) as e:
         logger.error("Repair after a failed download: %s", e)
     repaired = _file_stamp(YT_DLP_PATH) not in (None, before)
 
@@ -591,7 +592,7 @@ def _repair_yt_dlp(error: Exception, on_info: Callable[[str], object]) -> bool:
         try:
             updater.install_deno()
             repaired = True
-        except updater.UpdateError as e:
+        except (updater.UpdateError, OSError) as e:
             logger.error("Repair after a failed download: %s", e)
     return repaired
 

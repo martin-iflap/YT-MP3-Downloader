@@ -20,18 +20,21 @@ const LEGACY_HOST_MESSAGE = "This version of the YT MP3 Downloader app can't upd
 
 // Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
 // and select_folder waits on the user, so these must stay above that. get_version waits
-// up to 20s for `yt-dlp --version`. The updates may first wait 60s for another host's
-// update, then download for up to 180s (yt-dlp) or 360s (the installer). A download that
-// fails in yt-dlp is retried once after a repair (core.download_with_repair): a yt-dlp
-// update (60s + 180s) and Deno (60s + 300s), so the worst case is about 22 min.
+// up to 20s for `yt-dlp --version`. The updates (updater.py) may first wait 60s for another
+// host's update, look up the tag (5s) and fetch the checksums (30s), then download for up
+// to 180s (yt-dlp) or 360s (the installer), plus up to 30s for the last read, and test-run a
+// new exe (20s): about 345s for yt-dlp (with its 20s version check first) and 485s for the
+// installer. A download that fails in yt-dlp is retried once after a repair
+// (core.download_with_repair): 350s, a yt-dlp update (345s), Deno (about 455s), 350s
+// again, so the worst case is about 25 min.
 const ACTION_TIMEOUTS_MS = {
-  download: 23 * 60 * 1000,
+  download: 27 * 60 * 1000,
   download_gui: 30 * 1000,
   select_folder: 10 * 60 * 1000,
   get_current_folder: 15 * 1000,
   get_version: 30 * 1000,
-  update_yt_dlp: 5 * 60 * 1000,
-  update_host: 8 * 60 * 1000
+  update_yt_dlp: 7 * 60 * 1000,
+  update_host: 9 * 60 * 1000
 };
 
 // What the sidebar shows while a repair runs.
@@ -153,8 +156,11 @@ function assessHostStatus(response, source) {
     if (source === 'disconnect' && !response.helpUrl) {
       return { status: 'error', message: HOST_BROKEN_MESSAGE, helpUrl: INSTALLER_URL };
     }
-    // a v2+ host that failed is reported as it is; only a 1.x host answers like this
-    if (response.message !== LEGACY_HOST_REPLY) return response;
+    // a v2+ host that failed (or did not answer in time) is reported as it is, with the
+    // installer: it could not repair itself. Only a 1.x host answers LEGACY_HOST_REPLY.
+    if (response.message !== LEGACY_HOST_REPLY) {
+      return Object.assign({}, response, { helpUrl: response.helpUrl || INSTALLER_URL });
+    }
     return { status: 'warning', message: LEGACY_HOST_MESSAGE, helpUrl: INSTALLER_URL };
   }
   if (compareVersions(version, parseVersion(MIN_HOST_VERSION)) < 0) {

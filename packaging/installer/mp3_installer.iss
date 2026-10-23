@@ -88,7 +88,11 @@ SetupIconFile={#RepoRoot}\packaging\assets\mp3.ico
 [Files]
 
 ; Your native application (PyInstaller --onedir: mp3.exe + _internal\)
-Source: "{#RepoRoot}\dist\mp3\*"; DestDir: "{app}\{#VersionDir}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; Excludes: what running the build straight from dist\mp3\ leaves there (the binaries copied
+; next to it, the runtime files of config.INSTALL_DIR); ffmpeg.exe and mp3.ico come below.
+Source: "{#RepoRoot}\dist\mp3\*"; DestDir: "{app}\{#VersionDir}"; \
+    Excludes: "ffmpeg.exe,mp3.ico,yt-dlp*.exe,deno*,update.lock,mp3.log*,_ytmp3_*"; \
+    Flags: recursesubdirs createallsubdirs ignoreversion
 
 ; Your application icon
 Source: "{#RepoRoot}\packaging\assets\mp3.ico"; DestDir: "{app}\{#VersionDir}"
@@ -303,11 +307,21 @@ end;
 ; runs (a download that started before the update): Windows
 ; can't delete a running exe, and deleting the rest would
 ; break that download. Such a folder is removed by the next
-; update or the uninstaller.
+; update or the uninstaller. It is retried for a few seconds
+; first: during a self-update the extension polls get_version,
+; and each poll runs the old mp3.exe for a second or two.
 
 procedure RemoveVersionFolder(const Dir: String);
+var
+  Attempt: Integer;
 begin
-  if FileExists(Dir + '\{#NativeExeName}') and not DeleteFile(Dir + '\{#NativeExeName}') then
+  for Attempt := 1 to 10 do
+  begin
+    if not FileExists(Dir + '\{#NativeExeName}') or DeleteFile(Dir + '\{#NativeExeName}') then
+      break;
+    Sleep(500);
+  end;
+  if FileExists(Dir + '\{#NativeExeName}') then
     Log('Keeping ' + Dir + ': its mp3.exe is still running.')
   else if not DelTree(Dir, True, True, True) then
     Log('Could not remove all of ' + Dir + '.');

@@ -126,12 +126,12 @@ test('a host below MIN_HOST_VERSION that can not update itself is told to update
   assert.deepStrictEqual(calls, ['get_version']);
 });
 
-test('a v2 host that failed to report is relayed as its own error, not as outdated', async () => {
+test('a v2 host that failed to report is relayed as its own error with the installer, not as outdated', async () => {
   const failure = { status: 'error', message: "Error processing action 'get_version': boom" };
   const { final, calls } = await checkHost({ get_version: failure });
   assert.equal(final.status, 'error');
   assert.equal(final.message, failure.message);
-  assert.equal(final.helpUrl, undefined);
+  assert.equal(final.helpUrl, INSTALLER_URL, 'it could not repair itself');
   assert.deepStrictEqual(calls, ['get_version']);
 });
 
@@ -238,7 +238,7 @@ test('an update that times out does not hang the check', async () => {
   const { final, calls } = await checkHost({
     get_version: report(OLD_YT_DLP),
     update_yt_dlp: () => {} // never answers
-  }, { clockMs: 6 * 60 * 1000 });
+  }, { clockMs: 8 * 60 * 1000 });
   assert.deepStrictEqual(calls, ['get_version', 'update_yt_dlp']);
   assert.match(final.message, /Automatic repair failed: Native host did not respond in time/);
 });
