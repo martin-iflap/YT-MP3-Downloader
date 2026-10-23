@@ -11,7 +11,14 @@ from collections.abc import Callable
 from ytmp3_host.config import setup_logging
 lazy from ytmp3_host.gui import open_gui, select_folder as pick_folder
 lazy from ytmp3_host.health import host_status
-from ytmp3_host.native_messaging import Message, read_message, run_native, send_current_folder, send_message
+from ytmp3_host.native_messaging import (
+    Message,
+    read_message,
+    run_native,
+    run_open_file,
+    send_current_folder,
+    send_message,
+)
 lazy from ytmp3_host.selfcheck import self_check
 lazy from ytmp3_host.updater import (
     UpdateError,
@@ -59,6 +66,16 @@ def get_current_folder(_request: Message) -> None:
     send_current_folder("")
 
 
+def show_in_folder(request: Message) -> None:
+    """Handle the `show_in_folder` action: show a downloaded MP3 (`path`) selected in Explorer."""
+    run_open_file(request.get("path", ""), select=True)
+
+
+def play(request: Message) -> None:
+    """Handle the `play` action: open a downloaded MP3 (`path`) in the default player."""
+    run_open_file(request.get("path", ""), select=False)
+
+
 def get_version(_request: Message) -> None:
     """Handle the `get_version` action: the host version and the state of its tools.
 
@@ -100,6 +117,8 @@ ACTIONS: dict[str, Callable[[Message], None]] = {
     "download_gui": download_gui,
     "select_folder": select_folder,
     "get_current_folder": get_current_folder,
+    "show_in_folder": show_in_folder,
+    "play": play,
     "get_version": get_version,
     "update_yt_dlp": update_yt_dlp,
     "update_host": update_host,

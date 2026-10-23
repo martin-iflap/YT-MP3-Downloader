@@ -64,7 +64,12 @@ function createFakeBrowser({ sidebarOpen = false, storage = {}, nativeHost = nul
       }
     },
     notifications: {
-      create: async (options) => { state.notifications.push(plain(options)); }
+      onClicked: createEvent(),
+      onClosed: createEvent(),
+      create: async (options) => {
+        state.notifications.push(plain(options));
+        return `notification-${state.notifications.length}`;
+      }
     },
     sidebarAction: {
       isOpen: async () => state.sidebarOpen

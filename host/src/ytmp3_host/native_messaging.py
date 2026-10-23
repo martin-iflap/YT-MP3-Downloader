@@ -13,10 +13,13 @@ from typing import Any
 from ytmp3_host.core import (
     describe_error,
     download_with_repair,
+    downloaded_mp3,
     ensure_default_folder,
     is_youtube_url,
+    open_file,
     requested_filename,
     resolve_folder,
+    show_in_folder,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,6 +98,29 @@ def send_current_folder(folder: str) -> None:
         send_message({"status": "error", "message": "Path doesn't exist", "final": True})
         return
     send_message({"status": "success", "folder": str(folder_path), "final": True})
+
+
+def run_open_file(path: str, select: bool) -> None:
+    """Handle `show_in_folder` (select is True) and `play` for a downloaded MP3.
+
+    Args:
+        path: The MP3's path from the download's success response.
+        select: Show the file in Explorer instead of opening it in its default app.
+    """
+    file = downloaded_mp3(path)
+    if file is None:
+        send_message({"status": "error", "message": "The MP3 was moved or deleted", "final": True})
+        return
+    try:
+        if select:
+            show_in_folder(file)
+        else:
+            open_file(file)
+    except OSError as e:
+        logger.error("Could not open %s: %s", file, e)
+        send_message({"status": "error", "message": f"Could not open the MP3: {describe_error(e)}", "final": True})
+        return
+    send_message({"status": "success", "final": True})
 
 
 def run_native(url: str, folder: str, filename: str) -> None:

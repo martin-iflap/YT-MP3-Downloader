@@ -11,6 +11,7 @@ when it fails, so the files can be inspected. Everything changed through
 `monkeypatch` (module attributes, environment variables) is restored after each test.
 """
 
+import json
 import shutil
 import subprocess
 import sys
@@ -75,13 +76,18 @@ class FakeYtDlp:
     """
     monkeypatch: pytest.MonkeyPatch
 
-    def set(self, mode: str = "success", title: str | None = None, version: str | None = None) -> None:
-        """Set the mode (see fake_yt_dlp.py) and the title and version the fake prints; None keeps the defaults."""
+    def set(
+        self, mode: str = "success", title: str | None = None, version: str | None = None, info: dict | None = None
+    ) -> None:
+        """Set the mode (see fake_yt_dlp.py) and the title, version and other video info the fake
+        prints; None keeps the defaults."""
         self.monkeypatch.setenv("FAKE_YTDLP_MODE", mode)
         if title is not None:
             self.monkeypatch.setenv("FAKE_YTDLP_TITLE", title)
         if version is not None:
             self.monkeypatch.setenv("FAKE_YTDLP_VERSION", version)
+        if info is not None:
+            self.monkeypatch.setenv("FAKE_YTDLP_INFO", json.dumps(info))
 
 
 @pytest.fixture
@@ -123,7 +129,8 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
         "yt_dlp_version_command",
         lambda exe=None: [sys.executable, str(FAKE_YT_DLP), *real_version(exe)[1:]],
     )
-    for var in ("FAKE_YTDLP_MODE", "FAKE_YTDLP_TITLE", "FAKE_YTDLP_VERSION", "FAKE_YTDLP_MP3", "FAKE_YTDLP_THUMB"):
+    for var in ("FAKE_YTDLP_MODE", "FAKE_YTDLP_TITLE", "FAKE_YTDLP_VERSION", "FAKE_YTDLP_INFO", "FAKE_YTDLP_MP3",
+                "FAKE_YTDLP_THUMB"):
         monkeypatch.delenv(var, raising=False)
     return FakeYtDlp(monkeypatch)
 
@@ -136,6 +143,7 @@ class EmbedCall:
     artist: str
     title: str
     output: Path
+    tags: dict[str, str] | None
 
 
 @pytest.fixture
@@ -149,8 +157,15 @@ def fake_embed(monkeypatch: pytest.MonkeyPatch) -> list[EmbedCall]:
     """
     calls: list[EmbedCall] = []
 
-    def _embed(temp_mp3: Path, thumb_file: Path | None, artist: str, title: str, output: Path) -> None:
-        calls.append(EmbedCall(temp_mp3, thumb_file, artist, title, output))
+    def _embed(
+        temp_mp3: Path,
+        thumb_file: Path | None,
+        artist: str,
+        title: str,
+        output: Path,
+        tags: dict[str, str] | None = None,
+    ) -> None:
+        calls.append(EmbedCall(temp_mp3, thumb_file, artist, title, output, tags))
         output.write_bytes(temp_mp3.read_bytes())
 
     monkeypatch.setattr(core, "embed_thumbnail", _embed)

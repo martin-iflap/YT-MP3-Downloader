@@ -281,6 +281,9 @@
         #result.warning, #hostNotice.warning { --result-color: #f39c12; --result-rgb: 243,156,18; color:#ffecc5; }
         #result.info, #hostNotice.info { --result-color: #4a90e2; --result-rgb: 74,144,226; color:#cfe9ff; }
         #result a, #hostNotice a { color: inherit; font-weight: 600; text-decoration: underline; }
+        #result small, #hostNotice small { display: block; margin-top: 4px; font-size: 11px; opacity: 0.8; }
+        #result .file-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        #result .file-actions .secondary-btn { color: #dfe6e9; padding: 5px 10px; font-size: 12px; }
 
         .loader { display:none; width:18px; height:18px; border:2px solid rgba(255,255,255,0.08); border-top-color:#cfd6da; border-radius:50%; animation:spin 0.8s linear infinite; margin:10px auto; }
         @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}

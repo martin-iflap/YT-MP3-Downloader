@@ -1,20 +1,24 @@
 """Stand-in for yt-dlp.exe in the host tests.
 
 Run as `python fake_yt_dlp.py <the arguments core.build_download_command builds>`.
-It honors the real `-o` output template and `--print` title template, so the
-tests also check the command contract. With `--version` (health.yt_dlp_version_command)
-it only prints its version; fail, hang and bad_version apply there too.
+It honors the real `-o` output template and the `--print` info template (`%(.{fields})j`:
+a JSON object of the requested fields the video has), so the tests also check the
+command contract. With `--version` (health.yt_dlp_version_command) it only prints its
+version; fail, hang and bad_version apply there too.
 Behavior comes from environment variables:
 
     FAKE_YTDLP_MODE     success (default) | fail | hang | no_title | no_thumb | no_mp3 | bad_version |
                         needs_js (fails like the real one when YouTube wants JavaScript, unless given --js-runtimes)
     FAKE_YTDLP_TITLE    the video title to print
+    FAKE_YTDLP_INFO     more video info as a JSON object, e.g. {"album": "..."} (default: {"channel": "Some Channel"})
     FAKE_YTDLP_VERSION  the version to print (default 2026.08.19)
     FAKE_YTDLP_MP3      an MP3 to copy as the download (default: junk bytes)
     FAKE_YTDLP_THUMB    an image to copy as the .png thumbnail (default: junk .webp)
 """
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -50,8 +54,11 @@ def main() -> None:
         print_version(mode)
         return
     stem = args[args.index("-o") + 1].removesuffix(".%(ext)s")
-    title_template = args[args.index("--print") + 1].removeprefix("before_dl:")
-    title = os.environ.get("FAKE_YTDLP_TITLE", "Artist - Song (Official Video)")
+    template = re.fullmatch(r"before_dl:(.*)%\(\.\{(.*)\}\)j", args[args.index("--print") + 1])
+    assert template, "unexpected --print template"
+    marker, fields = template.groups()
+    info = json.loads(os.environ.get("FAKE_YTDLP_INFO", '{"channel": "Some Channel"}'))
+    info["title"] = os.environ.get("FAKE_YTDLP_TITLE", "Artist - Song (Official Video)")
 
     emit(f"[youtube] Extracting URL: {args[-1]}")
     if mode == "needs_js" and "--js-runtimes" not in args:
@@ -60,7 +67,7 @@ def main() -> None:
         emit("ERROR: [youtube] abc123: Requested format is not available. Use --list-formats for a list of available formats")
         sys.exit(1)
     if mode != "no_title":
-        emit(title_template.replace("%(title)s", title))
+        emit(marker + json.dumps({field: info[field] for field in fields.split(",") if field in info}))
     partial = Path(f"{stem}.webm.part")
     partial.write_bytes(b"partial download")
     for percent in ("0.0", "42.5", "100.0"):

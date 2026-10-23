@@ -38,6 +38,27 @@ def test_names_the_file_after_the_cleaned_title(
     assert leftovers(out_dir) == []
 
 
+def test_youtube_music_info_becomes_the_tags(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    fake_yt_dlp.set(title="Never Gonna Give You Up", info={
+        "artists": ["Rick Astley"], "album": "Whenever You Need Somebody", "release_year": 1987,
+        "channel": "Rick Astley - Topic", "webpage_url": "https://www.youtube.com/watch?v=abc123",
+    })
+
+    assert download_audio(URL, out_dir) == out_dir / "Never Gonna Give You Up.mp3"
+    [call] = fake_embed
+    assert (call.artist, call.title) == ("Rick Astley", "Never Gonna Give You Up")
+    assert call.tags == {
+        "album": "Whenever You Need Somebody", "date": "1987", "comment": "https://www.youtube.com/watch?v=abc123"
+    }
+
+
+def test_title_without_artist_takes_the_channel(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    fake_yt_dlp.set(title="Me at the zoo")  # the fake's default info has only a channel
+    download_audio(URL, out_dir)
+    assert fake_embed[0].artist == "Some Channel"
+    assert fake_embed[0].tags == {}
+
+
 def test_title_with_non_ascii_characters(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
     fake_yt_dlp.set(title="Artíst – Søng 日本語 (Lyrics)")
     assert download_audio(URL, out_dir).name == "Artíst – Søng 日本語.mp3"

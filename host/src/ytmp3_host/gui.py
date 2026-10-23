@@ -22,10 +22,12 @@ from ytmp3_host.core import (
     ensure_default_folder,
     is_youtube_url,
     kill_process_tree,
+    open_file,
     remove_temp_files,
     requested_filename,
     resolve_folder,
     safe_filename,
+    show_in_folder,
 )
 from ytmp3_host.native_messaging import send_current_folder, send_message
 
@@ -88,8 +90,8 @@ class DownloaderApp(ctk.CTk):
         super().__init__(fg_color=BG)
 
         self.title("YouTube MP3 Converter")
-        self.geometry("560x470")
-        self.minsize(420, 470)
+        self.geometry("560x510")
+        self.minsize(420, 510)  # room for a two-line status and the file buttons below it
         self.current_process: subprocess.Popen[str] | None = None
         self.current_stem: Path | None = None
         self.download_cancelled = False
@@ -161,6 +163,25 @@ class DownloaderApp(ctk.CTk):
         )
         self.status_label.pack(side="left", fill="x", expand=True, padx=(0, 12), pady=10)
 
+        # "Show in folder" and "Play" for the last saved MP3, shown below its status
+        self.saved_file: Path | None = None
+        self.file_actions = ctk.CTkFrame(main_frame, fg_color="transparent")
+        for text, action in (("Show in folder", show_in_folder), ("Play", open_file)):
+            ctk.CTkButton(
+                self.file_actions,
+                text=text,
+                command=lambda act=action: self._open_saved_file(action),
+                fg_color=PILL,
+                hover_color=PILL_HOVER,
+                text_color="#d7dadd",
+                border_width=1,
+                border_color=PILL_BORDER,
+                corner_radius=8,
+                font=(FONT, 12),
+                width=110,
+                height=30,
+            ).pack(side="left", padx=4)
+
     @staticmethod
     def _field_label(master: ctk.CTkFrame, text: str, top: int = 12) -> None:
         """Add a small uppercase caption above a field, like the sidebar's input labels."""
@@ -223,6 +244,7 @@ class DownloaderApp(ctk.CTk):
             text: The message, possibly multi-line.
             kind: A STATUS_STYLES key: success, error, warning or info.
         """
+        self.file_actions.pack_forget()  # they belong to the "Saved" status only
         if not text:
             self.status_frame.pack_forget()
             return
@@ -231,6 +253,23 @@ class DownloaderApp(ctk.CTk):
         self.status_label.configure(text=text, text_color=color)
         self.status_frame.configure(border_color=border)
         self.status_frame.pack(fill="x", pady=(14, 0))
+
+    def show_saved(self, mp3_path: Path, warnings: list[str]) -> None:
+        """Show the "Saved" status with the file buttons. Main thread only."""
+        self.show_status("\n".join([f"Saved {mp3_path.name}", *warnings]), "warning" if warnings else "success")
+        self.saved_file = mp3_path
+        self.file_actions.pack(pady=(10, 0))
+
+    def _open_saved_file(self, action: Callable[[Path], None]) -> None:
+        """Run show_in_folder or open_file on the saved MP3; a failure replaces the status."""
+        if self.saved_file is None or not self.saved_file.is_file():
+            self.show_status("The MP3 was moved or deleted", "error")
+            return
+        try:
+            action(self.saved_file)
+        except OSError as e:
+            logger.error("Could not open %s: %s", self.saved_file, e)
+            self.show_status(f"Could not open the MP3: {describe_error(e)}", "error")
 
     def choose_folder(self) -> None:
         """Let the user pick a folder, starting at the current one; keep it on cancel."""
@@ -320,8 +359,7 @@ class DownloaderApp(ctk.CTk):
             _show(lambda: self._set_main_button("Download MP3", self.start_download, primary=True))
         else:
             # also after a late Cancel: the file is saved, say so instead of "canceled"
-            msg = "\n".join([f"Saved {mp3_path.name}", *warnings])
-            _show(self.show_status, msg, "warning" if warnings else "success")
+            _show(self.show_saved, mp3_path, warnings)
             _show(lambda: self._set_main_button("Next", self.reset_fields))
         finally:
             if _owns_window():

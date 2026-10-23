@@ -1,10 +1,12 @@
 """Download pipeline and helpers shared by the headless and GUI download paths.
 
 One download is one yt-dlp call (audio as MP3 V0 plus the raw thumbnail) followed by
-one ffmpeg pass that adds the cover art and artist and writes the final MP3.
+one ffmpeg pass that adds the cover art and tags and writes the final MP3.
 """
 
+import ctypes
 import errno
+import json
 import logging
 import re
 import subprocess
@@ -15,7 +17,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ytmp3_host.config import DEFAULT_FOLDER, DENO_PATH, FFMPEG_PATH, YT_DLP_PATH
-# only download_with_repair's failure path uses them (urllib, and health imports this module)
+# only download_with_repair's failure path (and open_file) uses them (urllib, and health imports this module)
 lazy from ytmp3_host import health, updater
 
 logger = logging.getLogger(__name__)
@@ -26,7 +28,11 @@ REMOVE_ATTEMPTS = 6
 REMOVE_RETRY_DELAY_S = 0.5
 # temp files older than this belong to a host that was killed (e.g. Firefox closed mid-download)
 STALE_TEMP_AGE_S = 3600
-TITLE_MARKER = "YTMP3_TITLE:"
+INFO_MARKER = "YTMP3_INFO:"
+# the video info yt-dlp prints as JSON before downloading: the title names the file, the rest
+# become tags. artists/album/release_year/track_number exist only for YouTube Music uploads.
+INFO_FIELDS = ("title", "artists", "album", "release_year", "track_number", "channel", "webpage_url")
+TOPIC_SUFFIX = " - Topic"  # YouTube Music's auto-generated artist channels, e.g. "Queen - Topic"
 THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 DEFAULT_FILENAME = "Youtube MP3"
 UNKNOWN_ARTIST = "<unknown>"
@@ -170,12 +176,82 @@ def title_from_filename(filename: str) -> str:
     return title or filename
 
 
+def parse_info(text: str) -> dict[str, object]:
+    """Parse the video info yt-dlp printed after INFO_MARKER.
+
+    Args:
+        text: The JSON object of INFO_FIELDS; yt-dlp leaves out the fields a video lacks.
+    Returns:
+        The info, or {} if it is not a JSON object (logged).
+    """
+    try:
+        info = json.loads(text)
+    except ValueError:
+        logger.warning("Could not parse the video info: %r", text)
+        return {}
+    return info if isinstance(info, dict) else {}
+
+
+def info_text(info: dict[str, object], key: str) -> str:
+    """A video info field as stripped text, "" if it is missing or not a string or number.
+
+    Args:
+        info: The video info (see INFO_FIELDS).
+        key: The field name.
+    Returns:
+        The text; a list, dict or null (yt-dlp's JSON for odd videos) gives "".
+    """
+    value = info.get(key)
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return ""
+    return str(value).strip()
+
+
+def artist_for(filename: str, info: dict[str, object]) -> str:
+    """The artist tag: from the filename, else from the video info.
+
+    Args:
+        filename: The final filename without extension.
+        info: The video info (see INFO_FIELDS).
+    Returns:
+        artist_from_filename's artist if the filename has one, else the video's
+        artists (YouTube Music), else its channel without " - Topic", else UNKNOWN_ARTIST.
+    """
+    artist = artist_from_filename(filename)
+    if artist != UNKNOWN_ARTIST:
+        return artist
+    artists = info.get("artists")
+    if isinstance(artists, list) and artists:
+        return ", ".join(map(str, artists))
+    channel = info_text(info, "channel").removesuffix(TOPIC_SUFFIX).strip()
+    return channel or UNKNOWN_ARTIST
+
+
+def extra_tags(info: dict[str, object]) -> dict[str, str]:
+    """The tags besides artist and title, as ffmpeg metadata keys (ID3v2.3 frame in the comment).
+    The year is the release year only: the upload year of an official video is
+    often decades after the song.
+
+    Args:
+        info: The video info (see INFO_FIELDS).
+    Returns:
+        The tags the video has values for.
+    """
+    tags = {
+        "album": info_text(info, "album"),  # TALB
+        "date": info_text(info, "release_year"),  # TYER
+        "track": info_text(info, "track_number"),  # TRCK
+        "comment": info_text(info, "webpage_url"),  # COMM: where the song came from
+    }
+    return {key: value for key, value in tags.items() if value}
+
+
 def build_download_command(url: str, temp_stem: Path) -> list[str]:
     """Build the yt-dlp command for one download.
 
-    A single call fetches the title, the audio and the raw thumbnail. The title is
-    printed after TITLE_MARKER before the download starts (`before_dl`), so an
-    existing file can stop it early. `--audio-quality 0` is LAME V0, the best VBR
+    A single call fetches the video info, the audio and the raw thumbnail. The info
+    (INFO_FIELDS) is printed as JSON after INFO_MARKER before the download starts
+    (`before_dl`), so an existing title-named file can stop it early. `--audio-quality 0` is LAME V0, the best VBR
     preset, which encodes as fast as the default V5. `--print` implies `--quiet`,
     so `--progress` keeps the progress lines the GUI parses; `--no-simulate` makes
     sure printing never turns the call into a dry run. A Deno the host installed is
@@ -196,7 +272,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
         "-x", "--audio-format", "mp3", "--audio-quality", "0",
         "--write-thumbnail",
         "--ffmpeg-location", str(FFMPEG_PATH),
-        "--print", f"before_dl:{TITLE_MARKER}%(title)s",
+        "--print", f"before_dl:{INFO_MARKER}%(.{{{','.join(INFO_FIELDS)}}})j",
         "--no-simulate",
         "--progress", "--newline",
         "--encoding", "utf-8",
@@ -322,12 +398,19 @@ def describe_error(error: Exception) -> str:
             return f"Unexpected error: {error}"
 
 
-def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, title: str, output: Path) -> None:
-    """Write the final MP3 with cover art, artist and title in a single ffmpeg pass.
+def embed_thumbnail(
+    temp_mp3: Path,
+    thumb_file: Path | None,
+    artist: str,
+    title: str,
+    output: Path,
+    tags: dict[str, str] | None = None,
+) -> None:
+    """Write the final MP3 with cover art and tags in a single ffmpeg pass.
 
     The audio stream is copied, never re-encoded. The thumbnail is center-cropped
     to 1:1 and encoded as high-quality JPEG ID3v2.3 cover art. Without a thumbnail
-    only the artist and title metadata are added.
+    only the tags are added.
 
     Args:
         temp_mp3: The MP3 yt-dlp produced.
@@ -335,6 +418,7 @@ def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, title:
         artist: The artist metadata value.
         title: The title metadata value.
         output: The final MP3 path. Must not exist yet (ffmpeg runs with -n).
+        tags: More metadata as ffmpeg keys (see extra_tags), e.g. {"album": "..."}.
     Raises:
         FileExistsError: If output already exists; it is left untouched.
         subprocess.CalledProcessError: If ffmpeg fails. A partial output is removed.
@@ -356,8 +440,10 @@ def embed_thumbnail(temp_mp3: Path, thumb_file: Path | None, artist: str, title:
         "-id3v2_version", "3",
         "-metadata", f"artist={artist}",
         "-metadata", f"title={title}",
-        str(output),
     ]
+    for key, value in (tags or {}).items():
+        cmd += ["-metadata", f"{key}={value}"]
+    cmd.append(str(output))
     # -n alone is not enough: ffmpeg 7 exits 0 when it refuses to overwrite
     _ensure_not_exists(output)
     try:
@@ -383,20 +469,20 @@ def _run_yt_dlp(
     on_start: Callable[[subprocess.Popen[str], Path], None] | None,
     on_title: Callable[[str], None],
     timeout: float,
-) -> str:
-    """Run the yt-dlp download and return the video title.
+) -> dict[str, object]:
+    """Run the yt-dlp download and return the video info.
 
     Args:
         url: The YouTube video URL.
         temp_stem: Output path without extension.
         on_progress: Optional callback receiving the progress as 0.0-1.0.
         on_start: Optional callback receiving the process and temp stem once started.
-        on_title: Callback receiving the title before the download starts; raising
-            from it stops yt-dlp and propagates.
+        on_title: Callback receiving the title ("" if none) before the download
+            starts; raising from it stops yt-dlp and propagates.
         timeout: Seconds after which the whole process tree is killed.
 
     Returns:
-        The video title printed by yt-dlp, or "" if it printed none.
+        The video info yt-dlp printed (see INFO_FIELDS), or {} if it printed none.
 
     Raises:
         subprocess.TimeoutExpired: If the download exceeded timeout.
@@ -421,16 +507,16 @@ def _run_yt_dlp(
         watchdog = threading.Timer(timeout, _kill_on_timeout)
         watchdog.start()
 
-        title = ""
+        info: dict[str, object] = {}
         output_lines: list[str] = []
         try:
             if on_start:
                 on_start(process, temp_stem)
             assert process.stdout is not None  # stdout=PIPE
             for line in process.stdout:
-                if line.startswith(TITLE_MARKER):
-                    title = line[len(TITLE_MARKER):].strip()
-                    on_title(title)
+                if line.startswith(INFO_MARKER):
+                    info = parse_info(line[len(INFO_MARKER):])
+                    on_title(info_text(info, "title"))
                     continue
                 match = PROGRESS_RE.search(line)
                 if match and on_progress:
@@ -448,7 +534,7 @@ def _run_yt_dlp(
         raise subprocess.TimeoutExpired(process.args, timeout)
     if process.returncode != 0:
         raise subprocess.CalledProcessError(process.returncode, process.args, "".join(output_lines[-20:]))
-    return title
+    return info
 
 
 def _ensure_not_exists(output: Path) -> None:
@@ -515,9 +601,10 @@ def download_audio(
     temp_stem = folder / f"_ytmp3_{uuid.uuid4().hex[:12]}"
     start = time.perf_counter()
     try:
-        title = _run_yt_dlp(url, temp_stem, on_progress, on_start, _check_title, timeout)
+        info = _run_yt_dlp(url, temp_stem, on_progress, on_start, _check_title, timeout)
+        title = info_text(info, "title")
         downloaded = time.perf_counter()
-        logger.debug("yt-dlp took %.2f s, title: %r", downloaded - start, title)
+        logger.debug("yt-dlp took %.2f s, info: %r", downloaded - start, info)
 
         if not filename:
             if not title:
@@ -533,7 +620,9 @@ def download_audio(
         thumb_file = find_thumbnail(temp_stem)
         if thumb_file is None:
             _warn("No thumbnail found, the MP3 is saved without cover art")
-        embed_thumbnail(temp_mp3, thumb_file, artist_from_filename(filename), title_from_filename(filename), output)
+        embed_thumbnail(
+            temp_mp3, thumb_file, artist_for(filename, info), title_from_filename(filename), output, extra_tags(info)
+        )
         if not output.exists():  # cheap guard: never report success for a file that is not there
             raise FileNotFoundError(errno.ENOENT, "ffmpeg did not create the MP3", str(output))
         end = time.perf_counter()
@@ -641,3 +730,51 @@ def download_with_repair(
             raise
     _info("Trying the download again...")
     return download_audio(url, folder, filename, on_progress, on_start, on_warning)
+
+
+def downloaded_mp3(path: str) -> Path | None:
+    """The file a `show_in_folder` or `play` request names, if it is an existing MP3.
+    Only MP3s: play opens the file in its default app, which must never run a program.
+    Args:
+        path: The absolute path the extension got from the download's success response.
+    Returns:
+        The file, or None if it is not an absolute path to an existing .mp3 file.
+    """
+    file = Path(path)
+    return file if file.is_absolute() and file.suffix.lower() == ".mp3" and file.is_file() else None
+
+
+def show_in_folder(file: Path) -> None:
+    """Open the folder of file in Explorer with file selected (an open window of it is reused).
+    Uses the shell API instead of `explorer.exe /select,<path>`, which splits the path
+    at commas, and song titles often have them.
+
+    Raises:
+        OSError: If the shell could not open the folder.
+    """
+    shell32 = ctypes.windll.shell32
+    shell32.ILCreateFromPathW.restype = ctypes.c_void_p
+    shell32.ILCreateFromPathW.argtypes = [ctypes.c_wchar_p]
+    shell32.ILFree.argtypes = [ctypes.c_void_p]
+    shell32.SHOpenFolderAndSelectItems.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_ulong]
+    ctypes.windll.ole32.CoInitialize(None)  # the shell API needs COM; a no-op if this thread has it
+    pidl = shell32.ILCreateFromPathW(str(file))
+    if not pidl:
+        raise OSError(errno.ENOENT, "Could not find the file", str(file))
+    try:
+        result = shell32.SHOpenFolderAndSelectItems(pidl, 0, None, 0)
+    finally:
+        shell32.ILFree(pidl)
+    if result != 0:
+        raise OSError(0, f"Explorer could not open the folder (0x{result & 0xFFFFFFFF:08X})", str(file.parent))
+
+
+def open_file(file: Path) -> None:
+    """Open file in its default app (play an MP3).
+    Through explorer.exe, which hands it to the running shell: an app this host
+    started itself would belong to Firefox's native-messaging job and be ended with
+    the host. The path is quoted (Windows paths can't contain quotes).
+    Raises:
+        OSError: If explorer.exe could not be started.
+    """
+    updater.launch_detached(f'explorer.exe "{file}"')

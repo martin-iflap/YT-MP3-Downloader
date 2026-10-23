@@ -45,6 +45,21 @@ def test_embeds_square_jpeg_cover_artist_and_title(ffmpeg: Path, media: Media, t
     assert audio_md5(ffmpeg, output) == audio_md5(ffmpeg, media.mp3)
 
 
+def test_extra_tags_become_id3v23_frames(ffmpeg: Path, media: Media, tmp_path: Path) -> None:
+    output = tmp_path / "out.mp3"
+    tags = {"album": "Albüm", "date": "1987", "track": "3", "comment": "https://www.youtube.com/watch?v=abc"}
+    embed_thumbnail(media.mp3, media.cover, "x", "y", output, tags)
+
+    info = probe(ffmpeg, output)
+    assert re.search(r"^\s*album\s*: Albüm$", info, re.MULTILINE)
+    assert re.search(r"^\s*track\s*: 3$", info, re.MULTILINE)
+    assert re.search(r"^\s*comment\s*: https://www.youtube.com/watch\?v=abc$", info, re.MULTILINE)
+    header = output.read_bytes()[:2000]
+    for frame in (b"TALB", b"TYER", b"TRCK", b"COMM"):  # the v2.3 frames players read (TYER, not v2.4's TDRC)
+        assert frame in header
+    assert audio_md5(ffmpeg, output) == audio_md5(ffmpeg, media.mp3)
+
+
 def test_without_thumbnail_only_sets_the_tags(ffmpeg: Path, media: Media, tmp_path: Path) -> None:
     output = tmp_path / "out.mp3"
     embed_thumbnail(media.mp3, None, "Someone", "Something", output)

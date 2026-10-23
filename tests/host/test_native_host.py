@@ -147,6 +147,65 @@ def test_get_current_folder_creates_the_default(monkeypatch: pytest.MonkeyPatch,
     assert default_folder.is_dir()
 
 
+# --- show_in_folder and play --------------------------------------------------
+
+
+@pytest.fixture
+def opened(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, Path]]:
+    """Record show_in_folder/open_file calls instead of opening Explorer or a player."""
+    calls: list[tuple[str, Path]] = []
+    monkeypatch.setattr(native_messaging, "show_in_folder", lambda file: calls.append(("show", file)))
+    monkeypatch.setattr(native_messaging, "open_file", lambda file: calls.append(("play", file)))
+    return calls
+
+
+def test_show_in_folder_and_play_open_the_downloaded_mp3(
+    monkeypatch: pytest.MonkeyPatch, opened: list[tuple[str, Path]], tmp_path: Path
+) -> None:
+    mp3 = tmp_path / "Artist, Name - Song.mp3"
+    mp3.write_bytes(b"x")
+    responses = run_host(monkeypatch, requests(
+        {"action": "show_in_folder", "path": str(mp3)}, {"action": "play", "path": str(mp3)}
+    ))
+    assert responses == [{"status": "success", "final": True}] * 2
+    assert opened == [("show", mp3), ("play", mp3)]
+
+
+@pytest.mark.parametrize("name", ["gone.mp3", "program.exe", None])
+def test_play_refuses_anything_but_an_existing_mp3(
+    monkeypatch: pytest.MonkeyPatch, opened: list[tuple[str, Path]], tmp_path: Path, name: str | None
+) -> None:
+    (tmp_path / "program.exe").write_bytes(b"x")
+    request: dict[str, object] = {"action": "play"}
+    if name:
+        request["path"] = str(tmp_path / name)
+    [response] = run_host(monkeypatch, frame(request))
+    assert response == {"status": "error", "message": "The MP3 was moved or deleted", "final": True}
+    assert opened == []
+
+
+def test_open_failure_is_one_final_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    mp3 = tmp_path / "Song.mp3"
+    mp3.write_bytes(b"x")
+
+    def _fail(file: Path) -> None:
+        raise OSError(0, "Explorer could not open the folder", str(file.parent))
+
+    monkeypatch.setattr(native_messaging, "show_in_folder", _fail)
+    [response] = run_host(monkeypatch, frame({"action": "show_in_folder", "path": str(mp3)}))
+    assert response["status"] == "error" and response["final"] is True
+    assert "Explorer could not open the folder" in response["message"]
+
+
+def test_play_opens_through_explorer_outside_the_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    launched: list[object] = []
+    monkeypatch.setattr(updater, "launch_detached", launched.append)
+    mp3 = tmp_path / "A, B & C - 100% Song.mp3"
+    core.open_file(mp3)
+    # one command line, path quoted: explorer.exe splits an unquoted path at commas
+    assert launched == [f'explorer.exe "{mp3}"']
+
+
 # --- get_version --------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""Pure helpers of core.py: filenames, artist, folders, URL check, error messages."""
+"""Pure helpers of core.py: filenames, artist and tags, folders, URL check, error messages."""
 
 import subprocess
 from pathlib import Path
@@ -9,10 +9,14 @@ from ytmp3_host import core
 from ytmp3_host.core import (
     DEFAULT_FILENAME,
     UNKNOWN_ARTIST,
+    artist_for,
     artist_from_filename,
     build_download_command,
     describe_error,
+    downloaded_mp3,
+    extra_tags,
     is_youtube_url,
+    parse_info,
     requested_filename,
     resolve_folder,
     safe_filename,
@@ -105,6 +109,53 @@ def test_title_from_filename(filename: str, expected: str) -> None:
     assert title_from_filename(filename) == expected
 
 
+@pytest.mark.parametrize(
+    ("filename", "info", "expected"),
+    [
+        # the filename's artist wins: the user sees it and may have typed it
+        ("Artist - Song", {"artists": ["Someone Else"], "channel": "Channel"}, "Artist"),
+        ("Song", {"artists": ["Queen", "David Bowie"], "channel": "Queen - Topic"}, "Queen, David Bowie"),
+        ("Song", {"channel": "Queen - Topic"}, "Queen"),
+        ("Song", {"channel": "jawed"}, "jawed"),
+        ("Song", {"artists": [], "channel": ""}, UNKNOWN_ARTIST),
+        ("Song", {}, UNKNOWN_ARTIST),
+    ],
+)
+def test_artist_for(filename: str, info: dict[str, object], expected: str) -> None:
+    assert artist_for(filename, info) == expected
+
+
+def test_extra_tags_keeps_only_the_values_a_video_has() -> None:
+    info = {"album": "Whenever You Need Somebody", "release_year": 1987, "track_number": 1, "album_artist": "x",
+            "webpage_url": "https://www.youtube.com/watch?v=abc", "channel": "Rick Astley"}
+    assert extra_tags(info) == {
+        "album": "Whenever You Need Somebody",
+        "date": "1987",
+        "track": "1",
+        "comment": "https://www.youtube.com/watch?v=abc",
+    }
+    assert extra_tags({"album": "", "release_year": None}) == {}
+
+
+@pytest.mark.parametrize("text", ["not json", "[1, 2]", '"title"', ""])
+def test_parse_info_ignores_anything_but_a_json_object(text: str) -> None:
+    assert parse_info(text) == {}
+
+
+def test_downloaded_mp3_accepts_only_existing_absolute_mp3s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    mp3 = tmp_path / "Song.MP3"
+    mp3.write_bytes(b"x")
+    exe = tmp_path / "evil.exe"
+    exe.write_bytes(b"x")
+    monkeypatch.chdir(tmp_path)
+    assert downloaded_mp3(str(mp3)) == mp3
+    assert downloaded_mp3(str(exe)) is None  # play must never run a program
+    assert downloaded_mp3(str(tmp_path / "gone.mp3")) is None
+    assert downloaded_mp3(str(tmp_path)) is None
+    assert downloaded_mp3("Song.MP3") is None  # relative
+    assert downloaded_mp3("") is None
+
+
 def test_resolve_folder_empty_creates_default(default_folder: Path) -> None:
     assert not default_folder.exists()
     assert resolve_folder("  ") == default_folder
@@ -157,7 +208,9 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path) -> No
     assert value("--audio-format") == "mp3"
     assert value("--audio-quality") == "0"  # LAME V0, see CLAUDE.md priorities
     assert value("-o") == f"{stem}.%(ext)s"
-    assert value("--print") == f"before_dl:{core.TITLE_MARKER}%(title)s"
+    assert value("--print") == (
+        f"before_dl:{core.INFO_MARKER}%(.{{title,artists,album,release_year,track_number,channel,webpage_url}})j"
+    )
     assert "--no-simulate" in cmd  # --print must never turn the call into a dry run
     assert value("--ffmpeg-location") == str(core.FFMPEG_PATH)
     assert {"--no-playlist", "--write-thumbnail", "-x", "--newline", "--progress"} <= set(cmd)

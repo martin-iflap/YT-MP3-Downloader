@@ -32,6 +32,8 @@ const ACTION_TIMEOUTS_MS = {
   download_gui: 30 * 1000,
   select_folder: 10 * 60 * 1000,
   get_current_folder: 15 * 1000,
+  show_in_folder: 15 * 1000,
+  play: 15 * 1000,
   get_version: 30 * 1000,
   update_yt_dlp: 7 * 60 * 1000,
   update_host: 9 * 60 * 1000
@@ -87,16 +89,27 @@ async function isSidebarOpen() {
   }
 }
 
-function notify(title, message) {
+// notification id -> the MP3 a click on it shows in its folder
+const notificationFiles = new Map();
+
+function notify(title, message, path) {
   browser.notifications.create({ type: 'basic', iconUrl: NOTIFICATION_ICON, title, message })
+    .then((id) => { if (path) notificationFiles.set(id, path); })
     .catch(e => console.warn('Notification create failed:', e));
 }
+
+browser.notifications.onClicked.addListener((id) => {
+  const path = notificationFiles.get(id);
+  if (path) hostRequest({ action: 'show_in_folder', path });
+});
+browser.notifications.onClosed.addListener(id => notificationFiles.delete(id));
 
 // The sidebar shows results for its own requests; notify only when nobody would see them.
 async function notifyDownloadResult(origin, response) {
   if (origin === 'sidebar' && await isSidebarOpen()) return;
   if (response.status === 'success') {
-    notify('Download Complete', `${response.filename || 'YouTube MP3'} saved successfully!`);
+    const saved = `${response.filename || 'YouTube MP3'} saved successfully!`;
+    notify('Download Complete', response.path ? `${saved} Click to show it in its folder.` : saved, response.path);
   } else {
     notify('Download Failed', response.message || 'An error occurred during download');
   }
@@ -341,6 +354,7 @@ browser.runtime.onMessage.addListener((msg) => {
   if (msg.url) payload.url = msg.url;
   if (msg.folder) payload.folder = msg.folder;
   if (msg.filename) payload.filename = msg.filename;
+  if (msg.path) payload.path = msg.path;
 
   runNativeAction(payload, msg.requestId || crypto.randomUUID(), 'sidebar');
 });

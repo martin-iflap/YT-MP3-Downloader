@@ -201,6 +201,11 @@ window must outlive the request, so `background.js` leaves that port open
 | `download_gui`       | `url?`, `folder?`, `filename?` | Opens the pre-filled Tk window, `gui.open_gui()`                                                    | 30 s (until `"GUI opened"`) |
 | `select_folder`      | `folder?`                      | Folder picker starting at `folder`; returns the selection, or `folder` (else the default) on cancel | 10 min (user interaction)   |
 | `get_current_folder` | —                              | Returns the default folder, creating it if missing                                                  | 15 s                        |
+| `show_in_folder`     | `path`                         | Opens the MP3's folder in Explorer with it selected (`core.show_in_folder`)                         | 15 s                        |
+| `play`               | `path`                         | Opens the MP3 in its default app, through Explorer (`core.open_file`)                               | 15 s                        |
+
+`show_in_folder` and `play` only accept an absolute path to an existing `.mp3`
+(`core.downloaded_mp3`); anything else is "The MP3 was moved or deleted".
 
 The host treats a missing or unknown `action` as `download`. `background.js` rejects
 unknown actions before spawning the host, so this path is not reached from the extension.
@@ -373,6 +378,8 @@ is imported at module level.
 | `download_gui`       | `gui.open_gui(...)`, then `sys.exit(0)` once the window is closed (the port is kept open, so stdin never reaches EOF) |
 | `select_folder`      | `gui.select_folder(folder)`                                                                                           |
 | `get_current_folder` | `send_current_folder("")`: the default folder, created if missing                                                     |
+| `show_in_folder`     | `run_open_file(path, select=True)`                                                                                    |
+| `play`               | `run_open_file(path, select=False)`                                                                                   |
 
 **`main()` request loop.**
 
@@ -459,7 +466,8 @@ yt-dlp's own last `ERROR:` line (e.g. "This video is unavailable"), never the co
 | `artist_from_filename(filename)`                                                    | Text before the first spaced dash (` - `, ` – `, ` — `), so `Jay-Z - Song` gives `Jay-Z`; else before the first `-`; else `<unknown>`.                                                                                                                                                                                                                                                                                             |
 | `download_audio(url, folder, filename, on_progress, on_start, on_warning, timeout)` | The single pipeline (§6.7). `on_warning` reports a missing title or thumbnail. Verifies the final MP3 exists before returning it. Raises `FileExistsError`, `FileNotFoundError` (ffmpeg/yt-dlp missing, no MP3 produced), `TimeoutExpired`, `CalledProcessError`. Temp files are always removed.                                                                                                                                   |
 | `describe_error(error)`                                                             | One-line user message for a `download_audio` exception (headless and GUI).                                                                                                                                                                                                                                                                                                                                                         |
-| `embed_thumbnail(temp_mp3, thumb, artist, output)`                                  | One ffmpeg pass (50 s timeout): audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3, artist. Writes `output` directly, removes it on failure. Raises `FileExistsError` itself if `output` exists: ffmpeg 7 exits 0 when `-n` refuses to overwrite.                                                                                                                                                                |
+| `artist_for(filename, info)`, `extra_tags(info)`                                    | The artist from the filename, else the video's `artists` (YouTube Music) or channel without " - Topic". Extra tags: album, year (`release_year`), track number, the video URL as comment, when the video has them.                                                                                                                                                                                                                 |
+| `embed_thumbnail(temp_mp3, thumb, artist, title, output, tags)`                     | One ffmpeg pass (50 s timeout): audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3, artist, title and `tags`. Writes `output` directly, removes it on failure. Raises `FileExistsError` itself if `output` exists: ffmpeg 7 exits 0 when `-n` refuses to overwrite.                                                                                                                                              |
 | `kill_process_tree(process)`                                                        | `taskkill /F /T`; yt-dlp.exe is a onefile build, `Popen.kill()` only stops its bootloader.                                                                                                                                                                                                                                                                                                                                         |
 | `remove_temp_files(temp_stem)`                                                      | Deletes `<temp_stem>.*`, retrying files Windows still locks after a kill.                                                                                                                                                                                                                                                                                                                                                          |
 
@@ -470,7 +478,8 @@ yt-dlp.exe --no-playlist --concurrent-fragments 3
            -x --audio-format mp3 --audio-quality 0
            --write-thumbnail
            --ffmpeg-location <ffmpeg.exe>
-           --print after_move:YTMP3_TITLE:%(title)s
+           --print before_dl:YTMP3_INFO:%(.{title,artists,album,release_year,track_number,channel,webpage_url})j
+           --no-simulate
            --progress --newline --encoding utf-8
            -o "<folder>/_ytmp3_<hex>.%(ext)s"
            <url>
@@ -481,9 +490,9 @@ flowchart LR
     U["YouTube URL"] --> Y["yt-dlp.exe (300 s watchdog)"]
     Y -- "audio, LAME V0" --> M["_ytmp3_hex.mp3"]
     Y -- "raw thumbnail" --> J["_ytmp3_hex.webp"]
-    Y -- "stdout" --> T["title after YTMP3_TITLE:"]
+    Y -- "stdout" --> T["video info JSON after YTMP3_INFO:"]
     T --> N["filename = safe_filename(title)<br/>unless one was requested"]
-    M --> F["ffmpeg: copy audio + crop/encode cover<br/>ID3v2.3, artist metadata"]
+    M --> F["ffmpeg: copy audio + crop/encode cover<br/>ID3v2.3, artist/title/album/year/URL tags"]
     J --> F
     N --> F
     F --> OUT[("folder/filename.mp3")]
@@ -713,18 +722,18 @@ on `core`, not on `config`.
 | `sys.stdin`, `sys.stdout`              | `io.TextIOWrapper` over `BytesIO`                        | `run_host()` in `test_native_host.py` | `native_messaging` uses `sys.stdin.buffer` / `sys.stdout.buffer` at call time. The text layer is flushed too, so a stray `print()` fails. |
 | `native_messaging.download_audio`      | `functools.partial(core.download_audio, timeout=1)`      | one timeout test                      | The 300 s default argument is bound at definition time, so patching `DOWNLOAD_TIMEOUT_S` would not work.                                  |
 | An `MP3.ACTIONS` entry                 | A handler that raises                                    | `monkeypatch.setitem`                 | Checks that `main()` still sends exactly one final error.                                                                                 |
-| `FAKE_YTDLP_*` env vars                | Fake behavior (below)                                    | `FakeYtDlp.set(mode, title)`          | Environment variables reach the child process; no files or arguments needed.                                                              |
+| `FAKE_YTDLP_*` env vars                | Fake behavior (below)                                    | `FakeYtDlp.set(mode, title, info)`    | Environment variables reach the child process; no files or arguments needed.                                                              |
 | `USERPROFILE`, `YTMP3_LOG_LEVEL`       | `tmp_path`, `CRITICAL`                                   | `host_env()`, subprocess tests        | A spawned host has no monkeypatch: this keeps its default folder in `tmp_path` and stops it writing `mp3.log` into the repo.              |
 
 **`fake_yt_dlp.py`** prints yt-dlp-style progress lines, writes a `.webm.part` file
 (so cleanup is tested), then acts according to `FAKE_YTDLP_MODE`:
 
-| Mode                               | Behavior                                                                        |
-|------------------------------------|---------------------------------------------------------------------------------|
-| `success` (default)                | Writes `<stem>.mp3` + thumbnail, prints the title after the `--print` template. |
-| `fail`                             | Prints a `WARNING:` and an `ERROR:` line, exits 1 (`.part` left behind).        |
-| `hang`                             | Starts a grandchild that holds stdout open for 30 s, then sleeps 30 s itself.   |
-| `no_title` / `no_thumb` / `no_mp3` | Leaves out that one output.                                                     |
+| Mode                               | Behavior                                                                                                                                            |
+|------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `success` (default)                | Writes `<stem>.mp3` + thumbnail, prints the video info as JSON (the fields the `--print` template asks for; `FAKE_YTDLP_TITLE`, `FAKE_YTDLP_INFO`). |
+| `fail`                             | Prints a `WARNING:` and an `ERROR:` line, exits 1 (`.part` left behind).                                                                            |
+| `hang`                             | Starts a grandchild that holds stdout open for 30 s, then sleeps 30 s itself.                                                                       |
+| `no_title` / `no_thumb` / `no_mp3` | Leaves out that one output.                                                                                                                         |
 
 `FAKE_YTDLP_MP3` / `FAKE_YTDLP_THUMB` make it copy real media instead of junk bytes
 (full-pipeline test with real ffmpeg). The process structure matches the real binary:

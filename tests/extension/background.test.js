@@ -147,6 +147,39 @@ test('context menu download uses the saved folder and always notifies', async ()
   ]);
 });
 
+test('show_in_folder and play forward the path to the host', async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'show_in_folder', { path: 'C:\\Music\\Song.mp3' });
+  sidebarAction(browser, 'play', { path: 'C:\\Music\\Song.mp3' });
+
+  assert.deepStrictEqual(state.ports.map(p => p.posted), [
+    [{ action: 'show_in_folder', path: 'C:\\Music\\Song.mp3' }],
+    [{ action: 'play', path: 'C:\\Music\\Song.mp3' }]
+  ]);
+  state.ports.forEach(port => port.reply({ status: 'success', final: true }));
+  await flush();
+  assert.equal(finals(state).length, 2);
+  assert.ok(state.ports.every(port => port.disconnected));
+  assert.equal(state.notifications.length, 0);
+});
+
+test('clicking a download notification shows the MP3 in its folder', async () => {
+  const { browser, state } = loadBackground();
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: VIDEO_URL });
+  await flush();
+  state.ports[0].reply({ status: 'success', filename: 'Song', path: 'C:\\Music\\Song.mp3', final: true });
+  await flush();
+
+  const [notification] = state.notifications;
+  assert.match(notification.message, /Click to show it in its folder/);
+  browser.notifications.onClicked.fire('notification-1');
+  assert.deepStrictEqual(state.ports[1].posted, [{ action: 'show_in_folder', path: 'C:\\Music\\Song.mp3' }]);
+
+  browser.notifications.onClosed.fire('notification-1');
+  browser.notifications.onClicked.fire('notification-1');
+  assert.equal(state.ports.length, 2, 'a closed notification no longer opens anything');
+});
+
 test('context menu download without a saved folder lets the host pick its default', async () => {
   const { browser, state } = loadBackground();
   browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: 'https://youtu.be/dQw4w9WgXcQ' });

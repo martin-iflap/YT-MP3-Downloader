@@ -392,7 +392,7 @@ def install_deno() -> str:
 # --- host ---------------------------------------------------------------------
 
 
-def launch_detached(command: list[str]) -> None:
+def launch_detached(command: list[str] | str) -> None:
     """Start a process that outlives this host and Firefox's native-messaging job.
 
     Firefox runs the host in a job object and ends the job's processes with the
@@ -400,6 +400,10 @@ def launch_detached(command: list[str]) -> None:
     (CreateProcess then fails with access denied), it is started without breaking
     away and may not survive; the extension then shows the manual download link
     once the update does not arrive.
+
+    Args:
+        command: The argument list, or a command line passed to Windows as it is
+            (for programs like explorer.exe that parse it their own way).
     """
     def _start(creationflags: int) -> None:
         subprocess.Popen(
@@ -415,7 +419,7 @@ def launch_detached(command: list[str]) -> None:
     try:
         _start(flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
     except PermissionError as e:
-        logger.warning("Could not break away from the job (%s), starting %s inside it", e, command[0])
+        logger.warning("Could not break away from the job (%s), starting %s inside it", e, command)
         _start(flags)
 
 

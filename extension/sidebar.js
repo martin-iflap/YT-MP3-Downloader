@@ -163,7 +163,7 @@ downloadBtn.addEventListener('click', () => {
     setBusy(false);
     if (resp.status === 'success') {
       filenameInput.value = '';
-      showResult(resp.message || `Downloaded: ${resp.filename || 'YouTube MP3'}`, 'success');
+      showResult(resp.message || `Downloaded: ${resp.filename || 'YouTube MP3'}`, 'success', undefined, resp.path);
     } else {
       showResult(resp.message || 'Download failed', 'error', resp.helpUrl);
     }
@@ -194,6 +194,10 @@ function clearResult() {
   resultDiv.textContent = '';
 }
 
+// The installer is not code-signed, so Firefox and Windows SmartScreen warn about it on first download/run.
+const UNSIGNED_INSTALLER_HINT = 'Firefox or Windows may warn that the installer is uncommon or from an unknown publisher, '
+  + 'because it is not code-signed. In Firefox allow the download; in "Windows protected your PC" click "More info", then "Run anyway".';
+
 // helpUrl (set by background.js, e.g. when the app is not installed) adds a link after the message.
 function messageWithLink(message, helpUrl) {
   const text = document.createElement('span');
@@ -204,15 +208,36 @@ function messageWithLink(message, helpUrl) {
     link.target = '_blank';
     link.rel = 'noopener';
     link.textContent = 'Download the installer';
-    text.append(' ', link);
+    const hint = document.createElement('small');
+    hint.textContent = UNSIGNED_INSTALLER_HINT;
+    text.append(' ', link, hint);
   }
   return text;
 }
 
-function showResult(message, type, helpUrl) {
+// "Show in folder" and "Play" for a downloaded MP3; the host opens it.
+function fileActions(path) {
+  const row = document.createElement('div');
+  row.className = 'file-actions';
+  for (const [label, action] of [['Show in folder', 'show_in_folder'], ['Play', 'play']]) {
+    const button = document.createElement('button');
+    button.className = 'secondary-btn secondary-narrow';
+    button.textContent = label;
+    button.addEventListener('click', () => sendNativeAction({ action, path }, (resp) => {
+      if (resp.final && resp.status === 'error') showResult(resp.message || 'Could not open the MP3', 'error', resp.helpUrl);
+    }));
+    row.append(button);
+  }
+  return row;
+}
+
+// path (a downloaded MP3) adds its file buttons and keeps the result until the next one.
+function showResult(message, type, helpUrl, path) {
   clearTimeout(hideTimer);
-  resultDiv.replaceChildren(messageWithLink(message, helpUrl));
+  const content = messageWithLink(message, helpUrl);
+  if (path) content.append(fileActions(path));
+  resultDiv.replaceChildren(content);
   resultDiv.className = `show ${type}`;
   resultDiv.scrollIntoView({ block: 'nearest' });
-  if (type === 'success') hideTimer = setTimeout(clearResult, 5000);
+  if (type === 'success' && !path) hideTimer = setTimeout(clearResult, 5000);
 }
