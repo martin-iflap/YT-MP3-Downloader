@@ -13,7 +13,12 @@ lazy from ytmp3_host.gui import open_gui, select_folder as pick_folder
 lazy from ytmp3_host.health import host_status
 from ytmp3_host.native_messaging import Message, read_message, run_native, send_current_folder, send_message
 lazy from ytmp3_host.selfcheck import self_check
-lazy from ytmp3_host.updater import UpdateError, update_host as install_host_update, update_yt_dlp as install_yt_dlp
+lazy from ytmp3_host.updater import (
+    UpdateError,
+    remove_installed_downloads,
+    update_host as install_host_update,
+    update_yt_dlp as install_yt_dlp,
+)
 
 # not __name__: run as a script (and when frozen) that is "__main__", outside the
 # "ytmp3_host" logger whose level setup_logging() sets
@@ -58,8 +63,11 @@ def get_version(_request: Message) -> None:
     """Handle the `get_version` action: the host version and the state of its tools.
 
     1.x hosts do not know this action and answer it as a download without a URL
-    ("Invalid YouTube URL"); the extension relies on that to recognize them.
+    ("Invalid YouTube URL"); the extension relies on that to recognize them. It also
+    deletes the installer download of an update that is done (a few ms; the sidebar
+    sends this on every open, and the new version answers it after an update).
     """
+    remove_installed_downloads()
     send_message({"status": "success", **host_status(), "final": True})
 
 

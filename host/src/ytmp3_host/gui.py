@@ -18,7 +18,7 @@ import customtkinter as ctk
 from ytmp3_host.config import ICON_PATH
 from ytmp3_host.core import (
     describe_error,
-    download_audio,
+    download_with_repair,
     ensure_default_folder,
     is_youtube_url,
     kill_process_tree,
@@ -265,7 +265,7 @@ class DownloaderApp(ctk.CTk):
         threading.Thread(target=self._download_thread, args=(url, folder_path, filename), daemon=True).start()
 
     def _download_thread(self, url: str, folder_path: Path, filename: str) -> None:
-        """Run core.download_audio and report the result in the window.
+        """Run core.download_with_repair and report the result in the window.
 
         Args:
             url: The YouTube video URL.
@@ -280,13 +280,15 @@ class DownloaderApp(ctk.CTk):
 
         warnings: list[str] = []
         try:
-            mp3_path = download_audio(
+            mp3_path = download_with_repair(
                 url,
                 folder_path,
                 filename,
                 on_progress=lambda p: self.after(0, self.progress_bar.set, p),
                 on_start=_on_start,
                 on_warning=warnings.append,
+                on_info=lambda message: self.after(0, self.show_status, message, "info"),
+                is_cancelled=lambda: self.download_cancelled,
             )
         except Exception as e:
             if self.download_cancelled:

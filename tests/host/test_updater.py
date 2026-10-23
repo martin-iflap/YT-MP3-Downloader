@@ -9,11 +9,13 @@ or the real install; the lock file and download folder are under tmp_path
 
 import hashlib
 import http.server
+import io
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
+import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from ytmp3_host import __version__, github, updater
-from ytmp3_host.github import HOST_REPO, YT_DLP_REPO
+from ytmp3_host.github import DENO_REPO, HOST_REPO, YT_DLP_REPO
 from ytmp3_host.updater import UpdateError
 
 OLD, NEW = "2026.08.19", "2026.09.01"
@@ -110,6 +112,7 @@ def install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Install:
     exe = app / "yt-dlp.exe"
     exe.write_bytes(script(OLD))
     monkeypatch.setattr(updater, "YT_DLP_PATH", exe)
+    monkeypatch.setattr(updater, "DENO_PATH", app / "deno.exe")
     monkeypatch.setattr(
         updater, "yt_dlp_version_command", lambda path=None: [sys.executable, str(path or exe), "--version"]
     )
@@ -118,7 +121,7 @@ def install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Install:
 
 def latest(monkeypatch: pytest.MonkeyPatch, **tags: str | None) -> None:
     """Set the latest release per repo: latest(monkeypatch, yt_dlp="2026.09.01", host="v2.1.0")."""
-    repos = {"yt_dlp": YT_DLP_REPO, "host": HOST_REPO}
+    repos = {"yt_dlp": YT_DLP_REPO, "host": HOST_REPO, "deno": DENO_REPO}
     by_repo = {repos[key]: tag for key, tag in tags.items()}
     monkeypatch.setattr(updater, "latest_release_tag", lambda repo: by_repo.get(repo))
 
@@ -370,6 +373,91 @@ def test_two_updates_at_once_download_once(install: Install, server: ReleaseServ
     assert server.gets("yt-dlp.exe") == 1, "the second saw the first's update and did not download"
 
 
+# --- Deno ---------------------------------------------------------------------
+
+DENO_TAG = "v2.9.8"
+
+
+@pytest.fixture
+def deno(install: Install, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Where Deno goes (next to yt-dlp.exe, not there yet); "deno.exe" is run like the fake yt-dlp scripts."""
+    exe = install.exe.with_name("deno.exe")  # the install fixture's DENO_PATH
+    monkeypatch.setattr(updater, "deno_version_command", lambda path=None: [sys.executable, str(path or exe)])
+    latest(monkeypatch, deno=DENO_TAG)
+    return exe
+
+
+def publish_deno(server: ReleaseServer, exe: bytes = script("2.9.8"), checksum_of: bytes | None = None) -> None:
+    """Publish the Deno zip and its checksum in the Get-FileHash list format Deno's releases use."""
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("deno.exe", exe)
+    data = archive.getvalue()
+    digest = hashlib.sha256(checksum_of or data).hexdigest().upper()
+    checksum = f"\r\nAlgorithm : SHA256\r\nHash      : {digest}\r\nPath      : C:\\a\\deno\\{updater.DENO_ASSET}\r\n\r\n"
+    server.release(DENO_REPO, DENO_TAG, **{updater.DENO_ASSET: data, updater.DENO_SUMS: checksum.encode()})
+
+
+def test_deno_is_installed_from_the_checked_zip(deno: Path, install: Install, server: ReleaseServer) -> None:
+    publish_deno(server)
+    assert updater.install_deno() == "2.9.8"
+    assert deno.read_bytes() == script("2.9.8")
+    assert install.files == ["deno.exe", "yt-dlp.exe"]  # no zip or download left
+
+
+def test_a_working_deno_is_not_downloaded_again(deno: Path, server: ReleaseServer) -> None:
+    deno.write_bytes(script("2.9.8"))
+    assert updater.install_deno() == "2.9.8"
+    assert server.requests == []
+
+
+def test_a_broken_deno_is_replaced(deno: Path, server: ReleaseServer) -> None:
+    deno.write_bytes(script(None))
+    publish_deno(server)
+    assert updater.install_deno() == "2.9.8"
+
+
+def test_a_damaged_deno_is_never_installed(deno: Path, install: Install, server: ReleaseServer) -> None:
+    publish_deno(server, checksum_of=b"the real zip")
+    with pytest.raises(UpdateError, match="Deno could not be installed: .* damaged"):
+        updater.install_deno()
+    assert install.files == ["yt-dlp.exe"]
+
+
+def test_a_deno_that_does_not_run_is_never_installed(deno: Path, install: Install, server: ReleaseServer) -> None:
+    publish_deno(server, exe=script(None))
+    with pytest.raises(UpdateError, match="does not run"):
+        updater.install_deno()
+    assert install.files == ["yt-dlp.exe"]
+
+
+def kill_leftovers(deno: Path) -> list[Path]:
+    """The files a Deno install killed mid-way leaves next to deno.exe."""
+    leftovers = [deno.with_name("deno.download.zip"), deno.with_name("deno.download.exe")]
+    for path in leftovers:
+        path.write_bytes(b"partial")
+    return leftovers
+
+
+def test_a_killed_deno_install_is_cleaned_up_by_the_next_one(deno: Path, install: Install, server: ReleaseServer) -> None:
+    deno.write_bytes(script("2.9.8"))  # e.g. another host finished it
+    kill_leftovers(deno)
+    updater.install_deno()
+    assert install.files == ["deno.exe", "yt-dlp.exe"]
+
+
+def test_a_killed_deno_install_is_cleaned_up_by_a_yt_dlp_update(deno: Path, install: Install) -> None:
+    kill_leftovers(deno)
+    assert updater.update_yt_dlp() == OLD  # offline: no_github
+    assert install.files == ["yt-dlp.exe"]
+
+
+def test_deno_offline_is_an_error(deno: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    latest(monkeypatch)
+    with pytest.raises(UpdateError, match="Deno could not be installed: GitHub could not be reached"):
+        updater.install_deno()
+
+
 # --- host self-update ---------------------------------------------------------
 
 
@@ -494,6 +582,32 @@ def test_downloads_of_older_releases_are_removed(
     publish_host(server)
     updater.update_host()
     assert [p.name for p in (tmp_path / "update").iterdir()] == ["v99.0.0"]
+
+
+def test_installed_downloads_are_removed_and_newer_ones_kept(tmp_path: Path) -> None:
+    update_dir = tmp_path / "update"
+    for tag in ("v1.9.0", f"v{__version__}", "v99.0.0", "junk"):
+        (update_dir / tag).mkdir(parents=True)
+        (update_dir / tag / updater.INSTALLER_ASSET).write_bytes(SETUP)
+    updater.remove_installed_downloads()
+    assert [p.name for p in update_dir.iterdir()] == ["v99.0.0"], "a newer release may be about to install"
+
+
+def test_the_download_folder_goes_once_it_is_empty(tmp_path: Path) -> None:
+    (tmp_path / "update" / f"v{__version__}").mkdir(parents=True)
+    updater.remove_installed_downloads()
+    assert not (tmp_path / "update").exists()
+    updater.remove_installed_downloads()  # nothing there: no error
+
+
+def test_an_installer_still_running_is_removed_later(tmp_path: Path) -> None:
+    folder = tmp_path / "update" / f"v{__version__}"
+    folder.mkdir(parents=True)
+    with (folder / "install.log").open("w"):  # the installer still writes its log (Windows: can't delete)
+        updater.remove_installed_downloads()
+    assert (folder / "install.log").exists()
+    updater.remove_installed_downloads()
+    assert not (tmp_path / "update").exists()
 
 
 @pytest.mark.parametrize("tag", [None, "v-1.1"], ids=["offline", "1.x-style-tag"])

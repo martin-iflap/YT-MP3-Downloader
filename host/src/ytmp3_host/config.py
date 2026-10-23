@@ -4,7 +4,7 @@ download folder, plus the logging setup.
 Installed, each host version has its own folder (see mp3_installer.iss):
 
     <install dir>\\                    INSTALL_DIR: what the host manages at runtime
-        yt-dlp.exe  mp3.log  update.lock
+        yt-dlp.exe  deno.exe (only once needed)  mp3.log  update.lock
         versions\\2.0.0\\                BIN_DIR: what the installer ships
             mp3.exe  _internal\\  ffmpeg.exe  mp3.ico
 
@@ -40,6 +40,8 @@ else:
 FFMPEG_PATH = BIN_DIR / "ffmpeg.exe"
 # shared by all host versions and kept current by updater.py
 YT_DLP_PATH = INSTALL_DIR / "yt-dlp.exe"
+# the JavaScript runtime yt-dlp uses for YouTube; only downloaded once a download needs it
+DENO_PATH = INSTALL_DIR / "deno.exe"
 UPDATE_LOCK_PATH = INSTALL_DIR / "update.lock"
 ICON_PATH = ICON_DIR / "mp3.ico"
 LOG_PATH = LOG_DIR / "mp3.log"
@@ -72,6 +74,3 @@ def setup_logging() -> None:
         handlers.append(logging.StreamHandler(sys.stderr))
     logging.basicConfig(level=max(level, logging.WARNING), format=LOG_FORMAT, handlers=handlers)
     logging.getLogger("ytmp3_host").setLevel(level)
-
-# todo: give the host architecture a second thought to make sure it is all good
-# we probably also want to delete older versions once the current one is verified to work.

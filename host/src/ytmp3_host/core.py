@@ -14,7 +14,9 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from ytmp3_host.config import DEFAULT_FOLDER, FFMPEG_PATH, YT_DLP_PATH
+from ytmp3_host.config import DEFAULT_FOLDER, DENO_PATH, FFMPEG_PATH, YT_DLP_PATH
+# only download_with_repair's failure path uses them (urllib, and health imports this module)
+lazy from ytmp3_host import health, updater
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,8 @@ THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 DEFAULT_FILENAME = "Youtube MP3"
 UNKNOWN_ARTIST = "<unknown>"
 YOUTUBE_HOSTS = ("youtube.com", "youtu.be/")
+# what yt-dlp prints when YouTube asks for a JavaScript challenge it could not solve without a runtime
+JS_CHALLENGE_FAILURES = ("Signature solving failed", "n challenge solving failed", "Requested format is not available")
 NOISE_WORDS = ("Official", "Music", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean", "Live")
 
 WINDOWS_RESERVED_NAMES = frozenset(
@@ -174,7 +178,9 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
     existing file can stop it early. `--audio-quality 0` is LAME V0, the best VBR
     preset, which encodes as fast as the default V5. `--print` implies `--quiet`,
     so `--progress` keeps the progress lines the GUI parses; `--no-simulate` makes
-    sure printing never turns the call into a dry run.
+    sure printing never turns the call into a dry run. A Deno the host installed is
+    passed explicitly (yt-dlp only looks on PATH); without one, yt-dlp uses a Deno on
+    PATH or YouTube clients that need no JavaScript, which is faster.
 
     Args:
         url: The YouTube video URL.
@@ -182,6 +188,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
     Returns:
         The command as an argument list for subprocess.
     """
+    js_runtime = ["--js-runtimes", f"deno:{DENO_PATH}"] if DENO_PATH.exists() else []
     return [
         str(YT_DLP_PATH),
         "--no-playlist",
@@ -193,6 +200,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
         "--no-simulate",
         "--progress", "--newline",
         "--encoding", "utf-8",
+        *js_runtime,
         "-o", f"{temp_stem}.%(ext)s",
         url,
     ]
@@ -393,7 +401,7 @@ def _run_yt_dlp(
     Raises:
         subprocess.TimeoutExpired: If the download exceeded timeout.
         subprocess.CalledProcessError: If yt-dlp exited with an error. `output`
-            holds the last lines of its output.
+            holds the last lines of its output, without progress lines.
     """
     with subprocess.Popen(
         build_download_command(url, temp_stem),
@@ -424,11 +432,12 @@ def _run_yt_dlp(
                     title = line[len(TITLE_MARKER):].strip()
                     on_title(title)
                     continue
-                output_lines.append(line)
-                if on_progress:
-                    match = PROGRESS_RE.search(line)
-                    if match:
-                        on_progress(float(match.group(1)) / 100.0)
+                match = PROGRESS_RE.search(line)
+                if match and on_progress:
+                    on_progress(float(match.group(1)) / 100.0)
+                # progress lines would push the warnings download_with_repair reads out of the error's output
+                if not (match and line.startswith("[download]")):
+                    output_lines.append(line)
             process.wait()
         finally:
             watchdog.cancel()
@@ -538,3 +547,96 @@ def download_audio(
         raise
     finally:
         remove_temp_files(temp_stem)
+
+
+def _yt_dlp_failed(error: Exception) -> bool:
+    """Whether download_audio failed because of yt-dlp itself (an error exit or a missing exe)."""
+    match error:
+        case subprocess.CalledProcessError():  # yt-dlp's or ffmpeg's
+            return not (isinstance(error.cmd, list) and error.cmd and error.cmd[0] == str(FFMPEG_PATH))
+        case FileNotFoundError():
+            return error.filename == str(YT_DLP_PATH)
+        case _:
+            return False
+
+
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    """Size and modification time of path, to tell whether an update replaced it; None if missing."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return stat.st_size, stat.st_mtime_ns
+
+
+def _repair_yt_dlp(error: Exception, on_info: Callable[[str], object]) -> bool:
+    """Update yt-dlp, and install Deno if YouTube asked for JavaScript, after a failed download.
+
+    Returns:
+        True if anything changed, so trying again can help. Repairs that fail are
+        logged; the caller reports the original error.
+    """
+    before = _file_stamp(YT_DLP_PATH)
+    on_info("The download failed, checking for a yt-dlp update...")
+    try:
+        updater.update_yt_dlp()
+    except updater.UpdateError as e:
+        logger.error("Repair after a failed download: %s", e)
+    repaired = _file_stamp(YT_DLP_PATH) not in (None, before)
+
+    output = str(getattr(error, "output", None) or "")
+    if any(sign in output for sign in JS_CHALLENGE_FAILURES) and health.find_js_runtime() is None:
+        on_info("YouTube needs an extra component for this video (Deno, about 45 MB). "
+                "Downloading it once, this can take a minute...")
+        try:
+            updater.install_deno()
+            repaired = True
+        except updater.UpdateError as e:
+            logger.error("Repair after a failed download: %s", e)
+    return repaired
+
+
+def download_with_repair(
+    url: str,
+    folder: Path,
+    filename: str = "",
+    on_progress: Callable[[float], object] | None = None,
+    on_start: Callable[[subprocess.Popen[str], Path], None] | None = None,
+    on_warning: Callable[[str], object] | None = None,
+    on_info: Callable[[str], object] | None = None,
+    is_cancelled: Callable[[], bool] = lambda: False,
+) -> Path:
+    """download_audio, tried once more after a yt-dlp failure that a repair may fix.
+
+    YouTube changes break older yt-dlp versions, so when yt-dlp fails (or is
+    missing) it is updated, and the download is retried only if a new yt-dlp was
+    installed. If yt-dlp's output says YouTube wants a JavaScript challenge solved
+    and there is no runtime, Deno is installed too. Other failures (an existing
+    file, ffmpeg, timeouts) are raised right away, as is a failure while offline.
+
+    Args:
+        url: The URL of the video to download.
+        folder: The folder to save the downloaded file in.
+        filename: The name of the file to save the download as.
+        on_progress: Optional callback receiving the download progress, for the user.
+        on_start: Optional callback receiving the process and the file path when the download starts.
+        on_warning: Optional callback receiving a warning message, for the user.
+        on_info: Optional callback receiving what the repair is doing, for the user.
+        is_cancelled: Tells whether the user canceled; a canceled download is not repaired.
+    Returns:
+        The path of the final MP3.
+    Raises:
+        As download_audio: the error of the first attempt, or of the retry.
+    """
+    def _info(message: str) -> None:
+        logger.info(message)
+        if on_info:
+            on_info(message)
+
+    try:
+        return download_audio(url, folder, filename, on_progress, on_start, on_warning)
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        if is_cancelled() or not _yt_dlp_failed(e) or not _repair_yt_dlp(e, _info) or is_cancelled():
+            raise
+    _info("Trying the download again...")
+    return download_audio(url, folder, filename, on_progress, on_start, on_warning)

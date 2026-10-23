@@ -12,7 +12,7 @@ from typing import Any
 
 from ytmp3_host.core import (
     describe_error,
-    download_audio,
+    download_with_repair,
     ensure_default_folder,
     is_youtube_url,
     requested_filename,
@@ -100,7 +100,8 @@ def send_current_folder(folder: str) -> None:
 def run_native(url: str, folder: str, filename: str) -> None:
     """Handle a headless download request and send its responses.
     Sends intermediate warnings (invalid folder, so the default is used; no title;
-    no thumbnail), then exactly one final success or error response.
+    no thumbnail) and infos (a repair after a yt-dlp failure, see
+    download_with_repair), then exactly one final success or error response.
 
     Args:
         url: The YouTube video URL.
@@ -123,7 +124,13 @@ def run_native(url: str, folder: str, filename: str) -> None:
         send_message({"status": "warning", "message": message, "final": False})
 
     try:
-        mp3_path = download_audio(url, folder_path, requested_filename(filename), on_warning=_send_warning)
+        mp3_path = download_with_repair(
+            url,
+            folder_path,
+            requested_filename(filename),
+            on_warning=_send_warning,
+            on_info=lambda message: send_message({"status": "info", "message": message, "final": False}),
+        )
     except FileExistsError as e:
         send_message({
             "status": "error",

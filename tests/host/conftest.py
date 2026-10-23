@@ -94,8 +94,8 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
       command is built, then only its executable is swapped for `python
       fake_yt_dlp.py`. The fake reads the real -o and --print arguments, so a broken
       output template or title marker fails the tests.
-    - Does the same for health (the get_version checks), including its INSTALL_DIR,
-      and points the updater at the same yt-dlp.exe.
+    - Does the same for health (the get_version checks) and points the updater at
+      the same yt-dlp.exe. deno.exe goes to the same folder too, but is not created.
     - Clears FAKE_YTDLP_* variables left in the shell, so the fake starts in its
       default mode (success, title "Artist - Song (Official Video)").
     Returns a FakeYtDlp to change the mode or title.
@@ -107,8 +107,9 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     for module in (core, health):
         monkeypatch.setattr(module, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
         monkeypatch.setattr(module, "FFMPEG_PATH", bin_dir / "ffmpeg.exe")
-    monkeypatch.setattr(health, "INSTALL_DIR", bin_dir)
     monkeypatch.setattr(updater, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
+    for module in (core, health, updater):
+        monkeypatch.setattr(module, "DENO_PATH", bin_dir / "deno.exe")
 
     real_build = core.build_download_command
     monkeypatch.setattr(

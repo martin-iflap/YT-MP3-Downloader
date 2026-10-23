@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ytmp3_host import __version__
-from ytmp3_host.config import FFMPEG_PATH, INSTALL_DIR, INSTALLED, YT_DLP_PATH
+from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, INSTALLED, YT_DLP_PATH
 from ytmp3_host.core import kill_process_tree
 from ytmp3_host.github import HOST_REPO, YT_DLP_REPO, latest_release_tag
 
@@ -65,6 +65,14 @@ def yt_dlp_version_command(exe: Path | None = None) -> list[str]:
     return [str(exe or YT_DLP_PATH), "--version"]
 
 
+def deno_version_command(exe: Path | None = None) -> list[str]:
+    """The command that prints a Deno executable's version by running JavaScript, so it also checks that it can.
+    Args:
+        exe: The executable, e.g. a fresh download; None for the installed DENO_PATH.
+    """
+    return [str(exe or DENO_PATH), "eval", "console.log(Deno.version.deno)"]
+
+
 def read_version(command: list[str], timeout: float = VERSION_TIMEOUT_S) -> str | None:
     """Run a tool's version command and return the version it prints.
 
@@ -107,9 +115,8 @@ def read_version(command: list[str], timeout: float = VERSION_TIMEOUT_S) -> str 
 
 def find_js_runtime() -> Path | None:
     """Find the JavaScript runtime yt-dlp needs for YouTube: next to yt-dlp.exe first, then on PATH."""
-    bundled = INSTALL_DIR / f"{JS_RUNTIME}.exe"
-    if bundled.exists():
-        return bundled
+    if DENO_PATH.exists():
+        return DENO_PATH
     found = shutil.which(JS_RUNTIME)
     return Path(found) if found else None
 

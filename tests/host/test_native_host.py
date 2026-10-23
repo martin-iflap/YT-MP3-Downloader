@@ -277,7 +277,9 @@ def test_yt_dlp_failure_is_one_readable_error(
     monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
     fake_yt_dlp.set("fail")
-    [response] = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
+    # offline (no_github), so the yt-dlp update finds nothing new and there is no retry
+    info, response = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
+    assert info == {"status": "info", "message": "The download failed, checking for a yt-dlp update...", "final": False}
     assert response["status"] == "error" and response["final"] is True
     assert response["message"].endswith("failed: [youtube] abc123: Video unavailable")
 
@@ -286,7 +288,7 @@ def test_timeout_is_one_error(
     monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
     fake_yt_dlp.set("hang")
-    monkeypatch.setattr(native_messaging, "download_audio", functools.partial(core.download_audio, timeout=1))
+    monkeypatch.setattr(core, "download_audio", functools.partial(core.download_audio, timeout=1))
     [response] = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
     assert response["status"] == "error" and response["final"] is True
     assert response["message"].startswith("Download timed out after 1 s")

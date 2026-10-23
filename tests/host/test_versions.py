@@ -72,6 +72,13 @@ def test_the_extension_links_the_installer_the_updater_downloads() -> None:
     assert url.group(1) == f"{github.GITHUB_URL}/{HOST_REPO}/releases/latest/download/{updater.INSTALLER_ASSET}"
 
 
+def test_the_installer_downloads_and_checks_yt_dlp_like_the_updater() -> None:
+    release = iss_setting(r'^#define\s+YtDlpReleaseURL\s+"([^"]+)"')
+    assert release == f"{github.GITHUB_URL}/{github.YT_DLP_REPO}/releases/latest/download/"
+    assert iss_setting(r'^#define\s+YtDlpTempName\s+"([^"]+)"') == updater.YT_DLP_ASSET
+    assert iss_setting(r'^#define\s+YtDlpSumsName\s+"([^"]+)"') == updater.YT_DLP_SUMS
+
+
 def test_the_installer_runs_the_self_check_the_host_knows() -> None:
     assert f"'{MP3.SELF_CHECK_ARG}'" in INSTALLER_SCRIPT.read_text(encoding="utf-8")
 

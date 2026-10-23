@@ -6,7 +6,8 @@ tests also check the command contract. With `--version` (health.yt_dlp_version_c
 it only prints its version; fail, hang and bad_version apply there too.
 Behavior comes from environment variables:
 
-    FAKE_YTDLP_MODE     success (default) | fail | hang | no_title | no_thumb | no_mp3 | bad_version
+    FAKE_YTDLP_MODE     success (default) | fail | hang | no_title | no_thumb | no_mp3 | bad_version |
+                        needs_js (fails like the real one when YouTube wants JavaScript, unless given --js-runtimes)
     FAKE_YTDLP_TITLE    the video title to print
     FAKE_YTDLP_VERSION  the version to print (default 2026.08.19)
     FAKE_YTDLP_MP3      an MP3 to copy as the download (default: junk bytes)
@@ -53,6 +54,11 @@ def main() -> None:
     title = os.environ.get("FAKE_YTDLP_TITLE", "Artist - Song (Official Video)")
 
     emit(f"[youtube] Extracting URL: {args[-1]}")
+    if mode == "needs_js" and "--js-runtimes" not in args:
+        emit("WARNING: [youtube] No supported JavaScript runtime could be found.")
+        emit("WARNING: [youtube] abc123: n challenge solving failed: Some formats may be missing.")
+        emit("ERROR: [youtube] abc123: Requested format is not available. Use --list-formats for a list of available formats")
+        sys.exit(1)
     if mode != "no_title":
         emit(title_template.replace("%(title)s", title))
     partial = Path(f"{stem}.webm.part")

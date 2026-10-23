@@ -25,8 +25,12 @@
 #define NativeExeName     "mp3.exe"
 #define NativeManifestName "app_manifest.json"
 
-#define YtDlpURL          "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+; yt-dlp.exe is checked against the SHA-256 list the same release
+; publishes, like the host's updater does (updater.YT_DLP_ASSET,
+; updater.YT_DLP_SUMS; tests\host\test_versions.py checks the names).
+#define YtDlpReleaseURL   "https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
 #define YtDlpTempName     "yt-dlp.exe"
+#define YtDlpSumsName     "SHA2-256SUMS"
 
 ; Every version installs into its own folder; the Firefox manifest
 ; is switched to it only after all its files are in place, so an
@@ -108,12 +112,15 @@ Root: HKCU; \
 ; yt-dlp.exe and the manifest are written at runtime via
 ; FileCopy / SaveStringToFile, not listed in [Files], so the
 ; uninstaller has no record of them unless declared here. The
-; host's updater adds yt-dlp.download.exe, yt-dlp.old*.exe and
-; update.lock; versions\ may hold folders an update kept because
-; they were still in use.
+; host's updater adds yt-dlp.download.exe, yt-dlp.old*.exe,
+; deno.exe (with deno.download.*) and update.lock; versions\ may
+; hold folders an update kept because they were still in use.
 Type: files; Name: "{app}\yt-dlp.exe"
+Type: files; Name: "{app}\yt-dlp.exe.tmp"
 Type: files; Name: "{app}\yt-dlp.download.exe"
 Type: files; Name: "{app}\yt-dlp.old*.exe"
+Type: files; Name: "{app}\deno.exe"
+Type: files; Name: "{app}\deno.download.*"
 Type: files; Name: "{app}\update.lock"
 Type: files; Name: "{app}\mp3.log"
 Type: files; Name: "{app}\mp3.log.1"
@@ -162,21 +169,59 @@ begin
 end;
 
 ; ============================================================
+; YtDlpSha256
+; ============================================================
+; Downloads the release's checksum list into {tmp} and returns
+; the SHA-256 of yt-dlp.exe from it ("<hex>  yt-dlp.exe"), or ''
+; if it lists none. Raises if the download fails.
+
+function YtDlpSha256(): String;
+var
+  Lines: TArrayOfString;
+  Line: String;
+  I: Integer;
+begin
+  Result := '';
+  DownloadTemporaryFile('{#YtDlpReleaseURL}{#YtDlpSumsName}', '{#YtDlpSumsName}', '', nil);
+  if not LoadStringsFromFile(ExpandConstant('{tmp}\{#YtDlpSumsName}'), Lines) then
+    exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if (Length(Line) > 64) and (Trim(Copy(Line, 65, Length(Line))) = '{#YtDlpTempName}') then
+    begin
+      Result := Copy(Line, 1, 64);
+      exit;
+    end;
+  end;
+end;
+
+; ============================================================
 ; DownloadYtDlp
 ; ============================================================
 ; Downloads yt-dlp.exe into {tmp}. Returns True on success.
-; DownloadTemporaryFile saves the file as {tmp}\BaseName and
-; returns the file size (Int64), not a path, so there is
-; nothing to capture from its return value here.
+; DownloadTemporaryFile checks the SHA-256 it is given and
+; raises (and deletes the file) on a mismatch, so a damaged or
+; truncated download is never installed. Both files come from
+; "latest", so a yt-dlp release in between the two downloads
+; fails the check too; the host downloads yt-dlp itself then.
 
 function DownloadYtDlp(): Boolean;
+var
+  Sha256: String;
 begin
   Result := False;
 
   try
     Log('Downloading latest yt-dlp from GitHub...');
-    DownloadTemporaryFile('{#YtDlpURL}', '{#YtDlpTempName}', '', nil);
-    Log('yt-dlp downloaded successfully.');
+    Sha256 := YtDlpSha256();
+    if Sha256 = '' then
+    begin
+      Log('The yt-dlp release lists no checksum for {#YtDlpTempName}.');
+      exit;
+    end;
+    DownloadTemporaryFile('{#YtDlpReleaseURL}{#YtDlpTempName}', '{#YtDlpTempName}', Sha256, nil);
+    Log('yt-dlp downloaded and checked successfully.');
     Result := True;
   except
     Log('Failed to download yt-dlp: ' + GetExceptionMessage);

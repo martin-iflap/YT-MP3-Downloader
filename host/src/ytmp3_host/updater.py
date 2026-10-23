@@ -1,4 +1,5 @@
-"""Updates and repairs: yt-dlp.exe is replaced in place, the host runs its installer.
+"""Updates and repairs: yt-dlp.exe is replaced in place, the host runs its installer,
+and deno.exe is installed once a download needs it.
 
 A lost connection or a killed process must never leave a broken tool behind, so
 both updates follow the same rules:
@@ -34,14 +35,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
 from ytmp3_host import __version__, github
-from ytmp3_host.config import INSTALLED, UPDATE_LOCK_PATH, YT_DLP_PATH
-from ytmp3_host.github import HOST_REPO, YT_DLP_REPO, latest_release_tag
-from ytmp3_host.health import is_outdated, parse_version, read_version, yt_dlp_version_command
+from ytmp3_host.config import DENO_PATH, INSTALLED, UPDATE_LOCK_PATH, YT_DLP_PATH
+from ytmp3_host.github import DENO_REPO, HOST_REPO, YT_DLP_REPO, latest_release_tag
+from ytmp3_host.health import deno_version_command, is_outdated, parse_version, read_version, yt_dlp_version_command
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +52,17 @@ YT_DLP_SUMS = "SHA2-256SUMS"
 # the release assets the release checklist in CLAUDE.md requires
 INSTALLER_ASSET = "YT-MP3-Downloader-Setup.exe"
 HOST_SUMS = "SHA256SUMS"
+DENO_ASSET = "deno-x86_64-pc-windows-msvc.zip"
+# one checksum per asset, in PowerShell's Get-FileHash list format ("Hash : <hex>")
+DENO_SUMS = f"{DENO_ASSET}.sha256sum"
+DENO_EXE = "deno.exe"  # the only file in the zip
 # Inno Setup: no wizard, no message boxes (default answers), never reboot, no "This will install" prompt
 INSTALLER_ARGS = ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-")
 
 SOCKET_TIMEOUT_S = 30  # per connect or read
 YT_DLP_DOWNLOAD_S = 180  # whole download; the extension waits 5 min for update_yt_dlp
 INSTALLER_DOWNLOAD_S = 360  # and 8 min for update_host
+DENO_DOWNLOAD_S = 300  # ~43 MB, during a download the user waits for
 LOCK_TIMEOUT_S = 60  # waiting for another host's update
 LOCK_POLL_S = 0.5
 MAX_DOWNLOAD_BYTES = 300 * 1024 * 1024
@@ -69,6 +76,7 @@ UPDATE_DIR = Path(tempfile.gettempdir()) / "ytmp3-update"
 STARTED_MARKER = "started"
 
 SHA256_LINE_RE = re.compile(r"([0-9a-fA-F]{64})\s+\*?(.+)")
+SHA256_RE = re.compile(r"\b[0-9a-fA-F]{64}\b")
 
 # follows the redirect to GitHub's download host; honors the system proxy settings
 _opener = urllib.request.build_opener()
@@ -283,6 +291,8 @@ def update_yt_dlp() -> str:
     exe = YT_DLP_PATH
     with update_lock():
         recover_yt_dlp(exe)
+        # Deno is installed once, so a killed install would otherwise keep its ~140 MB until the uninstall
+        _remove_leftovers(list(_deno_leftovers(DENO_PATH)))
         current = read_version(yt_dlp_version_command(exe)) if exe.exists() else None
         try:
             tag = _checked_tag(YT_DLP_REPO)
@@ -307,6 +317,69 @@ def update_yt_dlp() -> str:
         finally:
             new.unlink(missing_ok=True)
     logger.info("Installed yt-dlp %s (was %s)", version, current)
+    return version
+
+
+# --- Deno ---------------------------------------------------------------------
+
+
+def _deno_leftovers(exe: Path) -> tuple[Path, Path]:
+    """The zip and the unpacked exe install_deno works on; a killed install leaves them behind."""
+    return exe.with_name(f"{exe.stem}.download.zip"), _new_path(exe)
+
+
+def _extract(archive: Path, member: str, dest: Path) -> None:
+    """Unpack one file of a zip to dest. Raises UpdateError for a bad zip or a missing or oversized member."""
+    try:
+        with zipfile.ZipFile(archive) as zf:
+            info = zf.getinfo(member)
+            if info.file_size > MAX_DOWNLOAD_BYTES:
+                raise UpdateError(f"{member} in {archive.name} is larger than expected")
+            with zf.open(info) as src, dest.open("wb") as f:
+                shutil.copyfileobj(src, f, CHUNK_BYTES)
+                f.flush()
+                os.fsync(f.fileno())
+    except (zipfile.BadZipFile, KeyError, OSError) as e:
+        raise UpdateError(f"Could not unpack {member} from {archive.name}: {e}") from e
+
+
+def install_deno() -> str:
+    """Install Deno, the JavaScript runtime yt-dlp needs once YouTube makes it solve its challenges.
+    Only called when a download failed for that reason, and never updated afterward
+    (like ffmpeg). Nothing is downloaded when a working deno.exe is already there
+    (e.g. another host installed it while this one waited for the lock).
+
+    Returns:
+        The version of the deno.exe now installed.
+    Raises:
+        UpdateError: If no working Deno could be installed.
+    """
+    exe = DENO_PATH
+    archive, new = _deno_leftovers(exe)
+    with update_lock():
+        _remove_leftovers([archive, new])  # from an install that was killed
+        if exe.exists() and (version := read_version(deno_version_command(exe))):
+            return version
+        try:
+            tag = _checked_tag(DENO_REPO)
+            sums = SHA256_RE.search(fetch_text(asset_url(DENO_REPO, tag, DENO_SUMS)))
+            if not sums:
+                raise UpdateError(f"The Deno {tag} release has no checksum for {DENO_ASSET}")
+            actual = download(asset_url(DENO_REPO, tag, DENO_ASSET), archive, DENO_DOWNLOAD_S)
+            if actual != sums.group(0).lower():
+                raise UpdateError(f"The downloaded Deno {tag} is damaged (checksum mismatch)")
+            _extract(archive, DENO_EXE, new)
+            archive.unlink()
+            version = read_version(deno_version_command(new))
+            if version is None:
+                raise UpdateError(f"The downloaded Deno {tag} does not run")
+            new.replace(exe)  # a deno.exe that is there does not run, nothing uses it
+        except UpdateError as e:
+            raise UpdateError(f"Deno could not be installed: {e}") from e
+        finally:
+            archive.unlink(missing_ok=True)
+            new.unlink(missing_ok=True)
+    logger.info("Installed Deno %s", version)
     return version
 
 
@@ -395,3 +468,22 @@ def update_host() -> str | None:
             if other.is_dir() and other.name != tag:
                 shutil.rmtree(other, ignore_errors=True)
     return tag
+
+
+def remove_installed_downloads() -> None:
+    """Delete the downloaded installers of this host's release and older ones, once this host runs.
+
+    A release newer than this host is kept: its installer may be about to run. No
+    lock is needed, since only an outdated host downloads, and only newer releases.
+    Files the installer still has open (it may still be finishing) can't be deleted;
+    the next call removes them.
+    """
+    try:
+        folders = [p for p in UPDATE_DIR.iterdir() if p.is_dir()] if UPDATE_DIR.is_dir() else []
+        for folder in folders:
+            if is_outdated(__version__, folder.name) is not True:
+                shutil.rmtree(folder, ignore_errors=True)
+        if UPDATE_DIR.is_dir() and not any(UPDATE_DIR.iterdir()):
+            UPDATE_DIR.rmdir()
+    except OSError as e:
+        logger.info("Could not remove old installer downloads yet: %s", e)

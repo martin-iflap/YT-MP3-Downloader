@@ -21,9 +21,11 @@ const LEGACY_HOST_MESSAGE = "This version of the YT MP3 Downloader app can't upd
 // Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
 // and select_folder waits on the user, so these must stay above that. get_version waits
 // up to 20s for `yt-dlp --version`. The updates may first wait 60s for another host's
-// update, then download for up to 180s (yt-dlp) or 360s (the installer).
+// update, then download for up to 180s (yt-dlp) or 360s (the installer). A download that
+// fails in yt-dlp is retried once after a repair (core.download_with_repair): a yt-dlp
+// update (60s + 180s) and Deno (60s + 300s), so the worst case is about 22 min.
 const ACTION_TIMEOUTS_MS = {
-  download: 6 * 60 * 1000,
+  download: 23 * 60 * 1000,
   download_gui: 30 * 1000,
   select_folder: 10 * 60 * 1000,
   get_current_folder: 15 * 1000,
