@@ -67,7 +67,7 @@ LOCK_TIMEOUT_S = 60  # waiting for another host's update
 LOCK_POLL_S = 0.5
 MAX_DOWNLOAD_BYTES = 300 * 1024 * 1024
 MAX_SUMS_BYTES = 1024 * 1024
-CHUNK_BYTES = 1024 * 1024
+CHUNK_BYTES = 64 * 1024
 # a started installer is not started again for this long (it may still be running)
 INSTALL_GRACE_S = 600
 
@@ -296,7 +296,7 @@ def update_yt_dlp() -> str:
     exe = YT_DLP_PATH
     with update_lock():
         recover_yt_dlp(exe)
-        # Deno is installed once, so a killed install would otherwise keep its ~140 MB until the uninstall
+        # Deno is installed once, so a killed install would otherwise keep its ~140 MB until the uninstallation
         _remove_leftovers(list(_deno_leftovers(DENO_PATH)))
         current = read_version(yt_dlp_version_command(exe)) if exe.exists() else None
         try:
@@ -322,7 +322,7 @@ def update_yt_dlp() -> str:
         except OSError as e:
             raise UpdateError(f"yt-dlp {tag} could not be installed: {e}") from e
         finally:
-            new.unlink(missing_ok=True)
+            _remove_leftovers([new])  # one a virus scanner holds must not replace the UpdateError
     logger.info("Installed yt-dlp %s (was %s)", version, current)
     return version
 
@@ -331,7 +331,7 @@ def update_yt_dlp() -> str:
 
 
 def _deno_leftovers(exe: Path) -> tuple[Path, Path]:
-    """The zip and the unpacked exe install_deno works on; a killed install leaves them behind."""
+    """The zip and the unpacked exe install_deno works on; a killed installation leaves them behind."""
     return exe.with_name(f"{exe.stem}.download.zip"), _new_path(exe)
 
 
@@ -364,7 +364,7 @@ def install_deno() -> str:
     exe = DENO_PATH
     archive, new = _deno_leftovers(exe)
     with update_lock():
-        _remove_leftovers([archive, new])  # from an install that was killed
+        _remove_leftovers([archive, new])  # from an installation that was killed
         if exe.exists() and (version := read_version(deno_version_command(exe))):
             return version
         try:
@@ -401,6 +401,10 @@ def launch_detached(command: list[str] | str) -> None:
     away and may not survive; the extension then shows the manual download link
     once the update does not arrive.
 
+    The process starts in the temp folder, not in this host's working directory
+    (its version folder): a process's current directory can't be deleted, so the
+    installer could not remove the old version folder.
+
     Args:
         command: The argument list, or a command line passed to Windows as it is
             (for programs like explorer.exe that parse it their own way).
@@ -413,6 +417,7 @@ def launch_detached(command: list[str] | str) -> None:
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
             close_fds=True,
+            cwd=tempfile.gettempdir(),
         )
 
     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
@@ -491,7 +496,7 @@ def remove_installed_downloads() -> None:
     try:
         folders = [p for p in UPDATE_DIR.iterdir() if p.is_dir()] if UPDATE_DIR.is_dir() else []
         for folder in folders:
-            if is_outdated(__version__, folder.name) is not True:
+            if not is_outdated(__version__, folder.name):
                 shutil.rmtree(folder, ignore_errors=True)
         if UPDATE_DIR.is_dir() and not any(UPDATE_DIR.iterdir()):
             UPDATE_DIR.rmdir()

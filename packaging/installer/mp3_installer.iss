@@ -45,6 +45,9 @@
 
 
 [Setup]
+; No AppId is set, so AppName is the AppId: it must stay the same
+; as in 1.x, or an update installs as a second app instead of
+; upgrading the installed one.
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -54,8 +57,10 @@ WizardStyle=modern dynamic
 DefaultDirName={localappdata}\{#MyAppName}
 
 ; Name shown in the Start Menu. No [Icons] section below
-; creates an actual shortcut yet; this is metadata only.
+; creates an actual shortcut yet; this is metadata only, so the
+; wizard does not ask for a Start Menu folder.
 DefaultGroupName={#MyAppName}
+DisableProgramGroupPage=yes
 
 ; Name of the generated installer. No spaces: GitHub renames
 ; release assets with spaces, and the host's updater downloads
@@ -130,6 +135,12 @@ Type: files; Name: "{app}\mp3.log"
 Type: files; Name: "{app}\mp3.log.1"
 Type: filesandordirs; Name: "{app}\versions"
 Type: files; Name: "{userappdata}\Mozilla\NativeMessagingHosts\{#NativeManifestName}"
+; The default download folder (config.DEFAULT_FOLDER), only if it
+; is empty: the user's MP3s are never deleted. The host uses
+; %USERPROFILE%\Documents; {userdocs} is the real Documents folder,
+; which differs when Windows moved it (e.g. into OneDrive).
+Type: dirifempty; Name: "{%USERPROFILE}\Documents\YT-MP3-Downloads"
+Type: dirifempty; Name: "{userdocs}\YT-MP3-Downloads"
 
 [Code]
 
@@ -159,25 +170,37 @@ begin
     Log('Could not move ' + Source + ' to ' + Target + ': ' + SysErrorMessage(DLLGetLastError));
 end;
 
-; ============================================================
-; JsonEscape
-; ============================================================
-; Escapes backslashes and double quotes so a Windows path can
-; be embedded safely inside a JSON string.
+// ============================================================
+// JsonEscape
+// ============================================================
+// Escapes a Windows path for a JSON string, as pure ASCII:
+// backslashes, double quotes, and every non-ASCII character as
+// \uXXXX. SaveStringToFile writes the system's ANSI code page,
+// and Firefox reads the manifest as UTF-8, so a user name with
+// an accent in the path would otherwise break the manifest.
 
 function JsonEscape(const S: String): String;
+var
+  I: Integer;
 begin
-  Result := S;
-  StringChangeEx(Result, '\', '\\', True);
-  StringChangeEx(Result, '"', '\"', True);
+  Result := '';
+  for I := 1 to Length(S) do
+    if S[I] = '\' then
+      Result := Result + '\\'
+    else if S[I] = '"' then
+      Result := Result + '\"'
+    else if Ord(S[I]) > 126 then
+      Result := Result + Format('\u%.4x', [Ord(S[I])])
+    else
+      Result := Result + S[I];
 end;
 
-; ============================================================
-; YtDlpSha256
-; ============================================================
-; Downloads the release's checksum list into {tmp} and returns
-; the SHA-256 of yt-dlp.exe from it ("<hex>  yt-dlp.exe"), or ''
-; if it lists none. Raises if the download fails.
+// ============================================================
+// YtDlpSha256
+// ============================================================
+// Downloads the release's checksum list into {tmp} and returns
+// the SHA-256 of yt-dlp.exe from it ("<hex>  yt-dlp.exe"), or ''
+// if it lists none. Raises if the download fails.
 
 function YtDlpSha256(): String;
 var
@@ -200,15 +223,15 @@ begin
   end;
 end;
 
-; ============================================================
-; DownloadYtDlp
-; ============================================================
-; Downloads yt-dlp.exe into {tmp}. Returns True on success.
-; DownloadTemporaryFile checks the SHA-256 it is given and
-; raises (and deletes the file) on a mismatch, so a damaged or
-; truncated download is never installed. Both files come from
-; "latest", so a yt-dlp release in between the two downloads
-; fails the check too; the host downloads yt-dlp itself then.
+// ============================================================
+// DownloadYtDlp
+// ============================================================
+// Downloads yt-dlp.exe into {tmp}. Returns True on success.
+// DownloadTemporaryFile checks the SHA-256 it is given and
+// raises (and deletes the file) on a mismatch, so a damaged or
+// truncated download is never installed. Both files come from
+// "latest", so a yt-dlp release in between the two downloads
+// fails the check too; the host downloads yt-dlp itself then.
 
 function DownloadYtDlp(): Boolean;
 var
@@ -232,16 +255,16 @@ begin
   end;
 end;
 
-; ============================================================
-; PrepareToInstall
-; ============================================================
-; Runs before the actual installation. Downloads yt-dlp here,
-; except in a silent install that finds one in {app}: that is
-; the host updating itself, and the host keeps yt-dlp current
-; and repairs it. A manual (re)install always downloads it, so
-; reinstalling also fixes a broken yt-dlp.exe. A failed download
-; does not stop the installation: the host downloads a missing
-; yt-dlp.exe itself the next time the sidebar opens.
+// ============================================================
+// PrepareToInstall
+// ============================================================
+// Runs before the actual installation. Downloads yt-dlp here,
+// except in a silent install that finds one in {app}: that is
+// the host updating itself, and the host keeps yt-dlp current
+// and repairs it. A manual (re)install always downloads it, so
+// reinstalling also fixes a broken yt-dlp.exe. A failed download
+// does not stop the installation: the host downloads a missing
+// yt-dlp.exe itself the next time the sidebar opens.
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
@@ -263,14 +286,14 @@ begin
       mbInformation, MB_OK, IDOK);
 end;
 
-; ============================================================
-; CreateNativeMessagingManifest
-; ============================================================
-; Writes the native messaging manifest JSON into the folder
-; Firefox expects for per-user native messaging on Windows.
-; This switches Firefox to the new version, so it runs last,
-; and atomically: written to a temp file, then moved over the
-; old manifest in one step.
+// ============================================================
+// CreateNativeMessagingManifest
+// ============================================================
+// Writes the native messaging manifest JSON into the folder
+// Firefox expects for per-user native messaging on Windows.
+// This switches Firefox to the new version, so it runs last,
+// and atomically: written to a temp file, then moved over the
+// old manifest in one step.
 
 procedure CreateNativeMessagingManifest();
 var
@@ -300,16 +323,16 @@ begin
     RaiseException('Could not create the Firefox native messaging manifest.');
 end;
 
-; ============================================================
-; RemoveVersionFolder
-; ============================================================
-; Removes an old version's folder, unless its mp3.exe still
-; runs (a download that started before the update): Windows
-; can't delete a running exe, and deleting the rest would
-; break that download. Such a folder is removed by the next
-; update or the uninstaller. It is retried for a few seconds
-; first: during a self-update the extension polls get_version,
-; and each poll runs the old mp3.exe for a second or two.
+// ============================================================
+// RemoveVersionFolder
+// ============================================================
+// Removes an old version's folder, unless its mp3.exe still
+// runs (a download that started before the update): Windows
+// can't delete a running exe, and deleting the rest would
+// break that download. Such a folder is removed by the next
+// update or the uninstaller. It is retried for a few seconds
+// first: during a self-update the extension polls get_version,
+// and each poll runs the old mp3.exe for a second or two.
 
 procedure RemoveVersionFolder(const Dir: String);
 var
@@ -327,12 +350,12 @@ begin
     Log('Could not remove all of ' + Dir + '.');
 end;
 
-; ============================================================
-; RemoveOldVersions
-; ============================================================
-; After the manifest points at the new version: remove the
-; other version folders and the files of a 1.x install, which
-; sat directly in {app}.
+// ============================================================
+// RemoveOldVersions
+// ============================================================
+// After the manifest points at the new version: remove the
+// other version folders and the files of a 1.x install, which
+// sat directly in {app}.
 
 procedure RemoveOldVersions();
 var
@@ -362,12 +385,12 @@ begin
   end;
 end;
 
-; ============================================================
-; NewVersionWorks
-; ============================================================
-; Runs the new version's mp3.exe --self-check (selfcheck.py):
-; it imports every host module and runs ffmpeg.exe. Exit code
-; 0 means it works; the problems are in {app}\mp3.log.
+// ============================================================
+// NewVersionWorks
+// ============================================================
+// Runs the new version's mp3.exe --self-check (selfcheck.py):
+// it imports every host module and runs ffmpeg.exe. Exit code
+// 0 means it works; the problems are in {app}\mp3.log.
 
 function NewVersionWorks(): Boolean;
 var
@@ -383,23 +406,23 @@ begin
     Log('Self-check failed (exit code ' + IntToStr(ResultCode) + '), see mp3.log.');
 end;
 
-; ============================================================
-; CurStepChanged
-; ============================================================
-; After the version's files are installed, in this order:
-; 0. the new version checks itself. If it does not work,
-;    nothing is switched: its folder is removed (unless it is
-;    a reinstall of the version Firefox already runs) and the
-;    installed version stays, so a broken release never
-;    replaces a working host;
-; 1. a downloaded yt-dlp.exe goes into {app} (copied next to
-;    it first, then moved in one step). If that fails (e.g. a
-;    running download keeps the installed one locked), the
-;    installation goes on: the host updates or repairs yt-dlp
-;    later;
-; 2. the manifest is switched to the new version;
-; 3. old versions are removed.
-; A kill before step 2 leaves Firefox on the old version.
+// ============================================================
+// CurStepChanged
+// ============================================================
+// After the version's files are installed, in this order:
+// 0. the new version checks itself. If it does not work,
+//    nothing is switched: its folder is removed (unless it is
+//    a reinstall of the version Firefox already runs) and the
+//    installed version stays, so a broken release never
+//    replaces a working host;
+// 1. a downloaded yt-dlp.exe goes into {app} (copied next to
+//    it first, then moved in one step). If that fails (e.g. a
+//    running download keeps the installed one locked), the
+//    installation goes on: the host updates or repairs yt-dlp
+//    later;
+// 2. the manifest is switched to the new version;
+// 3. old versions are removed.
+// A kill before step 2 leaves Firefox on the old version.
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var

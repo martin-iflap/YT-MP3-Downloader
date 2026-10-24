@@ -1,4 +1,4 @@
-/* global browser, isKnownSiteUrl */
+/* global isKnownSiteUrl */
 
 const NATIVE_HOST_NAME = 'app_manifest';
 const MENU_ID = 'download-mp3';
@@ -93,7 +93,7 @@ function relay(message) {
 async function isSidebarOpen() {
   try {
     return await browser.sidebarAction.isOpen({});
-  } catch (e) {
+  } catch {
     return false;
   }
 }
@@ -298,7 +298,7 @@ function hostRequest(payload, onProgress = () => {}) {
 
     try {
       port = browser.runtime.connectNative(NATIVE_HOST_NAME);
-    } catch (e) {
+    } catch {
       finish({ status: 'error', message: 'Could not connect to native host' }, 'connect', false);
       return;
     }
@@ -319,7 +319,7 @@ function hostRequest(payload, onProgress = () => {}) {
 
     try {
       port.postMessage(payload);
-    } catch (e) {
+    } catch {
       finish({ status: 'error', message: 'Failed to send to native host' }, 'connect', true);
     }
   });

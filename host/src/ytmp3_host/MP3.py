@@ -158,4 +158,4 @@ if __name__ == "__main__":
     main()
 
 
-# COMPILE (from repo root): uv run pyinstaller --onedir --noconfirm --name mp3 --icon "packaging\assets\mp3.ico" host\src\ytmp3_host\MP3.py
+# COMPILE (from repo root): uv run pyinstaller --onedir --noconfirm --name mp3 --exclude-module PIL --icon "packaging\assets\mp3.ico" host\src\ytmp3_host\MP3.py

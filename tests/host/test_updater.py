@@ -12,6 +12,7 @@ import http.server
 import io
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -640,11 +641,13 @@ def test_an_unknown_host_release_is_an_error(host_install: Launches, monkeypatch
 
 def test_launch_detached_starts_a_process_that_outlives_the_call(tmp_path: Path) -> None:
     marker = tmp_path / "ran"
-    updater.launch_detached([sys.executable, "-c", f"open({str(marker)!r}, 'w').close()"])
+    code = f"import os; open({str(marker)!r}, 'w').write(os.getcwd())"
+    updater.launch_detached([sys.executable, "-c", code])
     deadline = time.monotonic() + 20
-    while not marker.exists() and time.monotonic() < deadline:
+    while not (marker.exists() and marker.read_text()) and time.monotonic() < deadline:
         time.sleep(0.1)
-    assert marker.exists()
+    # not the host's working directory (its version folder), which the installer removes
+    assert Path(marker.read_text()) == Path(tempfile.gettempdir())
 
 
 def test_launch_detached_falls_back_when_the_job_forbids_breaking_away(monkeypatch: pytest.MonkeyPatch) -> None:

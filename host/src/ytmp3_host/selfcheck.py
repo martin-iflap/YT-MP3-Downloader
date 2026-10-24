@@ -5,7 +5,8 @@ a broken release doesn't destroy the whole host (corrupted version can't update 
 Exit code 0 means it works; each problem is logged to mp3.log and written to stderr.
 Not run under Firefox, but stdout stays unused anyway.
 
-It does not check yt-dlp.exe: all versions share it, and a missing or broken one is
+Checked: every module imports, a message survives the framing, HTTPS works (the
+updater needs it), and ffmpeg.exe runs. It does not check yt-dlp.exe: all versions share it, and a missing or broken one is
 repaired by the host itself.
 """
 
@@ -64,6 +65,23 @@ def _check_framing() -> list[str]:
     return [] if echoed == message else [f"Native messaging garbled {message} into {echoed}"]
 
 
+def _check_https() -> list[str]:
+    """Check that the updater can make HTTPS connections (no network needed).
+    Without the ssl module urllib still imports, it just can't open https:// URLs,
+    so a build missing it would pass the imports and never be able to update itself.
+    """
+    try:
+        import ssl
+        import urllib.request
+
+        ssl.create_default_context()  # also loads the Windows certificate store
+        if not hasattr(urllib.request, "HTTPSHandler"):
+            return ["urllib has no HTTPS support"]
+    except Exception as e:  # a broken build can fail with anything
+        return [f"HTTPS does not work: {e!r}"]
+    return []
+
+
 def _check_ffmpeg() -> list[str]:
     command = ffmpeg_version_command()
     try:
@@ -89,6 +107,7 @@ def self_check() -> int:
     problems = _check_modules()
     if not problems:  # the framing check needs native_messaging
         problems += _check_framing()
+    problems += _check_https()
     problems += _check_ffmpeg()
     for problem in problems:
         logger.error("Self-check: %s", problem)

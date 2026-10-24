@@ -45,6 +45,18 @@ def test_a_module_missing_from_the_build_fails(
     assert "Could not import ytmp3_host.not_in_the_build" in capsys.readouterr().err
 
 
+def test_a_build_without_https_fails(
+    ffmpeg: UseFfmpeg, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import ssl
+
+    def _broken() -> None:
+        raise ssl.SSLError("no certificates")
+    monkeypatch.setattr(ssl, "create_default_context", _broken)
+    assert selfcheck.self_check() == 1
+    assert "HTTPS does not work" in capsys.readouterr().err
+
+
 def test_every_host_module_is_checked() -> None:
     package = Path(selfcheck.__file__).parent
     modules = {f"ytmp3_host.{p.stem}" for p in package.glob("*.py")} - {"ytmp3_host.__init__"}

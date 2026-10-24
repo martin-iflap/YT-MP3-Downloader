@@ -1,4 +1,4 @@
-/* global browser, isKnownSiteUrl, isWebUrl */
+/* global isKnownSiteUrl, isWebUrl */
 
 const downloadBtn = document.getElementById('DownloadBtn');
 const openInAppBtn = document.getElementById('openInAppBtn');
