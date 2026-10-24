@@ -188,6 +188,14 @@ test('context menu download without a saved folder lets the host pick its defaul
   assert.deepStrictEqual(state.ports[0].posted, [{ action: 'download', url: 'https://youtu.be/dQw4w9WgXcQ' }]);
 });
 
+test('context menu downloads a SoundCloud track', async () => {
+  const { browser, state } = loadBackground();
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: 'https://soundcloud.com/forss/flickermood' });
+  await flush();
+
+  assert.deepStrictEqual(state.ports[0].posted, [{ action: 'download', url: 'https://soundcloud.com/forss/flickermood' }]);
+});
+
 test('context menu on a non-video link notifies and does not start the host', async () => {
   const { browser, state } = loadBackground();
   browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: 'https://www.youtube.com/@channel' });

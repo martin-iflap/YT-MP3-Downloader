@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from ytmp3_host.config import DEFAULT_FOLDER, DENO_PATH, FFMPEG_PATH, YT_DLP_PATH
 # only download_with_repair's failure path (and open_file) uses them (urllib, and health imports this module)
@@ -30,8 +31,13 @@ REMOVE_RETRY_DELAY_S = 0.5
 STALE_TEMP_AGE_S = 3600
 INFO_MARKER = "YTMP3_INFO:"
 # the video info yt-dlp prints as JSON before downloading: the title names the file, the rest
-# become tags. artists/album/release_year/track_number exist only for YouTube Music uploads.
-INFO_FIELDS = ("title", "artists", "album", "release_year", "track_number", "channel", "webpage_url")
+# become tags. artists/album/release_year/track_number exist only for YouTube Music uploads
+# and music sites (SoundCloud, Bandcamp, ...); other sites have an uploader instead of a channel.
+INFO_FIELDS = (
+    "title", "artists", "album", "release_year", "track_number", "channel", "uploader", "webpage_url", "extractor_key"
+)
+# sites whose `artists` list the tracks of a mix, not who made it
+TRACKLIST_EXTRACTORS = frozenset({"Mixcloud"})
 TOPIC_SUFFIX = " - Topic"  # YouTube Music's auto-generated artist channels, e.g. "Queen - Topic"
 THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 DEFAULT_FILENAME = "Youtube MP3"
@@ -59,10 +65,27 @@ WHITESPACE_RE = re.compile(r"\s+")
 ARTIST_SEPARATOR_RE = re.compile(r"\s+[-–—]\s+")
 
 
+def is_web_url(url: object) -> bool:
+    """Check that a URL can be handed to yt-dlp: http(s) with a host.
+    yt-dlp supports many sites besides YouTube and reports the ones it can't download.
+    The scheme check also keeps the URL from being read as a yt-dlp option ("-...").
+
+    Args:
+        url: The URL to check, from a request (so possibly not a string).
+    Returns:
+        True if the URL is an http or https URL with a host name.
+    """
+    if not isinstance(url, str):
+        return False
+    try:
+        parts = urlsplit(url)
+        return parts.scheme in ("http", "https") and bool(parts.hostname)
+    except ValueError:  # e.g. a broken IPv6 host
+        return False
+
+
 def is_youtube_url(url: str) -> bool:
-    """Loosely check that a URL points to YouTube.
-    The extension validates URLs strictly before sending them; this only rejects
-    obvious garbage on the host side.
+    """Loosely check that a URL points to YouTube, for YouTube-only repairs (Deno).
 
     Args:
         url: The URL to check.
@@ -207,6 +230,39 @@ def info_text(info: dict[str, object], key: str) -> str:
     return str(value).strip()
 
 
+def info_artists(info: dict[str, object]) -> str:
+    """The artists the site names for the track e.g. "ACDC"; "" if none.
+    Mixcloud's `artists` are the artists of the tracks in a mix, so they are left out.
+
+    Args:
+        info: The video info (see INFO_FIELDS).
+    Returns:
+        The artists joined with ", ".
+    """
+    artists = info.get("artists")
+    if info_text(info, "extractor_key") in TRACKLIST_EXTRACTORS or not isinstance(artists, list):
+        return ""
+    return ", ".join(a.strip() for a in artists if isinstance(a, str) and a.strip())
+
+
+def title_filename(info: dict[str, object]) -> str:
+    """The filename of a download named after its title.
+    A title that names no artist (no spaced dash, as on YouTube Music and SoundCloud)
+    gets the site's artists in front, so the file is "Artist - Title" like most titles.
+
+    Args:
+        info: The video info (see INFO_FIELDS).
+    Returns:
+        The sanitized filename without extension; DEFAULT_FILENAME without a title.
+    """
+    title = info_text(info, "title")
+    name = safe_filename(title)
+    artists = info_artists(info)
+    if title and artists and not ARTIST_SEPARATOR_RE.search(name):
+        return safe_filename(f"{artists} - {title}")
+    return name
+
+
 def artist_for(filename: str, info: dict[str, object]) -> str:
     """The artist tag: from the filename, else from the video info.
 
@@ -215,16 +271,14 @@ def artist_for(filename: str, info: dict[str, object]) -> str:
         info: The video info (see INFO_FIELDS).
     Returns:
         artist_from_filename's artist if the filename has one, else the video's
-        artists (YouTube Music), else its channel without " - Topic", else UNKNOWN_ARTIST.
+        artists (info_artists), else its channel without " - Topic", else its uploader,
+        else UNKNOWN_ARTIST.
     """
     artist = artist_from_filename(filename)
     if artist != UNKNOWN_ARTIST:
         return artist
-    artists = info.get("artists")
-    if isinstance(artists, list) and artists:
-        return ", ".join(map(str, artists))
     channel = info_text(info, "channel").removesuffix(TOPIC_SUFFIX).strip()
-    return channel or UNKNOWN_ARTIST
+    return info_artists(info) or channel or info_text(info, "uploader") or UNKNOWN_ARTIST
 
 
 def extra_tags(info: dict[str, object]) -> dict[str, str]:
@@ -251,15 +305,17 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
 
     A single call fetches the video info, the audio and the raw thumbnail. The info
     (INFO_FIELDS) is printed as JSON after INFO_MARKER before the download starts
-    (`before_dl`), so an existing title-named file can stop it early. `--audio-quality 0` is LAME V0, the best VBR
-    preset, which encodes as fast as the default V5. `--print` implies `--quiet`,
-    so `--progress` keeps the progress lines the GUI parses; `--no-simulate` makes
-    sure printing never turns the call into a dry run. A Deno the host installed is
-    passed explicitly (yt-dlp only looks on PATH); without one, yt-dlp uses a Deno on
-    PATH or YouTube clients that need no JavaScript, which is faster.
+    (`before_dl`), so an existing title-named file can stop it early. `--audio-quality 0`
+    is LAME V0, the best VBR preset, which encodes as fast as the default V5.
+    `--print` implies `--quiet`, so `--progress` keeps the progress lines the GUI parses;
+    `--no-simulate` makes sure printing never turns the call into a dry run.
+    `--playlist-items 1` and `--no-playlist` ensure that only the first item in a
+    playlist is downloaded. A Deno the host installed is passed explicitly
+    (yt-dlp only looks on PATH); without one, yt-dlp uses a Deno on PATH or YouTube
+    clients that need no JavaScript, which is faster.
 
     Args:
-        url: The YouTube video URL.
+        url: The video or track URL.
         temp_stem: Output path without extension; yt-dlp appends the extensions.
     Returns:
         The command as an argument list for subprocess.
@@ -268,6 +324,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
     return [
         str(YT_DLP_PATH),
         "--no-playlist",
+        "--playlist-items", "1",
         "--concurrent-fragments", "3",
         "-x", "--audio-format", "mp3", "--audio-quality", "0",
         "--write-thumbnail",
@@ -467,18 +524,18 @@ def _run_yt_dlp(
     temp_stem: Path,
     on_progress: Callable[[float], object] | None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None,
-    on_title: Callable[[str], None],
+    on_video_info: Callable[[dict[str, object]], None],
     timeout: float,
 ) -> dict[str, object]:
     """Run the yt-dlp download and return the video info.
 
     Args:
-        url: The YouTube video URL.
+        url: The video or track URL.
         temp_stem: Output path without extension.
         on_progress: Optional callback receiving the progress as 0.0-1.0.
         on_start: Optional callback receiving the process and temp stem once started.
-        on_title: Callback receiving the title ("" if none) before the download
-            starts; raising from it stops yt-dlp and propagates.
+        on_video_info: Callback receiving the video info (see INFO_FIELDS) before the
+            download starts; raising from it stops yt-dlp and propagates.
         timeout: Seconds after which the whole process tree is killed.
 
     Returns:
@@ -516,7 +573,7 @@ def _run_yt_dlp(
             for line in process.stdout:
                 if line.startswith(INFO_MARKER):
                     info = parse_info(line[len(INFO_MARKER):])
-                    on_title(info_text(info, "title"))
+                    on_video_info(info)
                     continue
                 match = PROGRESS_RE.search(line)
                 if match and on_progress:
@@ -562,7 +619,7 @@ def download_audio(
         url: The YouTube video URL.
         folder: An existing folder to save the MP3 in.
         filename: The filename without extension, already sanitized. An empty
-            filename means: name the file after the video title.
+            filename means: name the file after the video title (title_filename).
         on_progress: Optional callback receiving the download progress as 0.0-1.0.
             Called from the calling thread.
         on_start: Optional callback receiving the yt-dlp process and the temp stem
@@ -586,9 +643,9 @@ def download_audio(
         if on_warning:
             on_warning(message)
 
-    def _check_title(t: str) -> None:
+    def _check_title(inf: dict[str, object]) -> None:
         if not filename:
-            _ensure_not_exists(folder / f"{safe_filename(t)}.mp3")
+            _ensure_not_exists(folder / f"{title_filename(inf)}.mp3")
 
     if filename:
         _ensure_not_exists(folder / f"{filename}.mp3")
@@ -602,14 +659,13 @@ def download_audio(
     start = time.perf_counter()
     try:
         info = _run_yt_dlp(url, temp_stem, on_progress, on_start, _check_title, timeout)
-        title = info_text(info, "title")
         downloaded = time.perf_counter()
         logger.debug("yt-dlp took %.2f s, info: %r", downloaded - start, info)
 
         if not filename:
-            if not title:
+            if not info_text(info, "title"):
                 _warn(f"Could not fetch the video title, using '{DEFAULT_FILENAME}'")
-            filename = safe_filename(title)
+            filename = title_filename(info)
         output = folder / f"{filename}.mp3"
         _ensure_not_exists(output)  # again: it may have appeared during the download
 
@@ -658,8 +714,9 @@ def _file_stamp(path: Path) -> tuple[int, int] | None:
     return stat.st_size, stat.st_mtime_ns
 
 
-def _repair_yt_dlp(error: Exception, on_info: Callable[[str], object]) -> bool:
+def _repair_yt_dlp(url: str, error: Exception, on_info: Callable[[str], object]) -> bool:
     """Update yt-dlp, and install Deno if YouTube asked for JavaScript, after a failed download.
+    Deno is only for YouTube URLs: other sites also say "Requested format is not available".
 
     Returns:
         True if anything changed, so trying again can help. Repairs that fail are
@@ -675,7 +732,8 @@ def _repair_yt_dlp(error: Exception, on_info: Callable[[str], object]) -> bool:
     repaired = _file_stamp(YT_DLP_PATH) not in (None, before)
 
     output = str(getattr(error, "output", None) or "")
-    if any(sign in output for sign in JS_CHALLENGE_FAILURES) and health.find_js_runtime() is None:
+    js_challenge = is_youtube_url(url) and any(sign in output for sign in JS_CHALLENGE_FAILURES)
+    if js_challenge and health.find_js_runtime() is None:
         on_info("YouTube needs an extra component for this video (Deno, about 45 MB). "
                 "Downloading it once, this can take a minute...")
         try:
@@ -726,7 +784,7 @@ def download_with_repair(
     try:
         return download_audio(url, folder, filename, on_progress, on_start, on_warning)
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        if is_cancelled() or not _yt_dlp_failed(e) or not _repair_yt_dlp(e, _info) or is_cancelled():
+        if is_cancelled() or not _yt_dlp_failed(e) or not _repair_yt_dlp(url, e, _info) or is_cancelled():
             raise
     _info("Trying the download again...")
     return download_audio(url, folder, filename, on_progress, on_start, on_warning)

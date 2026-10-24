@@ -45,8 +45,8 @@ class Repairs:
         (self.bin_dir / "deno.exe").write_bytes(b"deno")
         return "2.9.8"
 
-    def download(self, out_dir: Path, is_cancelled: Callable[[], bool] = lambda: False) -> Path:
-        return core.download_with_repair(URL, out_dir, on_info=self.infos.append, is_cancelled=is_cancelled)
+    def download(self, out_dir: Path, is_cancelled: Callable[[], bool] = lambda: False, url: str = URL) -> Path:
+        return core.download_with_repair(url, out_dir, on_info=self.infos.append, is_cancelled=is_cancelled)
 
 
 @pytest.fixture
@@ -110,6 +110,14 @@ def test_no_deno_download_when_a_runtime_is_there(repairs: Repairs, out_dir: Pat
     repairs.fake_yt_dlp.set("needs_js")
     with pytest.raises(subprocess.CalledProcessError):
         repairs.download(out_dir)
+    assert repairs.calls == ["update_yt_dlp"]
+
+
+def test_no_deno_download_for_other_sites(repairs: Repairs, out_dir: Path) -> None:
+    # other extractors also say "Requested format is not available"; Deno only helps YouTube
+    repairs.fake_yt_dlp.set("needs_js")
+    with pytest.raises(subprocess.CalledProcessError):
+        repairs.download(out_dir, url="https://soundcloud.com/artist/track")
     assert repairs.calls == ["update_yt_dlp"]
 
 

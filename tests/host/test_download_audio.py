@@ -44,7 +44,7 @@ def test_youtube_music_info_becomes_the_tags(fake_yt_dlp: FakeYtDlp, fake_embed:
         "channel": "Rick Astley - Topic", "webpage_url": "https://www.youtube.com/watch?v=abc123",
     })
 
-    assert download_audio(URL, out_dir) == out_dir / "Never Gonna Give You Up.mp3"
+    assert download_audio(URL, out_dir) == out_dir / "Rick Astley - Never Gonna Give You Up.mp3"
     [call] = fake_embed
     assert (call.artist, call.title) == ("Rick Astley", "Never Gonna Give You Up")
     assert call.tags == {
@@ -57,6 +57,18 @@ def test_title_without_artist_takes_the_channel(fake_yt_dlp: FakeYtDlp, fake_emb
     download_audio(URL, out_dir)
     assert fake_embed[0].artist == "Some Channel"
     assert fake_embed[0].tags == {}
+
+
+def test_existing_artist_title_file_stops_before_downloading(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # the early check uses the same name as the final file, artist included
+    fake_yt_dlp.set(title="Flickermood", info={"artists": ["Forss"], "uploader": "Forss"})
+    (out_dir / "Forss - Flickermood.mp3").write_bytes(b"user's file")
+    progress: list[float] = []
+    with pytest.raises(FileExistsError):
+        download_audio("https://soundcloud.com/forss/flickermood", out_dir, on_progress=progress.append)
+    assert progress == [] and fake_embed == []
 
 
 def test_title_with_non_ascii_characters(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:

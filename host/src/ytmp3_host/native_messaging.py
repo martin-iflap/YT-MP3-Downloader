@@ -15,7 +15,7 @@ from ytmp3_host.core import (
     download_with_repair,
     downloaded_mp3,
     ensure_default_folder,
-    is_youtube_url,
+    is_web_url,
     open_file,
     requested_filename,
     resolve_folder,
@@ -134,8 +134,8 @@ def run_native(url: str, folder: str, filename: str) -> None:
         folder: The target folder; empty means the default folder.
         filename: The requested filename; empty means name it after the video title.
     """
-    if not url or not is_youtube_url(url):
-        send_message({"status": "error", "message": "Invalid YouTube URL", "final": True})
+    if not is_web_url(url):
+        send_message({"status": "error", "message": "Invalid URL", "final": True})
         return
 
     folder_path = resolve_folder(folder)

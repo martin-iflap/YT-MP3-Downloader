@@ -124,11 +124,11 @@ def test_invalid_utf8_is_an_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize("action", [None, "no_such_action", 5])
 def test_missing_or_unknown_action_falls_back_to_download(monkeypatch: pytest.MonkeyPatch, action: object) -> None:
-    request: dict[str, object] = {"url": "https://vimeo.com/1"}
+    request: dict[str, object] = {"url": "not a url"}
     if action is not None:
         request["action"] = action
     [response] = run_host(monkeypatch, frame(request))
-    assert response == {"status": "error", "message": "Invalid YouTube URL", "final": True}
+    assert response == {"status": "error", "message": "Invalid URL", "final": True}
 
 
 def test_raising_handler_still_sends_one_final(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -275,10 +275,10 @@ def test_a_failed_update_is_one_final_error_with_its_reason(monkeypatch: pytest.
 # --- headless download --------------------------------------------------------
 
 
-@pytest.mark.parametrize("url", ["", "https://vimeo.com/1", "not a url"])
-def test_invalid_url(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+@pytest.mark.parametrize("url", ["", "not a url", "--exec=calc https://youtu.be/x", "file:///C:/x.mp3", 5])
+def test_invalid_url(monkeypatch: pytest.MonkeyPatch, url: object) -> None:
     [response] = run_host(monkeypatch, frame({"action": "download", "url": url}))
-    assert response == {"status": "error", "message": "Invalid YouTube URL", "final": True}
+    assert response == {"status": "error", "message": "Invalid URL", "final": True}
 
 
 def test_successful_download(

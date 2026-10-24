@@ -1,4 +1,4 @@
-/* global browser, isYouTubeUrl */
+/* global browser, isKnownSiteUrl */
 
 const NATIVE_HOST_NAME = 'app_manifest';
 const MENU_ID = 'download-mp3';
@@ -54,7 +54,8 @@ const HOST_UPDATE_WAIT_MS = 3 * 60 * 1000;
 const KEEP_ALIVE_ACTIONS = new Set(['download_gui']);
 
 // Menus are not persisted across browser restarts for MV2 persistent backgrounds,
-// so create it on every startup rather than in onInstalled.
+// so create it on every startup rather than in onInstalled. The patterns cover the links
+// isKnownSiteUrl accepts (youtube.js); a click checks the link exactly.
 browser.contextMenus.create({
   id: MENU_ID,
   title: 'Download as MP3',
@@ -70,7 +71,15 @@ browser.contextMenus.create({
     '*://m.youtube.com/shorts/*',
     '*://www.youtube.com/live/*',
     '*://youtube.com/live/*',
-    '*://m.youtube.com/live/*'
+    '*://m.youtube.com/live/*',
+    '*://soundcloud.com/*/*',
+    '*://www.soundcloud.com/*/*',
+    '*://m.soundcloud.com/*/*',
+    '*://on.soundcloud.com/*',
+    '*://*.bandcamp.com/track/*',
+    '*://mixcloud.com/*/*',
+    '*://www.mixcloud.com/*/*',
+    '*://m.mixcloud.com/*/*'
   ]
 }, () => {
   if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
@@ -108,7 +117,7 @@ browser.notifications.onClosed.addListener(id => notificationFiles.delete(id));
 async function notifyDownloadResult(origin, response) {
   if (origin === 'sidebar' && await isSidebarOpen()) return;
   if (response.status === 'success') {
-    const saved = `${response.filename || 'YouTube MP3'} saved successfully!`;
+    const saved = `${response.filename || 'The MP3'} saved successfully!`;
     notify('Download Complete', response.path ? `${saved} Click to show it in its folder.` : saved, response.path);
   } else {
     notify('Download Failed', response.message || 'An error occurred during download');
@@ -329,8 +338,8 @@ async function runNativeAction(payload, requestId, origin) {
 
 browser.contextMenus.onClicked.addListener(async (info) => {
   if (info.menuItemId !== MENU_ID) return;
-  if (!isYouTubeUrl(info.linkUrl)) {
-    notify('Invalid URL', 'Not a valid YouTube URL');
+  if (!isKnownSiteUrl(info.linkUrl)) {
+    notify('Invalid URL', 'Not a link to a video or track');
     return;
   }
 

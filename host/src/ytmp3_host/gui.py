@@ -20,7 +20,7 @@ from ytmp3_host.core import (
     describe_error,
     download_with_repair,
     ensure_default_folder,
-    is_youtube_url,
+    is_web_url,
     kill_process_tree,
     open_file,
     remove_temp_files,
@@ -118,7 +118,7 @@ class DownloaderApp(ctk.CTk):
         fields = ctk.CTkFrame(card, fg_color="transparent")
         fields.pack(fill="x", padx=14, pady=14)
 
-        self._field_label(fields, "YOUTUBE URL", top=0)
+        self._field_label(fields, "URL", top=0)
         self.url_entry = self._entry(fields, placeholder="https://www.youtube.com/watch?v=...")
         self.url_entry.pack(fill="x")
 
@@ -170,7 +170,7 @@ class DownloaderApp(ctk.CTk):
             ctk.CTkButton(
                 self.file_actions,
                 text=text,
-                command=lambda act=action: self._open_saved_file(action),
+                command=lambda act=action: self._open_saved_file(act),
                 fg_color=PILL,
                 hover_color=PILL_HOVER,
                 text_color="#d7dadd",
@@ -286,8 +286,8 @@ class DownloaderApp(ctk.CTk):
         a second download.
         """
         url = self.url_entry.get().strip()
-        if not url or not is_youtube_url(url):
-            self.show_status("Enter a valid YouTube URL", "error")
+        if not is_web_url(url):
+            self.show_status("Enter a valid URL", "error")
             return
 
         folder_path = resolve_folder(self.folder_var.get())
@@ -448,3 +448,7 @@ def select_folder(folder: str) -> None:
     finally:
         root.destroy()
     send_current_folder(chosen or str(initial))
+
+if __name__ == "__main__":
+    # run as a script for testing the GUI without the extension
+    open_gui("https://www.youtube.com/watch?v=9bZkp7q19f0", "", "")

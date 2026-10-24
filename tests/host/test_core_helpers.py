@@ -15,11 +15,13 @@ from ytmp3_host.core import (
     describe_error,
     downloaded_mp3,
     extra_tags,
+    is_web_url,
     is_youtube_url,
     parse_info,
     requested_filename,
     resolve_folder,
     safe_filename,
+    title_filename,
     title_from_filename,
 )
 
@@ -117,12 +119,37 @@ def test_title_from_filename(filename: str, expected: str) -> None:
         ("Song", {"artists": ["Queen", "David Bowie"], "channel": "Queen - Topic"}, "Queen, David Bowie"),
         ("Song", {"channel": "Queen - Topic"}, "Queen"),
         ("Song", {"channel": "jawed"}, "jawed"),
+        ("Song", {"artists": ["Forss"], "uploader": "Forss"}, "Forss"),  # SoundCloud: no channel
+        # Mixcloud's artists are the mix's tracklist: the uploader made the mix
+        ("Mix", {"artists": ["A", "B"], "uploader": "Spartacus", "extractor_key": "Mixcloud"}, "Spartacus"),
+        ("Song", {"artists": [None, " ", 5], "uploader": "Up"}, "Up"),
         ("Song", {"artists": [], "channel": ""}, UNKNOWN_ARTIST),
         ("Song", {}, UNKNOWN_ARTIST),
     ],
 )
 def test_artist_for(filename: str, info: dict[str, object], expected: str) -> None:
     assert artist_for(filename, info) == expected
+
+
+@pytest.mark.parametrize(
+    ("info", "expected"),
+    [
+        ({"title": "Flickermood", "artists": ["Forss"]}, "Forss - Flickermood"),
+        ({"title": "Under Pressure (Official Video)", "artists": ["Queen", "David Bowie"]}, "Queen, David Bowie - Under Pressure"),
+        # the title already names an artist
+        ({"title": "Rick Astley - Never Gonna Give You Up", "artists": ["Rick Astley"]}, "Rick Astley - Never Gonna Give You Up"),
+        # a dash inside a word is not an artist separator
+        ({"title": "Spider-Man Theme", "artists": ["X"]}, "X - Spider-Man Theme"),
+        # only a site's artists, not the channel: a vlog stays "Me at the zoo"
+        ({"title": "Me at the zoo", "channel": "jawed"}, "Me at the zoo"),
+        ({"title": "Party Time", "artists": ["A", "B"], "extractor_key": "Mixcloud"}, "Party Time"),
+        ({"title": "AC/DC?", "artists": ["AC/DC"]}, "ACDC - ACDC"),
+        ({"artists": ["Forss"]}, DEFAULT_FILENAME),
+        ({}, DEFAULT_FILENAME),
+    ],
+)
+def test_title_filename(info: dict[str, object], expected: str) -> None:
+    assert title_filename(info) == expected
 
 
 def test_extra_tags_keeps_only_the_values_a_video_has() -> None:
@@ -196,6 +223,25 @@ def test_is_youtube_url(url: str, expected: bool) -> None:
     assert is_youtube_url(url) is expected
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www.youtube.com/watch?v=abc", True),
+        ("https://soundcloud.com/artist/track", True),
+        ("http://artist.bandcamp.com/track/song", True),
+        ("https://", False),
+        ("youtube.com/watch?v=abc", False),
+        ("-o C:\\x https://youtu.be/abc", False),  # would be read as a yt-dlp option
+        ("file:///C:/song.mp3", False),
+        ("http://[::1", False),  # urlsplit raises ValueError
+        ("", False),
+        (None, False),
+    ],
+)
+def test_is_web_url(url: object, expected: bool) -> None:
+    assert is_web_url(url) is expected
+
+
 def test_build_download_command_keeps_quality_and_contract(tmp_path: Path) -> None:
     stem = tmp_path / "_ytmp3_x"
     cmd = build_download_command("https://youtu.be/abc", stem)
@@ -207,9 +253,10 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path) -> No
     assert cmd[-1] == "https://youtu.be/abc"
     assert value("--audio-format") == "mp3"
     assert value("--audio-quality") == "0"  # LAME V0, see CLAUDE.md priorities
+    assert value("--playlist-items") == "1"  # a playlist URL still gives one file
     assert value("-o") == f"{stem}.%(ext)s"
     assert value("--print") == (
-        f"before_dl:{core.INFO_MARKER}%(.{{title,artists,album,release_year,track_number,channel,webpage_url}})j"
+        f"before_dl:{core.INFO_MARKER}%(.{{title,artists,album,release_year,track_number,channel,uploader,webpage_url,extractor_key}})j"
     )
     assert "--no-simulate" in cmd  # --print must never turn the call into a dry run
     assert value("--ffmpeg-location") == str(core.FFMPEG_PATH)

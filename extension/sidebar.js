@@ -1,4 +1,4 @@
-/* global browser, isYouTubeUrl */
+/* global browser, isKnownSiteUrl, isWebUrl */
 
 const downloadBtn = document.getElementById('DownloadBtn');
 const openInAppBtn = document.getElementById('openInAppBtn');
@@ -48,10 +48,10 @@ async function syncUrlFromActiveTab() {
   if (current && current !== autofilledUrl) return;
 
   const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  const url = tab && isYouTubeUrl(tab.url) ? tab.url : '';
+  const url = tab && isKnownSiteUrl(tab.url) ? tab.url : '';
   urlInput.value = url;
   autofilledUrl = url;
-  urlLabel.textContent = url ? 'Current URL' : 'YouTube URL';
+  urlLabel.textContent = url ? 'Current URL' : 'Video URL';
 }
 
 browser.tabs.onActivated.addListener(() => syncUrlFromActiveTab().catch(console.error));
@@ -140,11 +140,11 @@ function setBusy(busy) {
 downloadBtn.addEventListener('click', () => {
   const url = urlInput.value.trim();
   if (!url) {
-    showResult('Please enter a YouTube URL', 'error');
+    showResult('Please enter a video URL', 'error');
     return;
   }
-  if (!isYouTubeUrl(url)) {
-    showResult('Please enter a valid YouTube URL', 'error');
+  if (!isWebUrl(url)) {
+    showResult('Please enter a valid URL (starting with https://)', 'error');
     return;
   }
 
@@ -163,7 +163,7 @@ downloadBtn.addEventListener('click', () => {
     setBusy(false);
     if (resp.status === 'success') {
       filenameInput.value = '';
-      showResult(resp.message || `Downloaded: ${resp.filename || 'YouTube MP3'}`, 'success', undefined, resp.path);
+      showResult(resp.message || `Downloaded: ${resp.filename || 'the MP3'}`, 'success', undefined, resp.path);
     } else {
       showResult(resp.message || 'Download failed', 'error', resp.helpUrl);
     }
