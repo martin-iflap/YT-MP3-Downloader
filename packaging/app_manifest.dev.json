@@ -1,0 +1,10 @@
+{
+  "name": "app_manifest",
+  "description": "YouTube MP3 Converter and Downloader",
+  "path": "C:\\path\\to\\YT-MP3-Downloader\\dist\\mp3\\mp3.exe",
+  "type": "stdio",
+  "allowed_extensions": ["yt.downloader@converter.org"],
+
+
+  "\\" : "copy to %APPDATA%\\Mozilla\\NativeMessagingHosts\\app_manifest.json and set path to your checkout's dist\\mp3\\mp3.exe (copy ffmpeg.exe, yt-dlp.exe and mp3.ico next to it)"
+}

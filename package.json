@@ -1,0 +1,16 @@
+{
+  "name": "yt-mp3-downloader",
+  "private": true,
+  "description": "Dev tooling for the Firefox extension (not shipped: AMO gets a zip of extension/ only)",
+  "scripts": {
+    "lint": "eslint . && npm run lint:amo",
+    "lint:amo": "addons-linter extension",
+    "test": "node --test tests/extension/"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "addons-linter": "^10.14.0",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0"
+  }
+}

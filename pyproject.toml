@@ -1,23 +1,41 @@
 [project]
-name = "mp3"
-version = "0.1.0"
-description = "Firefox extension to download mp3 from youtube"
+name = "ytmp3-host"
+version = "2.0.0"  # = ytmp3_host.__version__
+description = "Native messaging host for the YouTube MP3 Downloader Firefox extension"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 dependencies = [
-    "auto-mix-prep==0.2.0",
     "customtkinter==5.2.2",
-    "pillow==12.3.0",
-    "pyinstaller>=6.22.2",
-    "win10toast-click==0.1.2",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/mp3", "src/old"]
+[dependency-groups]
+dev = [
+    "pillow==13.0.0",
+    "pyrefly>=0.60.0",
+    "pyinstaller>=6.22.2",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+]
 
-[tool.hatch.build.targets.wheel.sources]
-"src/mp3" = "mp3"
-"src/old" = "old"
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["host/src/ytmp3_host"]
 
 [tool.uv]
 package = true
+
+[tool.pytest.ini_options]
+# host/tests/smoke_native.py is a manual script, not a pytest module
+testpaths = ["tests/host"]
+addopts = "-m 'not network'"
+# temp dirs of passing tests are deleted; only failures are kept to inspect
+tmp_path_retention_policy = "failed"
+markers = ["network: downloads a real video with the real yt-dlp.exe and ffmpeg.exe (opt-in: -m network)"]
+
+[tool.pyrefly]
+project-includes = ["host/**/*.py"]
+project-excludes = ["legacy/**"]
+search-path = ["host/src"]

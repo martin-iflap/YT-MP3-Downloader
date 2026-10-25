@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MP3 Downloader</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            -webkit-font-smoothing:antialiased;
+            -moz-osx-font-smoothing:grayscale;
+            background: #17181a; /* uniform background to avoid white corners */
+        }
+
+        :root {
+            --ease: cubic-bezier(.2,.9,.3,1); /* iOS-like spring-out */
+            /* liquid glass: translucent fill, hairline border, light catching the top edge */
+            --glass: linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.02) 100%);
+            --glass-border: rgba(255,255,255,0.07);
+            --glass-highlight: inset 0 1px 0 rgba(255,255,255,0.07);
+            --glass-blur: blur(20px) saturate(160%);
+        }
+
+        /* Fill whatever width the user gives the sidebar */
+        body {
+            min-height: 600px; /* allow taller content */
+            /* faint ambient light behind the glass, fixed so it doesn't scroll */
+            background:
+                radial-gradient(120% 55% at 50% -12%, rgba(140,160,190,0.10), transparent 60%),
+                radial-gradient(90% 45% at 100% 105%, rgba(120,130,150,0.06), transparent 60%),
+                #17181a;
+            background-attachment: fixed;
+            font-family: -apple-system, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            padding: 14px;
+            color: #e6e6e6;
+            overflow: hidden; /* prevent flicker */
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-height: calc(100vh - 28px);
+            overflow-y: auto; /* scroll here if needed */
+            scrollbar-width: none; /* firefox */
+            -ms-overflow-style: none; /* ie 10+ */
+        }
+        /* hide webkit scrollbars for container */
+        .container::-webkit-scrollbar { display: none; }
+
+        h1 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #ffffff;
+            text-align: center;
+            letter-spacing: -0.01em;
+            margin-bottom: 4px;
+        }
+
+        /* Card-like input area: a frosted glass panel */
+        .card {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            background: var(--glass);
+            backdrop-filter: var(--glass-blur);
+            border-radius: 12px;
+            padding: 14px;
+            border: 1px solid var(--glass-border);
+            box-shadow: var(--glass-highlight), 0 10px 30px rgba(0,0,0,0.35);
+            overflow: visible;
+        }
+
+        .current-url-area {
+            background: transparent;
+            padding: 0;
+            border: none;
+            box-shadow: none;
+        }
+
+        /* Input groups share a consistent modern look */
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        label.input-label {
+            font-size: 10px;
+            color: #9aa0a6;
+            text-transform: uppercase;
+            letter-spacing: normal;
+            font-weight: 600;
+        }
+
+        .static-url {
+            font-size: 12px;
+            color: #dcdfe2;
+            word-break: break-all;
+            line-height: 1.3;
+            padding: 6px 8px;
+            background: rgba(255,255,255,0.01);
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.03);
+        }
+
+        input[type="text"] {
+            width: 100%;
+            background: rgba(0,0,0,0.18); /* recessed into the glass */
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 8px;
+            padding: 10px 10px;
+            color: #e6e6e6;
+            font-size: 13px;
+            font-family: inherit;
+            transition: background 160ms var(--ease), border-color 160ms var(--ease), box-shadow 160ms var(--ease);
+            outline: none;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+        }
+
+        input[type="text"]:hover { border-color: rgba(255,255,255,0.09); }
+
+        input[type="text"]:focus {
+            background: rgba(0,0,0,0.24);
+            border-color: rgba(255,255,255,0.18);
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.25), 0 0 0 3px rgba(255,255,255,0.05);
+        }
+
+        input[type="text"]::placeholder {
+            color: #7e8488;
+        }
+
+        /* Actions row - stack vertically for narrow sidebar */
+        .actions {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: stretch;
+            justify-content: flex-start;
+            margin-top: 4px;
+        }
+
+        /* Pill style used for primary-like actions (Download, Open in app) */
+        .action-pill {
+            background: linear-gradient(180deg, rgba(255,255,255,0.11) 0%, rgba(255,255,255,0.045) 100%);
+            backdrop-filter: var(--glass-blur);
+            color: #f3f4f6;
+            border: 1px solid rgba(255,255,255,0.10);
+            padding: 10px 18px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: transform 180ms var(--ease), background 180ms var(--ease), border-color 180ms var(--ease), box-shadow 180ms var(--ease), opacity 180ms var(--ease);
+            min-width: 140px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 6px 18px rgba(0,0,0,0.35);
+            letter-spacing: normal;
+            margin: 0 auto; /* center in sidebar */
+            display: inline-block;
+            text-align: center;
+        }
+        .action-pill:hover {
+            background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.06) 100%);
+            border-color: rgba(255,255,255,0.14);
+            transform: translateY(-1px);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.16), 0 10px 24px rgba(0,0,0,0.4);
+        }
+        .action-pill:active { transform: scale(0.97); transition-duration: 80ms; } /* iOS-style press */
+
+        /* Primary action: the same glass tinted with Apple's dark-mode system blue */
+        .action-pill.primary {
+            background: linear-gradient(180deg, rgba(10,132,255,0.34) 0%, rgba(10,132,255,0.18) 100%);
+            border-color: rgba(10,132,255,0.45);
+            color: #eaf3ff;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 6px 18px rgba(10,132,255,0.16), 0 6px 18px rgba(0,0,0,0.3);
+        }
+        .action-pill.primary:hover {
+            background: linear-gradient(180deg, rgba(10,132,255,0.44) 0%, rgba(10,132,255,0.24) 100%);
+            border-color: rgba(10,132,255,0.6);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 10px 24px rgba(10,132,255,0.22), 0 10px 24px rgba(0,0,0,0.35);
+        }
+        .action-pill:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+        /* Secondary small button - default (full width) */
+        .secondary-btn {
+            background: rgba(255,255,255,0.03);
+            color: #d7dadd;
+            border: 1px solid rgba(255,255,255,0.07);
+            padding: 8px 10px;
+            font-family: inherit;
+            font-size: 13px;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: var(--glass-highlight);
+            transition: transform 160ms var(--ease), background 160ms var(--ease), border-color 160ms var(--ease);
+            width: 100%;
+            text-align: left;
+        }
+        .secondary-btn:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.11); }
+        .secondary-btn:active { transform: scale(0.96); transition-duration: 80ms; }
+
+        .action-pill:focus-visible, .secondary-btn:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(255,255,255,0.12);
+        }
+
+        /* Narrow variant for select-folder button (inline next to input) */
+        .secondary-narrow {
+            width: auto;
+            padding: 8px 10px;
+            min-width: 72px;
+            text-align: center;
+        }
+
+        /* Row with input + select button side by side; its helper sits below the row */
+        .input-row {
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            align-items: stretch; /* button matches the input height */
+            width: 100%;
+        }
+        .input-row input[type="text"] { flex: 1 1 auto; min-width: 0; }
+        .input-row button { flex: 0 0 auto; }
+        /* when space is tight, stack vertically */
+        @media (max-width: 260px) {
+            .input-row { flex-direction: column; }
+        }
+
+        /* show only after a short hover delay to avoid accidental triggers
+           (hovering the folder row's input shows the helper below the row) */
+        .input-row:has(> input[type="text"]:hover) + .helper,
+        .input-group > input[type="text"]:hover + .helper,
+        .input-group > .helper:hover {
+            transition-delay: 140ms; /* wait briefly before showing */
+            max-height: 48px;
+            opacity: 1;
+            padding: 8px 6px;
+        }
+
+        /* Result pill message; #hostNotice (app missing/outdated/broken, or updating) shares the look but stays */
+        #result, #hostNotice {
+            display: none; /* hidden until a message arrives */
+            align-items: center;
+            gap: 10px;
+            border-radius: 10px;
+            padding: 8px 10px;
+            min-height: 44px;
+            font-size: 13px;
+            /* the result kind tints the glass: --result-color as r,g,b */
+            background: linear-gradient(180deg, rgba(var(--result-rgb, 74,144,226),0.10), rgba(var(--result-rgb, 74,144,226),0.04));
+            backdrop-filter: var(--glass-blur);
+            color: #dfe6e9;
+            border: 1px solid rgba(var(--result-rgb, 74,144,226),0.20);
+            box-shadow: var(--glass-highlight);
+        }
+
+        /* display:none can't transition, so animate in on show */
+        #result.show, #hostNotice.show { display:flex; animation: rise-in 240ms var(--ease); }
+        @keyframes rise-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+        /* colored indicator dot via ::before — color set via CSS variable */
+        #result::before, #hostNotice::before {
+            content: '';
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--result-color, #4a90e2);
+            flex: 0 0 auto;
+            box-shadow: 0 0 8px var(--result-color, #4a90e2); /* soft glow */
+        }
+
+        #result.success { --result-color: #2ecc71; --result-rgb: 46,204,113; color:#bfecc8; }
+        #result.error, #hostNotice.error { --result-color: #ff6b6b; --result-rgb: 255,107,107; color:#ffd6d6; }
+        #result.warning, #hostNotice.warning { --result-color: #f39c12; --result-rgb: 243,156,18; color:#ffecc5; }
+        #result.info, #hostNotice.info { --result-color: #4a90e2; --result-rgb: 74,144,226; color:#cfe9ff; }
+        #result a, #hostNotice a { color: inherit; font-weight: 600; text-decoration: underline; }
+        #result small, #hostNotice small { display: block; margin-top: 4px; font-size: 11px; opacity: 0.8; }
+        #result .file-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+        #result .file-actions .secondary-btn { color: #dfe6e9; padding: 5px 10px; font-size: 12px; }
+
+        .loader { display:none; width:18px; height:18px; border:2px solid rgba(255,255,255,0.08); border-top-color:#cfd6da; border-radius:50%; animation:spin 0.8s linear infinite; margin:10px auto; }
+        @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+            .action-pill:hover, .action-pill:active, .secondary-btn:active { transform: none; }
+        }
+
+        /* helper: in-flow element that expands (pushes content down) */
+        .helper {
+            display: block;
+            max-height: 0; /* collapsed until hovered (see the :hover rules above) */
+            opacity: 0;
+            overflow: hidden;
+            color: #a8b0b4; /* slightly brighter for readability */
+            background: rgba(255,255,255,0.01);
+            border-radius: 8px;
+            padding: 0 6px;
+            font-size: 12px;
+            transition: max-height 160ms ease, opacity 160ms ease, padding 160ms ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>YouTube MP3 Downloader</h1>
+        <div id="hostNotice" role="alert"></div>
+
+        <div class="card">
+            <div class="input-group">
+                <label class="input-label" for="urlInput">Video URL</label>
+                <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." aria-describedby="urlHelp">
+                <div id="urlHelp" class="helper">Paste a link or open the page: YouTube, SoundCloud, Bandcamp, Mixcloud...</div>
+            </div>
+
+            <div class="input-group">
+                <label class="input-label" for="folderInput">Default Download Folder</label>
+                <div class="input-row">
+                    <input type="text" id="folderInput" placeholder="Folder Path" aria-describedby="folderHelp">
+                    <button class="secondary-btn secondary-narrow" id="selectFolderBtn">Choose</button>
+                </div>
+                <div id="folderHelp" class="helper">Default folder used for downloads (also by the right-click menu)</div>
+            </div>
+
+            <div class="input-group">
+                <label class="input-label" for="filenameInput">Filename (Optional)</label>
+                <input type="text" id="filenameInput" placeholder="Leave empty to use video title" aria-describedby="filenameHelp">
+                <div id="filenameHelp" class="helper">Custom filename for the downloaded MP3 file</div>
+            </div>
+
+        </div>
+
+        <div class="actions">
+            <button id="DownloadBtn" class="action-pill primary">Download MP3</button>
+            <button id="openInAppBtn" class="action-pill">Open in app</button>
+         </div>
+
+         <div class="loader" id="loader" aria-hidden="true"></div>
+         <div id="result" role="status" aria-live="polite"></div>
+     </div>
+
+     <script src="youtube.js"></script>
+     <script src="sidebar.js"></script>
+</body>
+</html>

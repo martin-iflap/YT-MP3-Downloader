@@ -1,0 +1,41 @@
+{
+  "manifest_version": 2,
+  "name": "YouTube MP3 Downloader",
+  "version": "2.0.0",
+  "description": "Download YouTube videos as MP3 files",
+
+  "browser_specific_settings": {
+    "gecko": {
+      "data_collection_permissions": {
+        "required": ["none"]
+      },
+      "id": "yt.downloader@converter.org"
+    }
+  },
+
+  "background": {
+    "scripts": ["youtube.js", "background.js"]
+  },
+
+  "icons": {
+    "48": "icons/icon-48.png",
+    "96": "icons/icon-96.png"
+  },
+
+  "permissions": [
+    "contextMenus",
+    "nativeMessaging",
+    "notifications",
+    "tabs",
+    "storage"
+  ],
+
+  "sidebar_action": {
+    "default_title": "YouTube MP3 Downloader",
+    "default_panel": "sidebar.html",
+    "default_icon": {
+      "48": "icons/icon-48.png",
+      "96": "icons/icon-96.png"
+    }
+  }
+}
