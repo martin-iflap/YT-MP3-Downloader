@@ -19,6 +19,56 @@ test('creates the context menu at startup', () => {
   assert.equal(state.menus[0].id, 'download-mp3');
 });
 
+test('the toolbar button toggles the sidebar', () => {
+  const { browser, state } = loadBackground();
+  browser.browserAction.onClicked.fire({});
+  browser.browserAction.onClicked.fire({});
+  assert.equal(state.sidebarToggles, 2);
+  assert.equal(state.sidebarOpen, false);
+});
+
+// What background.js answers the sidebar's toolbar_tip question with.
+const toolbarTip = browser => Promise.all(browser.runtime.onMessage.fire({ type: 'toolbar_tip' }))
+  .then(answers => answers.find(a => a !== undefined));
+
+function withClock(fn) {
+  return async () => {
+    mock.timers.reset();
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+    await fn();
+  };
+}
+
+test('toolbar tip: shown when the sidebar opens some other way while the button is pinned', withClock(async () => {
+  const { browser } = loadBackground();
+  mock.timers.tick(60 * 1000);
+  assert.equal(await toolbarTip(browser), true);
+}));
+
+test('toolbar tip: not when the toolbar button opened the sidebar', withClock(async () => {
+  const { browser } = loadBackground();
+  mock.timers.tick(60 * 1000);
+  browser.browserAction.onClicked.fire({});
+  mock.timers.tick(1000);
+  assert.equal(await toolbarTip(browser), false);
+  mock.timers.tick(10 * 1000);
+  assert.equal(await toolbarTip(browser), true, 'a later open is not the click\'s');
+}));
+
+test('toolbar tip: not for a sidebar Firefox restores at startup', withClock(async () => {
+  const { browser } = loadBackground();
+  mock.timers.tick(2000);
+  assert.equal(await toolbarTip(browser), false);
+}));
+
+test('toolbar tip: not when unpinned or dismissed', withClock(async () => {
+  const unpinned = loadBackground({ pinned: false });
+  const dismissed = loadBackground({ storage: { toolbarTipDismissed: true } });
+  mock.timers.tick(60 * 1000);
+  assert.equal(await toolbarTip(unpinned.browser), false);
+  assert.equal(await toolbarTip(dismissed.browser), false);
+}));
+
 test('sidebar download: forwards payload, relays progress, then one final and disconnects', async () => {
   const { browser, state } = loadBackground({ sidebarOpen: true });
   sidebarAction(browser, 'download', { url: VIDEO_URL, folder: 'C:\\Music', filename: 'song' });
@@ -27,12 +77,12 @@ test('sidebar download: forwards payload, relays progress, then one final and di
   assert.equal(port.name, 'app_manifest');
   assert.deepStrictEqual(port.posted, [{ action: 'download', url: VIDEO_URL, folder: 'C:\\Music', filename: 'song' }]);
 
-  port.reply({ status: 'warning', message: 'Invalid folder path, using default', final: false });
+  port.reply({ status: 'warning', message: 'No thumbnail found, the MP3 is saved without cover art', final: false });
   port.reply({ status: 'success', filename: 'song', final: true });
   await flush();
 
   assert.deepStrictEqual(state.sent, [
-    { type: 'native_response', status: 'warning', message: 'Invalid folder path, using default', requestId: 'req-1', final: false },
+    { type: 'native_response', status: 'warning', message: 'No thumbnail found, the MP3 is saved without cover art', requestId: 'req-1', final: false },
     { type: 'native_response', status: 'success', filename: 'song', requestId: 'req-1', final: true }
   ]);
   assert.equal(port.disconnected, true);
@@ -126,7 +176,7 @@ test('sidebar download notifies when the sidebar was closed by the time it finis
 test('folder lookups never notify, even when they fail', async () => {
   const { browser, state } = loadBackground({ sidebarOpen: false });
   sidebarAction(browser, 'get_current_folder');
-  state.ports[0].reply({ status: 'error', message: "Path doesn't exist", final: true });
+  state.ports[0].reply({ status: 'error', message: 'The download folder "C:\\Gone" doesn\'t exist. Check the path in the sidebar, or pick a folder with Choose.', final: true });
   await flush();
 
   assert.equal(state.notifications.length, 0);

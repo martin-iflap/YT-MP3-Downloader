@@ -294,15 +294,27 @@ def test_successful_download(
     }
 
 
-def test_invalid_folder_warns_then_downloads_to_default(
+def test_missing_folder_is_an_error_naming_the_folder(
     monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], default_folder: Path, tmp_path: Path
 ) -> None:
-    responses = run_host(
-        monkeypatch, frame({"action": "download", "url": URL, "folder": str(tmp_path / "nope"), "filename": "Name"})
-    )
-    assert_one_final_per_request(responses, 1)
-    assert responses[0] == {"status": "warning", "message": "Invalid folder path, using default", "final": False}
-    assert responses[1]["path"] == str(default_folder / "Name.mp3")
+    missing = tmp_path / "nope"
+    [response] = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(missing), "filename": "Name"}))
+    assert response["status"] == "error"
+    assert response["final"] is True
+    assert f'"{missing}" doesn\'t exist' in response["message"]
+    assert fake_embed == []
+    assert not (default_folder / "Name.mp3").exists()
+
+
+def test_unwritable_folder_is_an_error_without_a_repair(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    monkeypatch.setattr(native_messaging, "folder_is_writable", lambda folder: False)
+    [response] = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
+    assert response["status"] == "error"
+    assert response["final"] is True
+    assert f'Windows doesn\'t allow saving in "{out_dir.resolve()}"' in response["message"]
+    assert fake_embed == []
 
 
 def test_warnings_are_repeated_in_the_final_message(

@@ -14,7 +14,7 @@ from ytmp3_host.core import (
     describe_error,
     download_with_repair,
     downloaded_mp3,
-    ensure_default_folder,
+    folder_is_writable,
     is_web_url,
     open_file,
     requested_filename,
@@ -87,6 +87,19 @@ def send_message(message: Message, exit_code: int = 1) -> None:
         sys.exit(exit_code)
 
 
+def missing_folder_message(folder: str) -> str:
+    """What the user is told when the download folder they set does not exist (a typo, or deleted)."""
+    return f'The download folder "{folder.strip()}" doesn\'t exist. Check the path in the sidebar, or pick a folder with Choose.'
+
+
+def unwritable_folder_message(folder: Path) -> str:
+    """What the user is told when Windows doesn't allow saving in the download folder."""
+    return (
+        f'Windows doesn\'t allow saving in "{folder}" (a protected folder, or blocked by Windows Security). '
+        "Pick another folder."
+    )
+
+
 def send_current_folder(folder: str) -> None:
     """Send a folder as the final response of a folder action.
     Args:
@@ -95,7 +108,7 @@ def send_current_folder(folder: str) -> None:
     """
     folder_path = resolve_folder(folder)
     if folder_path is None:
-        send_message({"status": "error", "message": "Path doesn't exist", "final": True})
+        send_message({"status": "error", "message": missing_folder_message(folder), "final": True})
         return
     send_message({"status": "success", "folder": str(folder_path), "final": True})
 
@@ -125,9 +138,9 @@ def run_open_file(path: str, select: bool) -> None:
 
 def run_native(url: str, folder: str, filename: str) -> None:
     """Handle a headless download request and send its responses.
-    Sends intermediate warnings (invalid folder, so the default is used; no title;
-    no thumbnail) and infos (a repair after a yt-dlp failure, see
-    download_with_repair), then exactly one final success or error response.
+    Sends intermediate warnings (no title; no thumbnail) and infos (a repair after a
+    yt-dlp failure, see download_with_repair), then exactly one final success or
+    error response.
 
     Args:
         url: The YouTube video URL.
@@ -140,8 +153,12 @@ def run_native(url: str, folder: str, filename: str) -> None:
 
     folder_path = resolve_folder(folder)
     if folder_path is None:
-        send_message({"status": "warning", "message": "Invalid folder path, using default", "final": False})
-        folder_path = ensure_default_folder()
+        # the user's mistake: say so rather than saving the MP3 somewhere they did not ask for
+        send_message({"status": "error", "message": missing_folder_message(folder), "final": True})
+        return
+    if not folder_is_writable(folder_path):
+        send_message({"status": "error", "message": unwritable_folder_message(folder_path), "final": True})
+        return
 
     warnings: list[str] = []
 

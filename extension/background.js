@@ -85,6 +85,40 @@ browser.contextMenus.create({
   if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
 });
 
+// The toolbar button opens and closes the sidebar. With tabs on top, Firefox shows no
+// sidebar launcher, so without it users would not find the extension. toggle() must run
+// right in the click handler (it needs the user action), so nothing is awaited first.
+let lastToolbarClick = 0;
+browser.browserAction.onClicked.addListener(() => {
+  lastToolbarClick = Date.now();
+  browser.sidebarAction.toggle().catch(e => console.warn('Could not toggle the sidebar:', e));
+});
+
+// A sidebar that opens this soon after a toolbar click was opened by it.
+const TOOLBAR_OPEN_MS = 5 * 1000;
+// Firefox reopens a sidebar that was open at shutdown; that says nothing about how it was opened.
+const STARTUP_MS = 10 * 1000;
+const startedAt = Date.now();
+
+// Whether the sidebar that just opened should suggest unpinning the toolbar button: it was
+// opened some other way (e.g. the vertical-tabs sidebar launcher), so this user doesn't need
+// the button, and Firefox gives extensions no way to hide it. Until the user dismisses it.
+async function toolbarTipWanted() {
+  const now = Date.now();
+  if (now - startedAt < STARTUP_MS || now - lastToolbarClick < TOOLBAR_OPEN_MS) return false;
+  try {
+    const { toolbarTipDismissed } = await browser.storage.local.get('toolbarTipDismissed');
+    if (toolbarTipDismissed) return false;
+    return (await browser.browserAction.getUserSettings()).isOnToolbar === true;
+  } catch {
+    return false; // getUserSettings needs Firefox 118
+  }
+}
+
+browser.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === 'toolbar_tip') return toolbarTipWanted();
+});
+
 // Forward a host response to extension pages; rejects when none are open, which is fine.
 function relay(message) {
   browser.runtime.sendMessage(Object.assign({ type: 'native_response' }, message)).catch(() => {});

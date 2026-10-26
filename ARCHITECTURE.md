@@ -261,14 +261,14 @@ unknown actions before spawning the host, so this path is not reached from the e
   "final": true | false }
 ```
 
-| Field              | Meaning                                                                                                                                                                                                                                                                                                                                                                               |
-|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `final: false`     | Intermediate message; request still running. `download` sends warnings ("Invalid folder path, using default", "Could not fetch the video title, …", "No thumbnail found, …") and infos about a repair ("The download failed, checking for a yt-dlp update...", "Trying the download again..."). The final success repeats the warnings in `message`, since the sidebar replaces them. |
-| `final: true`      | Last message for the request. Exactly one per request.                                                                                                                                                                                                                                                                                                                                |
-| `filename`, `path` | Set on a successful download.                                                                                                                                                                                                                                                                                                                                                         |
-| `folder`           | Set by folder actions.                                                                                                                                                                                                                                                                                                                                                                |
-| `version`          | `get_version`: the host version. `update_host`: the tag being installed, or `null` if this host is the latest.                                                                                                                                                                                                                                                                        |
-| `yt_dlp`           | `get_version`: see §7.1. `update_yt_dlp`: `{ "version": "<installed version>" }`.                                                                                                                                                                                                                                                                                                     |
+| Field              | Meaning                                                                                                                                                                                                                                                                                                                                         |
+|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `final: false`     | Intermediate message; request still running. `download` sends warnings ("Could not fetch the video title, …", "No thumbnail found, …") and infos about a repair ("The download failed, checking for a yt-dlp update...", "Trying the download again..."). The final success repeats the warnings in `message`, since the sidebar replaces them. |
+| `final: true`      | Last message for the request. Exactly one per request.                                                                                                                                                                                                                                                                                          |
+| `filename`, `path` | Set on a successful download.                                                                                                                                                                                                                                                                                                                   |
+| `folder`           | Set by folder actions.                                                                                                                                                                                                                                                                                                                          |
+| `version`          | `get_version`: the host version. `update_host`: the tag being installed, or `null` if this host is the latest.                                                                                                                                                                                                                                  |
+| `yt_dlp`           | `get_version`: see §7.1. `update_yt_dlp`: `{ "version": "<installed version>" }`.                                                                                                                                                                                                                                                               |
 
 If `final` is absent, `background.js` treats `success`/`error` as final and anything else
 as intermediate.
@@ -352,16 +352,18 @@ flowchart TB
     RNA --> NDR --> NOT
 ```
 
-| Function / listener                           | Responsibility                                                                                                                                                                      |
-|-----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `contextMenus.create` (top level)             | Registers "Download as MP3" for YouTube, SoundCloud, Bandcamp and Mixcloud links (`targetUrlPatterns`). Runs on every startup because MV2 persistent backgrounds do not keep menus. |
-| `runtime.onMessage`                           | Accepts `native_action` from the sidebar. Rejects actions not in `ACTION_TIMEOUTS_MS`. Copies only `action`, `url`, `folder`, `filename`, `path` into the payload.                  |
-| `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set, starts a `download`.                                                                                 |
-| `runNativeAction(payload, requestId, origin)` | Runs the request (`get_version` through `checkHost`), relays intermediate responses, then exactly one final one; notifies for downloads.                                            |
-| `hostRequest(payload, onProgress)`            | Opens the port, posts the payload, starts the timeout. Resolves once with `{ response, source }`; `source` is `host`, `timeout`, `disconnect` or `connect`.                         |
-| `checkHost(onProgress)`                       | One check-and-repair at a time; a second caller shares the running one (§7.2).                                                                                                      |
-| `relay(message)`                              | Sends `native_response` to extension pages. Rejection (no page open) is ignored.                                                                                                    |
-| `notifyDownloadResult(origin, response)`      | `download` only. Context-menu downloads always notify; sidebar downloads only if the sidebar is closed when the result arrives. A click on a success notification shows the file.   |
+| Function / listener                           | Responsibility                                                                                                                                                                                                                       |
+|-----------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `contextMenus.create` (top level)             | Registers "Download as MP3" for YouTube, SoundCloud, Bandcamp and Mixcloud links (`targetUrlPatterns`). Runs on every startup because MV2 persistent backgrounds do not keep menus.                                                  |
+| `browserAction.onClicked`                     | The toolbar button (`default_area: navbar`): toggles the sidebar, which Firefox gives no launcher when tabs are on top. `toggle()` is called directly, as it needs the user action. Remembers the click time for `toolbarTipWanted`. |
+| `runtime.onMessage` (`toolbar_tip`)           | Answers the sidebar with `toolbarTipWanted()`: true if the button is pinned and the sidebar opened without it (no click in 5 s, not restored at startup), until dismissed. Extensions can't unpin the button themselves.             |
+| `runtime.onMessage`                           | Accepts `native_action` from the sidebar. Rejects actions not in `ACTION_TIMEOUTS_MS`. Copies only `action`, `url`, `folder`, `filename`, `path` into the payload.                                                                   |
+| `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set, starts a `download`.                                                                                                                                  |
+| `runNativeAction(payload, requestId, origin)` | Runs the request (`get_version` through `checkHost`), relays intermediate responses, then exactly one final one; notifies for downloads.                                                                                             |
+| `hostRequest(payload, onProgress)`            | Opens the port, posts the payload, starts the timeout. Resolves once with `{ response, source }`; `source` is `host`, `timeout`, `disconnect` or `connect`.                                                                          |
+| `checkHost(onProgress)`                       | One check-and-repair at a time; a second caller shares the running one (§7.2).                                                                                                                                                       |
+| `relay(message)`                              | Sends `native_response` to extension pages. Rejection (no page open) is ignored.                                                                                                                                                     |
+| `notifyDownloadResult(origin, response)`      | `download` only. Context-menu downloads always notify; sidebar downloads only if the sidebar is closed when the result arrives. A click on a success notification shows the file.                                                    |
 
 `hostRequest` completion: the first trigger wins, later ones are ignored.
 
@@ -559,9 +561,10 @@ folder actions via `core.resolve_folder`. `run_open_file(path, select)` handles
 flowchart TB
     A{"is_web_url(url)?"} -- no --> E1["error: Invalid URL"]
     A -- yes --> B{"resolve_folder(folder)"}
-    B -- "None (invalid)" --> W1["warning, final false:<br/>Invalid folder path, using default"] --> BD["ensure_default_folder()"]
-    B -- "folder / default" --> C
-    BD --> C["requested_filename(filename)<br/>'' = name after the title"]
+    B -- "None (doesn't exist)" --> E0["error: missing_folder_message(folder)<br/>(names the folder, nothing is downloaded)"]
+    B -- "folder / default" --> WR{"folder_is_writable?"}
+    WR -- no --> E2["error: unwritable_folder_message(folder)<br/>(protected folder or Windows Security, no repair)"]
+    WR -- yes --> C["requested_filename(filename)<br/>'' = name after the title"]
     C --> DL["core.download_with_repair()"]
     DL -. "on_warning (no title / no thumbnail)" .-> W2["warning, final false"]
     DL -. "on_info (repair running)" .-> I1["info, final false"]
@@ -894,9 +897,8 @@ sequenceDiagram
     BG->>BG: whitelist check, runNativeAction(origin sidebar)
     BG->>H: connectNative + postMessage, start 27 min timer
     H->>H: main() then run_native()
-    opt invalid folder
-        H-->>BG: warning, final false
-        BG-->>SB: native_response (shown as warning)
+    opt folder doesn't exist
+        H-->>BG: error, final true (the folder is named, nothing is downloaded)
     end
     H->>T: core.download_audio: one yt-dlp call
     T-->>H: temp mp3 + thumbnail + video info

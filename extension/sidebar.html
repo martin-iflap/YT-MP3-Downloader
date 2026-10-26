@@ -244,8 +244,8 @@
             padding: 8px 6px;
         }
 
-        /* Result pill message; #hostNotice (app missing/outdated/broken, or updating) shares the look but stays */
-        #result, #hostNotice {
+        /* Result pill message; #hostNotice (app missing/outdated/broken, or updating) and #toolbarTip share the look but stay */
+        #result, #hostNotice, #toolbarTip {
             display: none; /* hidden until a message arrives */
             align-items: center;
             gap: 10px;
@@ -262,11 +262,11 @@
         }
 
         /* display:none can't transition, so animate in on show */
-        #result.show, #hostNotice.show { display:flex; animation: rise-in 240ms var(--ease); }
+        #result.show, #hostNotice.show, #toolbarTip.show { display:flex; animation: rise-in 240ms var(--ease); }
         @keyframes rise-in { from { opacity: 0; transform: translateY(6px) scale(0.98); } to { opacity: 1; transform: none; } }
 
         /* colored indicator dot via ::before — color set via CSS variable */
-        #result::before, #hostNotice::before {
+        #result::before, #hostNotice::before, #toolbarTip::before {
             content: '';
             width: 10px;
             height: 10px;
@@ -279,7 +279,8 @@
         #result.success { --result-color: #2ecc71; --result-rgb: 46,204,113; color:#bfecc8; }
         #result.error, #hostNotice.error { --result-color: #ff6b6b; --result-rgb: 255,107,107; color:#ffd6d6; }
         #result.warning, #hostNotice.warning { --result-color: #f39c12; --result-rgb: 243,156,18; color:#ffecc5; }
-        #result.info, #hostNotice.info { --result-color: #4a90e2; --result-rgb: 74,144,226; color:#cfe9ff; }
+        #result.info, #hostNotice.info, #toolbarTip.info { --result-color: #4a90e2; --result-rgb: 74,144,226; color:#cfe9ff; }
+        #toolbarTip .secondary-btn { display: block; margin-top: 8px; color: #dfe6e9; padding: 5px 10px; font-size: 12px; }
         #result a, #hostNotice a { color: inherit; font-weight: 600; text-decoration: underline; }
         #result small, #hostNotice small { display: block; margin-top: 4px; font-size: 11px; opacity: 0.8; }
         #result .file-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
@@ -312,6 +313,10 @@
     <div class="container">
         <h1>YouTube MP3 Downloader</h1>
         <div id="hostNotice" role="alert"></div>
+        <div id="toolbarTip" role="note">
+            <span>You can open this from the sidebar, so you don't need the toolbar button. To remove it, right-click it and choose "Unpin from Toolbar".
+                <button class="secondary-btn secondary-narrow" id="toolbarTipDismiss">Got it</button></span>
+        </div>
 
         <div class="card">
             <div class="input-group">

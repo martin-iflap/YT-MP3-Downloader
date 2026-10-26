@@ -8,6 +8,7 @@ import ctypes
 import errno
 import json
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -153,17 +154,45 @@ def resolve_folder(folder: str) -> Path | None:
         folder: The requested folder, possibly empty.
     Returns:
         The folder if it is an existing directory, the (created) default folder if
-        folder is empty or names the default folder, otherwise None.
+        folder is empty or names the default folder, otherwise None. A relative path
+        is treated as None.
     """
     folder = folder.strip()
     if not folder:
         return ensure_default_folder()
     folder_path = Path(folder).expanduser()
+    if not folder_path.is_absolute():
+        return None
     if folder_path.is_dir():
         return folder_path.resolve()
     if folder_path == Path(DEFAULT_FOLDER).expanduser():
         return ensure_default_folder()
     return None
+
+
+def folder_is_writable(folder: Path) -> bool:
+    """Whether a file can be created in folder.
+
+    An existing folder can still refuse it: protected folders like C:\\ or Program Files,
+    Windows Security's Controlled folder access, read-only drives. yt-dlp would then fail
+    with "Permission denied", which looks like a broken yt-dlp. The probe is opened with
+    O_TEMPORARY (FILE_FLAG_DELETE_ON_CLOSE), so Windows deletes it when the handle closes,
+    even when the host is killed first. That also needs delete access, which a download
+    needs too (yt-dlp renames its .part file, and the temp files are removed).
+
+    Args:
+        folder: An existing folder.
+    Returns:
+        True if a file could be created in folder.
+    """
+    probe = folder / f"_ytmp3_{uuid.uuid4().hex[:12]}.probe"
+    try:
+        fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_TEMPORARY)
+    except OSError as e:
+        logger.warning("Can't write to %s: %s", folder, e)
+        return False
+    os.close(fd)
+    return True
 
 
 def artist_from_filename(filename: str) -> str:

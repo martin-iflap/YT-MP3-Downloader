@@ -1,10 +1,10 @@
 from pathlib import Path
 import subprocess
 
-FFMPEG_PATH: str = "/ffmpeg-7.1.1-essentials_build/bin/ffmpeg.exe"
-YT_DLP_PATH: str = "/yt-dlp.exe"
-FOLDER: str = "C:\\Users\\User\\Documents\\Martin"
-FILENAME: str = "Random_ahh_tutorial" # name of the file without extension
+FFMPEG_PATH: str = "../../dist/mp3/ffmpeg.exe"
+YT_DLP_PATH: str = "../../dist/mp3/yt-dlp.exe"
+FOLDER: str = "C:\\Users\\User\\Downloads"
+FILENAME: str = "" # name of the file without extension
 URL: str = "" # YouTube url to download
 
 def main() -> None:

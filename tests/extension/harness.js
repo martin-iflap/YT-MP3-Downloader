@@ -42,8 +42,8 @@ function createFakePort(name, nativeHost) {
   return port;
 }
 
-function createFakeBrowser({ sidebarOpen = false, storage = {}, nativeHost = null } = {}) {
-  const state = { sidebarOpen, storage: { ...storage }, sent: [], notifications: [], menus: [], ports: [] };
+function createFakeBrowser({ sidebarOpen = false, pinned = true, storage = {}, nativeHost = null } = {}) {
+  const state = { sidebarOpen, pinned, sidebarToggles: 0, storage: { ...storage }, sent: [], notifications: [], menus: [], ports: [] };
 
   const browser = {
     runtime: {
@@ -71,8 +71,16 @@ function createFakeBrowser({ sidebarOpen = false, storage = {}, nativeHost = nul
         return `notification-${state.notifications.length}`;
       }
     },
+    browserAction: {
+      onClicked: createEvent(),
+      getUserSettings: async () => ({ isOnToolbar: state.pinned })
+    },
     sidebarAction: {
-      isOpen: async () => state.sidebarOpen
+      isOpen: async () => state.sidebarOpen,
+      toggle: async () => {
+        state.sidebarToggles += 1;
+        state.sidebarOpen = !state.sidebarOpen;
+      }
     },
     storage: {
       local: {
@@ -92,6 +100,8 @@ function loadScripts(files, globals) {
     // Wrapped so node:test mock timers (which patch the real globals) apply inside the sandbox
     setTimeout: (...args) => setTimeout(...args),
     clearTimeout: handle => clearTimeout(handle),
+    // the outer Date, so mock timers that mock Date move the scripts' clock too
+    Date,
     ...globals
   });
   for (const file of files) {
