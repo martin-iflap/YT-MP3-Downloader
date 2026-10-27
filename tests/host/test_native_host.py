@@ -294,15 +294,27 @@ def test_successful_download(
     }
 
 
-def test_invalid_folder_warns_then_downloads_to_default(
+def test_missing_folder_is_an_error_naming_the_folder(
     monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], default_folder: Path, tmp_path: Path
 ) -> None:
-    responses = run_host(
-        monkeypatch, frame({"action": "download", "url": URL, "folder": str(tmp_path / "nope"), "filename": "Name"})
-    )
-    assert_one_final_per_request(responses, 1)
-    assert responses[0] == {"status": "warning", "message": "Invalid folder path, using default", "final": False}
-    assert responses[1]["path"] == str(default_folder / "Name.mp3")
+    missing = tmp_path / "nope"
+    [response] = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(missing), "filename": "Name"}))
+    assert response["status"] == "error"
+    assert response["final"] is True
+    assert f'"{missing}" doesn\'t exist' in response["message"]
+    assert fake_embed == []
+    assert not (default_folder / "Name.mp3").exists()
+
+
+def test_unwritable_folder_is_an_error_without_a_repair(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    monkeypatch.setattr(native_messaging, "folder_is_writable", lambda folder: False)
+    [response] = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
+    assert response["status"] == "error"
+    assert response["final"] is True
+    assert f'Windows doesn\'t allow saving in "{out_dir.resolve()}"' in response["message"]
+    assert fake_embed == []
 
 
 def test_warnings_are_repeated_in_the_final_message(
@@ -373,20 +385,20 @@ def test_several_requests_in_one_session(
 def host_env(tmp_path: Path) -> dict[str, str]:
     """Environment for a host started as a child process, where monkeypatch can't reach."""
     env = dict(os.environ)
-    env["USERPROFILE"] = str(tmp_path)  # Path.home(): keep the default folder out of Documents
     env["YTMP3_LOG_LEVEL"] = "CRITICAL"  # don't write mp3.log into the repo
     return env
 
 
 def test_host_process_over_real_pipes(tmp_path: Path) -> None:
-    stdin = requests({"action": "download", "url": "bad"}, {"action": "get_current_folder"})
+    # neither request touches a folder: the default one is the user's real Documents
+    stdin = requests({"action": "download", "url": "bad"}, {"action": "play", "path": str(tmp_path / "missing.mp3")})
     result = subprocess.run(
         [sys.executable, "-m", "ytmp3_host.MP3"], input=stdin, capture_output=True, env=host_env(tmp_path), timeout=60
     )
     assert result.returncode == 0, result.stderr
     responses = parse_frames(result.stdout)
-    assert [r["status"] for r in responses] == ["error", "success"]
-    assert responses[1]["folder"] == str(tmp_path / "Documents" / "YT-MP3-Downloads")
+    assert [r["status"] for r in responses] == ["error", "error"]
+    assert all(r["final"] for r in responses)
 
 
 def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:
@@ -400,8 +412,8 @@ def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:
         assert (result.returncode, result.stderr) == (0, "")
     else:
         assert result.returncode == 1
-        [problem] = result.stderr.strip().splitlines()  # the modules and the framing are fine
-        assert problem.startswith(f"{config.FFMPEG_PATH} does not run")
+        [problem] = result.stderr.strip().splitlines()  # the modules and the request are fine
+        assert problem.startswith(f"{config.FFMPEG_PATH} does not work")
 
 
 def test_headless_path_does_not_load_the_gui_health_or_updater(tmp_path: Path) -> None:

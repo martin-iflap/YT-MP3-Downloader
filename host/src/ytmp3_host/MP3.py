@@ -8,6 +8,7 @@ import logging
 import sys
 from collections.abc import Callable
 
+from ytmp3_host import __version__
 from ytmp3_host.config import setup_logging
 lazy from ytmp3_host.gui import open_gui, select_folder as pick_folder
 lazy from ytmp3_host.health import host_status
@@ -88,6 +89,15 @@ def get_version(_request: Message) -> None:
     send_message({"status": "success", **host_status(), "final": True})
 
 
+def ping(_request: Message) -> None:
+    """Handle the `ping` action: answer with the version, nothing else.
+
+    Not used by the extension: the self-check sends it to a second process of this
+    host version, started like Firefox starts it, to prove the build serves requests.
+    """
+    send_message({"status": "success", "version": __version__, "final": True})
+
+
 def update_yt_dlp(_request: Message) -> None:
     """Handle the `update_yt_dlp` action: install the latest yt-dlp, or repair a missing or broken one."""
     try:
@@ -122,6 +132,7 @@ ACTIONS: dict[str, Callable[[Message], None]] = {
     "get_version": get_version,
     "update_yt_dlp": update_yt_dlp,
     "update_host": update_host,
+    "ping": ping,
 }
 
 

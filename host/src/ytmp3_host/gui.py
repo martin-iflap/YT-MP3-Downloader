@@ -20,6 +20,7 @@ from ytmp3_host.core import (
     describe_error,
     download_with_repair,
     ensure_default_folder,
+    folder_is_writable,
     is_web_url,
     kill_process_tree,
     open_file,
@@ -293,6 +294,9 @@ class DownloaderApp(ctk.CTk):
         folder_path = resolve_folder(self.folder_var.get())
         if folder_path is None:
             self.show_status("Folder doesn't exist", "error")
+            return
+        if not folder_is_writable(folder_path):
+            self.show_status("Windows doesn't allow saving in this folder, pick another one", "error")
             return
         self.folder_var.set(str(folder_path))
 

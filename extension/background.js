@@ -85,6 +85,40 @@ browser.contextMenus.create({
   if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
 });
 
+// The toolbar button opens and closes the sidebar. With tabs on top, Firefox shows no
+// sidebar launcher, so without it users would not find the extension. toggle() must run
+// right in the click handler (it needs the user action), so nothing is awaited first.
+let lastToolbarClick = 0;
+browser.browserAction.onClicked.addListener(() => {
+  lastToolbarClick = Date.now();
+  browser.sidebarAction.toggle().catch(e => console.warn('Could not toggle the sidebar:', e));
+});
+
+// A sidebar that opens this soon after a toolbar click was opened by it.
+const TOOLBAR_OPEN_MS = 5 * 1000;
+// Firefox reopens a sidebar that was open at shutdown; that says nothing about how it was opened.
+const STARTUP_MS = 10 * 1000;
+const startedAt = Date.now();
+
+// Whether the sidebar that just opened should suggest unpinning the toolbar button: it was
+// opened some other way (e.g. the vertical-tabs sidebar launcher), so this user doesn't need
+// the button, and Firefox gives extensions no way to hide it. Until the user dismisses it.
+async function toolbarTipWanted() {
+  const now = Date.now();
+  if (now - startedAt < STARTUP_MS || now - lastToolbarClick < TOOLBAR_OPEN_MS) return false;
+  try {
+    const { toolbarTipDismissed } = await browser.storage.local.get('toolbarTipDismissed');
+    if (toolbarTipDismissed) return false;
+    return (await browser.browserAction.getUserSettings()).isOnToolbar === true;
+  } catch {
+    return false; // getUserSettings needs Firefox 118
+  }
+}
+
+browser.runtime.onMessage.addListener((msg) => {
+  if (msg && msg.type === 'toolbar_tip') return toolbarTipWanted();
+});
+
 // Forward a host response to extension pages; rejects when none are open, which is fine.
 function relay(message) {
   browser.runtime.sendMessage(Object.assign({ type: 'native_response' }, message)).catch(() => {});
@@ -239,6 +273,8 @@ function withRepairFailures(status, failures) {
 // Ask the host for its state, repair what can be repaired (each repair at most once),
 // and turn the state after the last repair into the one status the user is told.
 async function checkAndRepairHost(onProgress) {
+  lastCheckStarted = Date.now();
+  browser.storage.local.set({ lastHostCheck: lastCheckStarted }).catch(e => console.warn('Could not save the check time:', e));
   let check = await hostRequest({ action: 'get_version' });
   const attempted = new Set();
   const failures = [];
@@ -266,13 +302,49 @@ async function checkAndRepairHost(onProgress) {
 }
 
 // One check (with its repairs) at a time: a sidebar that asks meanwhile, e.g. in a second
-// window, shares the running one and gets only its final answer.
+// window, shares the running one. It gets the last progress message at once (e.g. "Updating
+// the app...", which can last minutes), then the later ones and the final answer.
 let runningCheck = null;
+const checkListeners = new Set();
+let lastCheckProgress = null;
 
 function checkHost(onProgress) {
-  if (!runningCheck) runningCheck = checkAndRepairHost(onProgress).finally(() => { runningCheck = null; });
+  checkListeners.add(onProgress);
+  if (runningCheck) {
+    if (lastCheckProgress) onProgress(lastCheckProgress);
+  } else {
+    runningCheck = checkAndRepairHost((progress) => {
+      lastCheckProgress = progress;
+      checkListeners.forEach(listener => listener(progress));
+    }).finally(() => {
+      runningCheck = null;
+      checkListeners.clear();
+      lastCheckProgress = null;
+    });
+  }
   return runningCheck;
 }
+
+// The host and yt-dlp only update during a check. The sidebar checks on every open; for users
+// who only use the context menu, check in the background too, at most once a day (any check
+// counts, the time is kept across restarts): soon after the browser starts, and after a
+// context-menu download. Silent: problems are shown when the sidebar opens.
+const BACKGROUND_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const BACKGROUND_CHECK_DELAY_MS = 60 * 1000; // keep the host off the browser's startup
+let lastCheckStarted = 0;
+
+async function checkHostInBackground() {
+  try {
+    const { lastHostCheck } = await browser.storage.local.get('lastHostCheck');
+    const last = Math.max(lastCheckStarted, Number(lastHostCheck) || 0);
+    if (Date.now() - last < BACKGROUND_CHECK_INTERVAL_MS) return;
+  } catch {
+    return;
+  }
+  await checkHost(() => {});
+}
+
+setTimeout(checkHostInBackground, BACKGROUND_CHECK_DELAY_MS);
 
 // Run one action on a fresh host process. Intermediate responses go to onProgress.
 // Resolves exactly once with { response, source }: the host's final response (source
@@ -348,7 +420,8 @@ browser.contextMenus.onClicked.addListener(async (info) => {
   const { lastFolder } = await browser.storage.local.get('lastFolder').catch(() => ({}));
   if (lastFolder) payload.folder = lastFolder;
 
-  runNativeAction(payload, crypto.randomUUID(), 'menu');
+  // the check comes after the download, so it never delays it
+  runNativeAction(payload, crypto.randomUUID(), 'menu').then(checkHostInBackground);
 });
 
 browser.runtime.onMessage.addListener((msg) => {

@@ -9,7 +9,7 @@
 #define MyAppName         "YouTube MP3 Downloader"
 ; Must match __version__ in host\src\ytmp3_host\__init__.py
 ; (tests\host\test_versions.py checks it).
-#define MyAppVersion      "2.0.0"
+#define MyAppVersion      "2.1.0"
 #define MyAppPublisher    "Martin"
 
 ; Must match browser_specific_settings.gecko.id in the
@@ -136,9 +136,10 @@ Type: files; Name: "{app}\mp3.log.1"
 Type: filesandordirs; Name: "{app}\versions"
 Type: files; Name: "{userappdata}\Mozilla\NativeMessagingHosts\{#NativeManifestName}"
 ; The default download folder (config.DEFAULT_FOLDER), only if it
-; is empty: the user's MP3s are never deleted. The host uses
-; %USERPROFILE%\Documents; {userdocs} is the real Documents folder,
-; which differs when Windows moved it (e.g. into OneDrive).
+; is empty: the user's MP3s are never deleted. Since 2.1.0 the host
+; uses {userdocs}, the real Documents folder, which differs when
+; Windows moved it (e.g. into OneDrive); older hosts used
+; %USERPROFILE%\Documents.
 Type: dirifempty; Name: "{%USERPROFILE}\Documents\YT-MP3-Downloads"
 Type: dirifempty; Name: "{userdocs}\YT-MP3-Downloads"
 
@@ -389,8 +390,10 @@ end;
 // NewVersionWorks
 // ============================================================
 // Runs the new version's mp3.exe --self-check (selfcheck.py):
-// it imports every host module and runs ffmpeg.exe. Exit code
-// 0 means it works; the problems are in {app}\mp3.log.
+// it imports every host module, sends a ping to a second mp3.exe
+// and runs the ffmpeg steps of a download on a generated tone
+// (offline, ~1 s). Exit code 0 means it works; the problems are
+// in {app}\mp3.log.
 
 function NewVersionWorks(): Boolean;
 var

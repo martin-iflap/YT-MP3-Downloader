@@ -42,8 +42,8 @@ function createFakePort(name, nativeHost) {
   return port;
 }
 
-function createFakeBrowser({ sidebarOpen = false, storage = {}, nativeHost = null } = {}) {
-  const state = { sidebarOpen, storage: { ...storage }, sent: [], notifications: [], menus: [], ports: [] };
+function createFakeBrowser({ sidebarOpen = false, pinned = true, storage = {}, nativeHost = null } = {}) {
+  const state = { sidebarOpen, pinned, sidebarToggles: 0, storage: { ...storage }, sent: [], notifications: [], menus: [], ports: [] };
 
   const browser = {
     runtime: {
@@ -71,12 +71,21 @@ function createFakeBrowser({ sidebarOpen = false, storage = {}, nativeHost = nul
         return `notification-${state.notifications.length}`;
       }
     },
+    browserAction: {
+      onClicked: createEvent(),
+      getUserSettings: async () => ({ isOnToolbar: state.pinned })
+    },
     sidebarAction: {
-      isOpen: async () => state.sidebarOpen
+      isOpen: async () => state.sidebarOpen,
+      toggle: async () => {
+        state.sidebarToggles += 1;
+        state.sidebarOpen = !state.sidebarOpen;
+      }
     },
     storage: {
       local: {
-        get: async key => (key in state.storage ? { [key]: state.storage[key] } : {})
+        get: async key => (key in state.storage ? { [key]: state.storage[key] } : {}),
+        set: async (items) => { Object.assign(state.storage, plain(items)); }
       }
     }
   };
@@ -89,9 +98,17 @@ function loadScripts(files, globals) {
     console,
     URL,
     crypto,
-    // Wrapped so node:test mock timers (which patch the real globals) apply inside the sandbox
-    setTimeout: (...args) => setTimeout(...args),
+    // Wrapped so node:test mock timers (which patch the real globals) apply inside the sandbox.
+    // Unref'd: a real timer left behind (e.g. background.js's startup check) must not keep
+    // the test process alive.
+    setTimeout: (...args) => {
+      const handle = setTimeout(...args);
+      if (handle && typeof handle.unref === 'function') handle.unref();
+      return handle;
+    },
     clearTimeout: handle => clearTimeout(handle),
+    // the outer Date, so mock timers that mock Date move the scripts' clock too
+    Date,
     ...globals
   });
   for (const file of files) {

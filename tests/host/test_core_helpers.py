@@ -1,6 +1,7 @@
 """Pure helpers of core.py: filenames, artist and tags, folders, URL check, error messages."""
 
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -201,6 +202,38 @@ def test_resolve_folder_file_is_not_a_folder(tmp_path: Path) -> None:
     file = tmp_path / "file.txt"
     file.write_text("x")
     assert resolve_folder(str(file)) is None
+
+
+@pytest.mark.parametrize("folder", ["Music", "C:", "\\", "C:Music"])
+def test_resolve_folder_rejects_relative_paths(folder: str) -> None:
+    assert resolve_folder(folder) is None
+
+
+def test_folder_is_writable_leaves_nothing_behind(tmp_path: Path) -> None:
+    assert core.folder_is_writable(tmp_path)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_folder_is_writable_probe_is_gone_when_the_host_is_killed(tmp_path: Path) -> None:
+    # the host killed while the probe is open: Windows still deletes it (O_TEMPORARY)
+    code = (
+        "import os, sys, time; from ytmp3_host import core\n"
+        "core.os.close = lambda fd: (print('open', flush=True), time.sleep(60))\n"
+        "core.folder_is_writable(core.Path(sys.argv[1]))\n"
+    )
+    child = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], stdout=subprocess.PIPE, text=True)
+    assert child.stdout is not None
+    assert child.stdout.readline().strip() == "open"
+    assert len(list(tmp_path.glob("_ytmp3_*.probe"))) == 1
+    # the venv's python.exe is a launcher with the real Python as its child
+    core.kill_process_tree(child)
+    child.wait()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_folder_is_writable_false_when_windows_refuses(tmp_path: Path) -> None:
+    # a folder that can't take a file, like a missing one
+    assert not core.folder_is_writable(tmp_path / "missing")
 
 
 def test_resolve_folder_names_missing_default(default_folder: Path) -> None:

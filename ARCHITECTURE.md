@@ -47,7 +47,7 @@ flowchart TB
 
     BG <-- "stdin / stdout<br/>4-byte length + JSON" --> MAIN
     CORE --> YT
-    FFM --> OUT[("~/Documents/YT-MP3-Downloads/<br/>title.mp3")]
+    FFM --> OUT[("Documents/YT-MP3-Downloads/<br/>title.mp3")]
     HEALTH --> GH
     UPD --> GH
 ```
@@ -244,6 +244,7 @@ Exceptions:
 | `get_version`        | —                              | The host version and the state of its tools (`health.host_status`, §7.1)                            | 30 s                        |
 | `update_yt_dlp`      | —                              | Installs the latest yt-dlp, or repairs a missing/broken one (`updater.update_yt_dlp`)               | 7 min                       |
 | `update_host`        | —                              | Starts the installer of a newer host release (`updater.update_host`)                                | 9 min                       |
+| `ping`               | —                              | Answers with `version` only; sent by the self-check (§7.5), not by the extension                    | —                           |
 
 `show_in_folder` and `play` only accept an absolute path to an existing `.mp3`
 (`core.downloaded_mp3`); anything else is "The MP3 was moved or deleted". `play` must
@@ -261,14 +262,14 @@ unknown actions before spawning the host, so this path is not reached from the e
   "final": true | false }
 ```
 
-| Field              | Meaning                                                                                                                                                                                                                                                                                                                                                                               |
-|--------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `final: false`     | Intermediate message; request still running. `download` sends warnings ("Invalid folder path, using default", "Could not fetch the video title, …", "No thumbnail found, …") and infos about a repair ("The download failed, checking for a yt-dlp update...", "Trying the download again..."). The final success repeats the warnings in `message`, since the sidebar replaces them. |
-| `final: true`      | Last message for the request. Exactly one per request.                                                                                                                                                                                                                                                                                                                                |
-| `filename`, `path` | Set on a successful download.                                                                                                                                                                                                                                                                                                                                                         |
-| `folder`           | Set by folder actions.                                                                                                                                                                                                                                                                                                                                                                |
-| `version`          | `get_version`: the host version. `update_host`: the tag being installed, or `null` if this host is the latest.                                                                                                                                                                                                                                                                        |
-| `yt_dlp`           | `get_version`: see §7.1. `update_yt_dlp`: `{ "version": "<installed version>" }`.                                                                                                                                                                                                                                                                                                     |
+| Field              | Meaning                                                                                                                                                                                                                                                                                                                                         |
+|--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `final: false`     | Intermediate message; request still running. `download` sends warnings ("Could not fetch the video title, …", "No thumbnail found, …") and infos about a repair ("The download failed, checking for a yt-dlp update...", "Trying the download again..."). The final success repeats the warnings in `message`, since the sidebar replaces them. |
+| `final: true`      | Last message for the request. Exactly one per request.                                                                                                                                                                                                                                                                                          |
+| `filename`, `path` | Set on a successful download.                                                                                                                                                                                                                                                                                                                   |
+| `folder`           | Set by folder actions.                                                                                                                                                                                                                                                                                                                          |
+| `version`          | `get_version`: the host version. `update_host`: the tag being installed, or `null` if this host is the latest.                                                                                                                                                                                                                                  |
+| `yt_dlp`           | `get_version`: see §7.1. `update_yt_dlp`: `{ "version": "<installed version>" }`.                                                                                                                                                                                                                                                               |
 
 If `final` is absent, `background.js` treats `success`/`error` as final and anything else
 as intermediate.
@@ -352,16 +353,19 @@ flowchart TB
     RNA --> NDR --> NOT
 ```
 
-| Function / listener                           | Responsibility                                                                                                                                                                      |
-|-----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `contextMenus.create` (top level)             | Registers "Download as MP3" for YouTube, SoundCloud, Bandcamp and Mixcloud links (`targetUrlPatterns`). Runs on every startup because MV2 persistent backgrounds do not keep menus. |
-| `runtime.onMessage`                           | Accepts `native_action` from the sidebar. Rejects actions not in `ACTION_TIMEOUTS_MS`. Copies only `action`, `url`, `folder`, `filename`, `path` into the payload.                  |
-| `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set, starts a `download`.                                                                                 |
-| `runNativeAction(payload, requestId, origin)` | Runs the request (`get_version` through `checkHost`), relays intermediate responses, then exactly one final one; notifies for downloads.                                            |
-| `hostRequest(payload, onProgress)`            | Opens the port, posts the payload, starts the timeout. Resolves once with `{ response, source }`; `source` is `host`, `timeout`, `disconnect` or `connect`.                         |
-| `checkHost(onProgress)`                       | One check-and-repair at a time; a second caller shares the running one (§7.2).                                                                                                      |
-| `relay(message)`                              | Sends `native_response` to extension pages. Rejection (no page open) is ignored.                                                                                                    |
-| `notifyDownloadResult(origin, response)`      | `download` only. Context-menu downloads always notify; sidebar downloads only if the sidebar is closed when the result arrives. A click on a success notification shows the file.   |
+| Function / listener                           | Responsibility                                                                                                                                                                                                                       |
+|-----------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `contextMenus.create` (top level)             | Registers "Download as MP3" for YouTube, SoundCloud, Bandcamp and Mixcloud links (`targetUrlPatterns`). Runs on every startup because MV2 persistent backgrounds do not keep menus.                                                  |
+| `browserAction.onClicked`                     | The toolbar button (`default_area: navbar`): toggles the sidebar, which Firefox gives no launcher when tabs are on top. `toggle()` is called directly, as it needs the user action. Remembers the click time for `toolbarTipWanted`. |
+| `runtime.onMessage` (`toolbar_tip`)           | Answers the sidebar with `toolbarTipWanted()`: true if the button is pinned and the sidebar opened without it (no click in 5 s, not restored at startup), until dismissed. Extensions can't unpin the button themselves.             |
+| `runtime.onMessage`                           | Accepts `native_action` from the sidebar. Rejects actions not in `ACTION_TIMEOUTS_MS`. Copies only `action`, `url`, `folder`, `filename`, `path` into the payload.                                                                   |
+| `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set, starts a `download`, then `checkHostInBackground`.                                                                                                    |
+| `checkHostInBackground()`                     | A silent `checkHost` for context-menu-only users, at most once a day: 1 min after startup and after a context-menu download. Any check counts; its start time is `storage.local.lastHostCheck` (§7.2).                               |
+| `runNativeAction(payload, requestId, origin)` | Runs the request (`get_version` through `checkHost`), relays intermediate responses, then exactly one final one; notifies for downloads.                                                                                             |
+| `hostRequest(payload, onProgress)`            | Opens the port, posts the payload, starts the timeout. Resolves once with `{ response, source }`; `source` is `host`, `timeout`, `disconnect` or `connect`.                                                                          |
+| `checkHost(onProgress)`                       | One check-and-repair at a time; a second caller shares the running one (§7.2).                                                                                                                                                       |
+| `relay(message)`                              | Sends `native_response` to extension pages. Rejection (no page open) is ignored.                                                                                                                                                     |
+| `notifyDownloadResult(origin, response)`      | `download` only. Context-menu downloads always notify; sidebar downloads only if the sidebar is closed when the result arrives. A click on a success notification shows the file.                                                    |
 
 `hostRequest` completion: the first trigger wins, later ones are ignored.
 
@@ -471,7 +475,10 @@ Installed layout (`mp3_installer.iss`):
 
 In a source checkout the icon comes from `packaging/assets/`. Only an installed host can
 update itself (`update_host` refuses otherwise). `DEFAULT_FOLDER` is
-`~/Documents/YT-MP3-Downloads`.
+`YT-MP3-Downloads` in the user's real Documents folder (`documents_folder()`, asked from
+Windows with `SHGetKnownFolderPath`, so a Documents folder moved into OneDrive is found;
+`~/Documents` if that fails). Hosts before 2.1.0 used `~/Documents`; sidebar users keep
+that folder, because the sidebar saved it as `lastFolder` on its first open.
 
 `setup_logging()` (called once from `MP3.py`'s `__main__`) writes one rotating `mp3.log`
 (1 MB, plus `mp3.log.1`). The `YTMP3_LOG_LEVEL` environment variable overrides the level
@@ -559,9 +566,10 @@ folder actions via `core.resolve_folder`. `run_open_file(path, select)` handles
 flowchart TB
     A{"is_web_url(url)?"} -- no --> E1["error: Invalid URL"]
     A -- yes --> B{"resolve_folder(folder)"}
-    B -- "None (invalid)" --> W1["warning, final false:<br/>Invalid folder path, using default"] --> BD["ensure_default_folder()"]
-    B -- "folder / default" --> C
-    BD --> C["requested_filename(filename)<br/>'' = name after the title"]
+    B -- "None (doesn't exist)" --> E0["error: missing_folder_message(folder)<br/>(names the folder, nothing is downloaded)"]
+    B -- "folder / default" --> WR{"folder_is_writable?"}
+    WR -- no --> E2["error: unwritable_folder_message(folder)<br/>(protected folder or Windows Security, no repair)"]
+    WR -- yes --> C["requested_filename(filename)<br/>'' = name after the title"]
     C --> DL["core.download_with_repair()"]
     DL -. "on_warning (no title / no thumbnail)" .-> W2["warning, final false"]
     DL -. "on_info (repair running)" .-> I1["info, final false"]
@@ -714,8 +722,13 @@ sequenceDiagram
   `self_update`: a new release may bring its own fixes), then `update_yt_dlp`. Each repair
   runs at most once per check, even if it did not help.
 - Unknown values (`null`, e.g. offline) never trigger a repair.
-- Concurrent checks (two windows) share one run (`checkHost`); the second caller gets
-  only the final answer.
+- Concurrent checks (two windows) share one run (`checkHost`); a caller that joins it gets
+  the last progress message at once, then the later ones and the final answer.
+- Users who never open the sidebar are checked in the background (`checkHostInBackground`),
+  at most once a day: 1 min after the browser starts (not during its startup) and after a
+  context-menu download (after it, so it never delays the download). Any check counts, the
+  sidebar's too; its start time is kept in `storage.local.lastHostCheck`, so restarts don't
+  add checks. It shows nothing: what it can't repair, the sidebar shows when it opens.
 
 ### 7.3 yt-dlp updates (`updater.update_yt_dlp`)
 
@@ -785,7 +798,12 @@ sequenceDiagram
   manual link). It starts in the temp folder, so it doesn't hold the old version folder
   as its working directory.
 - A started installer is not started again for 10 min (`INSTALL_GRACE_S`, a `started`
-  marker in the download folder); `update_host` then just returns the tag.
+  marker in the download folder that holds the installer's SHA-256); `update_host` then
+  just returns the tag. After that the host is still outdated, so the install failed: the
+  same installer is retried only 24 h after its start (`INSTALL_RETRY_S`), and until then
+  `update_host` fails at once (the sidebar shows the installer link, without 3 min of
+  "Updating..."). A release re-published under the same tag has a new installer, which
+  is started right away.
 - `remove_installed_downloads()` runs on every `get_version`: it deletes the download
   folders of this release and older ones, keeping a newer release's download (its
   installer may be about to run, and its `install.log` explains a failed update). Files
@@ -815,11 +833,14 @@ flowchart TB
   atomic step. A kill or power loss before the switch leaves Firefox on the old, complete
   version. `CloseApplications=no`: a new version never touches files a running host uses.
 - **Self-check** (`selfcheck.py`): imports every host module (`MODULES`; the lazy imports
-  would only fail on first use, and a test checks the list is complete), round-trips a
-  message through `send_message` / `read_message` in memory, checks that HTTPS works
-  (`ssl`, which the updater needs), and runs `ffmpeg -version`. Exit code 0 or 1; problems
-  go to `mp3.log` and stderr. yt-dlp is not checked: all versions share it and the host
-  repairs it.
+  would only fail on first use, and a test checks the list is complete), starts a second
+  process of the same version the way Firefox does (`host_command`) and expects exactly
+  one framed answer to `ping`, checks that HTTPS works (`ssl`, which the updater needs),
+  and runs the ffmpeg steps of a download on a generated 1 s tone and image in a temp
+  folder (libmp3lame V0 encode, then the real `core.embed_thumbnail`; the result must have
+  the ID3v2.3 artist, title and cover frames). All offline, about 1 s, so no test URL can
+  go stale. Exit code 0 or 1; problems go to `mp3.log` and stderr. yt-dlp is not checked:
+  all versions share it and the host repairs it.
 - yt-dlp is downloaded, not bundled (YouTube changes break old versions), except in a
   silent update that finds one: the host keeps that one current.
 - A version folder whose `mp3.exe` still runs (e.g. a GUI window open during the update)
@@ -830,9 +851,9 @@ flowchart TB
   created at runtime (`yt-dlp*.exe` leftovers, `deno.exe`, `update.lock`, `mp3.log*`),
   listed under `[UninstallDelete]` because they are not in `[Files]`. The default download
   folder is removed only if it is empty (`dirifempty`, so the user's MP3s are never
-  deleted), under both `%USERPROFILE%\Documents` (where the host creates it) and
-  `{userdocs}` (the real Documents folder, different when Windows moved it, e.g. into
-  OneDrive).
+  deleted), under both `{userdocs}` (the real Documents folder, where the host creates it
+  since 2.1.0; different when Windows moved it, e.g. into OneDrive) and
+  `%USERPROFILE%\Documents` (where older hosts created it).
 
 ### 7.6 Repair during a download (`core.download_with_repair`)
 
@@ -894,9 +915,8 @@ sequenceDiagram
     BG->>BG: whitelist check, runNativeAction(origin sidebar)
     BG->>H: connectNative + postMessage, start 27 min timer
     H->>H: main() then run_native()
-    opt invalid folder
-        H-->>BG: warning, final false
-        BG-->>SB: native_response (shown as warning)
+    opt folder doesn't exist
+        H-->>BG: error, final true (the folder is named, nothing is downloaded)
     end
     H->>T: core.download_audio: one yt-dlp call
     T-->>H: temp mp3 + thumbnail + video info
@@ -1083,7 +1103,7 @@ folders or a real video; everything else runs for real. Real `Popen` and pipes, 
 | `test_health.py`          | The `get_version` facts.                                                                                                |
 | `test_github.py`          | `latest_release_tag` against a local HTTP server that answers like github.com.                                          |
 | `test_updater.py`         | yt-dlp updates and repairs, Deno, the host self-update, the lock and `launch_detached`, against a local release server. |
-| `test_selfcheck.py`       | `--self-check`: modules, framing, HTTPS, ffmpeg.                                                                        |
+| `test_selfcheck.py`       | `--self-check`: modules, the `ping` round trip, HTTPS, the ffmpeg steps.                                                |
 | `test_versions.py`        | Versions and names the host, the installer, the release and the extension must agree on; no new extension permissions.  |
 | `test_network.py`         | Opt-in (`-m network`): a real download with the real binaries.                                                          |
 
@@ -1170,9 +1190,6 @@ speed silently.
 | Issue                                                           | Details                                                                                                                                                                                                                                         |
 |-----------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Cancel right after the download starts can leave yt-dlp running | If `kill_process_tree` runs before yt-dlp.exe's bootloader has started its real child, only the bootloader dies. The orphan keeps the pipe open and the cancel waits until it finishes. Possible fix: kill the tree again after a short delay.  |
-| Updates run only from the sidebar                               | The host and yt-dlp are checked when the sidebar opens. Context-menu-only users get yt-dlp repaired when a download fails, but no host update (PLAN).                                                                                           |
-| A broken release is retried                                     | After a failed self-check the old host keeps working, but it still sees a newer release: every sidebar open (after the 10 min grace) starts the installer again and shows "Updating..." for up to 3 min. Fixed by publishing a working release. |
-| A second sidebar during an update shows nothing until the end   | Concurrent checks share one run; only the first sidebar gets the progress messages.                                                                                                                                                             |
 | Deno is never updated                                           | If a future yt-dlp needs a newer Deno, the failure path only installs a missing one (PLAN).                                                                                                                                                     |
 | The installer is not code-signed                                | Firefox and SmartScreen warn on the manual download; the sidebar explains how to proceed. The silent self-update is not affected.                                                                                                               |
 
@@ -1180,6 +1197,9 @@ Resolved:
 
 | Former issue                                                                                                                     | Resolution                                                                                                                                                                  |
 |----------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Updates ran only from the sidebar (2.0.0)                                                                                        | `checkHostInBackground` checks at most once a day, after startup and after a context-menu download (2.1.0).                                                                 |
+| A broken release was started again on every sidebar open after the 10 min grace, with 3 min of "Updating..." (2.0.0)             | The same installer is retried only once a day (`INSTALL_RETRY_S`); meanwhile `update_host` fails at once (2.1.0).                                                           |
+| A second sidebar during an update showed nothing until the end (2.0.0)                                                           | A sidebar that joins a running check gets its progress messages (2.1.0).                                                                                                    |
 | A path with non-ASCII characters (e.g. an accented user name) broke the native-messaging manifest                                | The installer writes the manifest as ASCII with `\uXXXX` escapes (1.x wrote it in the ANSI code page).                                                                      |
 | 1.x stopped the install when yt-dlp could not be downloaded                                                                      | The install goes on; the host downloads yt-dlp itself.                                                                                                                      |
 | `get_current_folder` did not create the default folder                                                                           | `send_current_folder` uses `core.resolve_folder`, which creates the default folder when it is requested.                                                                    |

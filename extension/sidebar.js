@@ -130,6 +130,21 @@ function checkHost() {
 
 checkHost();
 
+// ----- Toolbar button tip -----
+
+// background.js says whether to show it: the sidebar was opened without the toolbar
+// button while that is pinned, so the user may want to free its space.
+const toolbarTip = document.getElementById('toolbarTip');
+
+browser.runtime.sendMessage({ type: 'toolbar_tip' })
+  .then((show) => { if (show) toolbarTip.className = 'show info'; })
+  .catch(e => console.error('Could not check the toolbar tip:', e));
+
+document.getElementById('toolbarTipDismiss').addEventListener('click', () => {
+  toolbarTip.className = '';
+  browser.storage.local.set({ toolbarTipDismissed: true }).catch(e => console.error('Could not save the tip:', e));
+});
+
 // ----- Actions -----
 
 function setBusy(busy) {
