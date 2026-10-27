@@ -136,9 +136,10 @@ Type: files; Name: "{app}\mp3.log.1"
 Type: filesandordirs; Name: "{app}\versions"
 Type: files; Name: "{userappdata}\Mozilla\NativeMessagingHosts\{#NativeManifestName}"
 ; The default download folder (config.DEFAULT_FOLDER), only if it
-; is empty: the user's MP3s are never deleted. The host uses
-; %USERPROFILE%\Documents; {userdocs} is the real Documents folder,
-; which differs when Windows moved it (e.g. into OneDrive).
+; is empty: the user's MP3s are never deleted. Since 2.1.0 the host
+; uses {userdocs}, the real Documents folder, which differs when
+; Windows moved it (e.g. into OneDrive); older hosts used
+; %USERPROFILE%\Documents.
 Type: dirifempty; Name: "{%USERPROFILE}\Documents\YT-MP3-Downloads"
 Type: dirifempty; Name: "{userdocs}\YT-MP3-Downloads"
 

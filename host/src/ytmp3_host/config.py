@@ -1,5 +1,5 @@
 """Paths to the bundled binaries, the window icon, the log file and the default
-download folder, plus the logging setup.
+download folder (in the user's real Documents folder), plus the logging setup.
 
 Installed, each host version has its own folder (see mp3_installer.iss):
 
@@ -13,14 +13,38 @@ a source checkout the binaries come from host/bin/ (placed there manually), the 
 from packaging/assets/ and the log goes to the repo root.
 """
 
+import ctypes
 import logging
 import os
 import sys
+import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 FROZEN = getattr(sys, "frozen", False)
 VERSIONS_DIR_NAME = "versions"
+FOLDERID_DOCUMENTS = uuid.UUID("FDD39AD0-238F-46AF-ADB4-6C85480369C7")
+
+
+def documents_folder() -> Path:
+    """The user's Documents folder, where Windows keeps it.
+
+    Not always ~/Documents: Windows 11 often moves it into OneDrive, and users can move
+    it themselves. Falls back to ~/Documents when Windows can't say.
+    """
+    folder_id = ctypes.create_string_buffer(FOLDERID_DOCUMENTS.bytes_le, 16)
+    path = ctypes.c_wchar_p()
+    try:
+        result = ctypes.windll.shell32.SHGetKnownFolderPath(folder_id, 0, None, ctypes.byref(path))
+        try:
+            if result == 0 and path.value:
+                return Path(path.value)
+        finally:
+            ctypes.windll.ole32.CoTaskMemFree(path)  # also required when the call failed
+    except (OSError, AttributeError):
+        pass
+    return Path.home() / "Documents"
+
 
 if FROZEN:
     BIN_DIR = Path(sys.executable).parent
@@ -45,7 +69,7 @@ DENO_PATH = INSTALL_DIR / "deno.exe"
 UPDATE_LOCK_PATH = INSTALL_DIR / "update.lock"
 ICON_PATH = ICON_DIR / "mp3.ico"
 LOG_PATH = LOG_DIR / "mp3.log"
-DEFAULT_FOLDER = Path.home() / "Documents" / "YT-MP3-Downloads"
+DEFAULT_FOLDER = documents_folder() / "YT-MP3-Downloads"
 
 LOG_MAX_BYTES = 1_000_000  # rotated once: mp3.log + mp3.log.1, at most ~2 MB in total
 LOG_LEVEL_ENV = "YTMP3_LOG_LEVEL"

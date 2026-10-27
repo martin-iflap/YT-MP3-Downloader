@@ -222,12 +222,13 @@ test('clicking a download notification shows the MP3 in its folder', async () =>
 
   const [notification] = state.notifications;
   assert.match(notification.message, /Click to show it in its folder/);
+  const shows = () => state.ports.filter(p => p.posted.some(m => m.action === 'show_in_folder'));
   browser.notifications.onClicked.fire('notification-1');
-  assert.deepStrictEqual(state.ports[1].posted, [{ action: 'show_in_folder', path: 'C:\\Music\\Song.mp3' }]);
+  assert.deepStrictEqual(shows().map(p => p.posted), [[{ action: 'show_in_folder', path: 'C:\\Music\\Song.mp3' }]]);
 
   browser.notifications.onClosed.fire('notification-1');
   browser.notifications.onClicked.fire('notification-1');
-  assert.equal(state.ports.length, 2, 'a closed notification no longer opens anything');
+  assert.equal(shows().length, 1, 'a closed notification no longer opens anything');
 });
 
 test('context menu download without a saved folder lets the host pick its default', async () => {
@@ -245,6 +246,71 @@ test('context menu downloads a SoundCloud track', async () => {
 
   assert.deepStrictEqual(state.ports[0].posted, [{ action: 'download', url: 'https://soundcloud.com/forss/flickermood' }]);
 });
+
+// --- the background check (at most once a day) ---
+
+const NOW = Date.parse('2026-10-26T12:00:00Z');
+const DAY_MS = 24 * 60 * 60 * 1000;
+const versionChecks = state => state.ports.filter(p => p.posted.some(m => m.action === 'get_version'));
+
+function atNow(fn) {
+  return async () => {
+    mock.timers.reset();
+    mock.timers.enable({ apis: ['setTimeout', 'Date'], now: NOW });
+    await fn();
+  };
+}
+
+test('background check: a minute after startup, and the time is saved', atNow(async () => {
+  const { state } = loadBackground();
+  mock.timers.tick(59 * 1000);
+  await flush();
+  assert.equal(versionChecks(state).length, 0, 'not during the browser startup');
+
+  mock.timers.tick(1000);
+  await flush();
+  assert.equal(versionChecks(state).length, 1);
+  assert.equal(state.storage.lastHostCheck, NOW + 60 * 1000);
+  assert.equal(state.sent.length, 0, 'silent: nothing is relayed to the sidebar');
+}));
+
+test('background check: not when the last check is less than a day old', atNow(async () => {
+  const recent = loadBackground({ storage: { lastHostCheck: NOW - DAY_MS + 2 * 60 * 1000 } });
+  const old = loadBackground({ storage: { lastHostCheck: NOW - DAY_MS } });
+  mock.timers.tick(60 * 1000);
+  await flush();
+  assert.equal(versionChecks(recent.state).length, 0);
+  assert.equal(versionChecks(old.state).length, 1);
+}));
+
+test('background check: after a context-menu download, once a day', atNow(async () => {
+  const { browser, state } = loadBackground({ storage: { lastHostCheck: NOW - DAY_MS } });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: VIDEO_URL });
+  await flush();
+  assert.equal(versionChecks(state).length, 0, 'the download goes first');
+
+  state.ports[0].reply({ status: 'success', filename: 'Song', final: true });
+  await flush();
+  await flush();
+  assert.equal(versionChecks(state).length, 1);
+
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: VIDEO_URL });
+  await flush();
+  state.ports[2].reply({ status: 'success', filename: 'Song 2', final: true });
+  mock.timers.tick(60 * 1000);
+  await flush();
+  await flush();
+  assert.equal(versionChecks(state).length, 1, 'the same day: no second check, also not at startup');
+}));
+
+test('background check: a sidebar check counts', atNow(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'get_version');
+  await flush();
+  mock.timers.tick(60 * 1000);
+  await flush();
+  assert.equal(versionChecks(state).length, 1, 'only the sidebar\'s');
+}));
 
 test('context menu on a non-video link notifies and does not start the host', async () => {
   const { browser, state } = loadBackground();

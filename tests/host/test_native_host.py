@@ -385,20 +385,20 @@ def test_several_requests_in_one_session(
 def host_env(tmp_path: Path) -> dict[str, str]:
     """Environment for a host started as a child process, where monkeypatch can't reach."""
     env = dict(os.environ)
-    env["USERPROFILE"] = str(tmp_path)  # Path.home(): keep the default folder out of Documents
     env["YTMP3_LOG_LEVEL"] = "CRITICAL"  # don't write mp3.log into the repo
     return env
 
 
 def test_host_process_over_real_pipes(tmp_path: Path) -> None:
-    stdin = requests({"action": "download", "url": "bad"}, {"action": "get_current_folder"})
+    # neither request touches a folder: the default one is the user's real Documents
+    stdin = requests({"action": "download", "url": "bad"}, {"action": "play", "path": str(tmp_path / "missing.mp3")})
     result = subprocess.run(
         [sys.executable, "-m", "ytmp3_host.MP3"], input=stdin, capture_output=True, env=host_env(tmp_path), timeout=60
     )
     assert result.returncode == 0, result.stderr
     responses = parse_frames(result.stdout)
-    assert [r["status"] for r in responses] == ["error", "success"]
-    assert responses[1]["folder"] == str(tmp_path / "Documents" / "YT-MP3-Downloads")
+    assert [r["status"] for r in responses] == ["error", "error"]
+    assert all(r["final"] for r in responses)
 
 
 def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:

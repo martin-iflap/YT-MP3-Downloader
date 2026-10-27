@@ -273,6 +273,8 @@ function withRepairFailures(status, failures) {
 // Ask the host for its state, repair what can be repaired (each repair at most once),
 // and turn the state after the last repair into the one status the user is told.
 async function checkAndRepairHost(onProgress) {
+  lastCheckStarted = Date.now();
+  browser.storage.local.set({ lastHostCheck: lastCheckStarted }).catch(e => console.warn('Could not save the check time:', e));
   let check = await hostRequest({ action: 'get_version' });
   const attempted = new Set();
   const failures = [];
@@ -307,6 +309,27 @@ function checkHost(onProgress) {
   if (!runningCheck) runningCheck = checkAndRepairHost(onProgress).finally(() => { runningCheck = null; });
   return runningCheck;
 }
+
+// The host and yt-dlp only update during a check. The sidebar checks on every open; for users
+// who only use the context menu, check in the background too, at most once a day (any check
+// counts, the time is kept across restarts): soon after the browser starts, and after a
+// context-menu download. Silent: problems are shown when the sidebar opens.
+const BACKGROUND_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const BACKGROUND_CHECK_DELAY_MS = 60 * 1000; // keep the host off the browser's startup
+let lastCheckStarted = 0;
+
+async function checkHostInBackground() {
+  try {
+    const { lastHostCheck } = await browser.storage.local.get('lastHostCheck');
+    const last = Math.max(lastCheckStarted, Number(lastHostCheck) || 0);
+    if (Date.now() - last < BACKGROUND_CHECK_INTERVAL_MS) return;
+  } catch {
+    return;
+  }
+  await checkHost(() => {});
+}
+
+setTimeout(checkHostInBackground, BACKGROUND_CHECK_DELAY_MS);
 
 // Run one action on a fresh host process. Intermediate responses go to onProgress.
 // Resolves exactly once with { response, source }: the host's final response (source
@@ -382,7 +405,8 @@ browser.contextMenus.onClicked.addListener(async (info) => {
   const { lastFolder } = await browser.storage.local.get('lastFolder').catch(() => ({}));
   if (lastFolder) payload.folder = lastFolder;
 
-  runNativeAction(payload, crypto.randomUUID(), 'menu');
+  // the check comes after the download, so it never delays it
+  runNativeAction(payload, crypto.randomUUID(), 'menu').then(checkHostInBackground);
 });
 
 browser.runtime.onMessage.addListener((msg) => {

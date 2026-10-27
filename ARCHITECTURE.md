@@ -47,7 +47,7 @@ flowchart TB
 
     BG <-- "stdin / stdout<br/>4-byte length + JSON" --> MAIN
     CORE --> YT
-    FFM --> OUT[("~/Documents/YT-MP3-Downloads/<br/>title.mp3")]
+    FFM --> OUT[("Documents/YT-MP3-Downloads/<br/>title.mp3")]
     HEALTH --> GH
     UPD --> GH
 ```
@@ -358,7 +358,8 @@ flowchart TB
 | `browserAction.onClicked`                     | The toolbar button (`default_area: navbar`): toggles the sidebar, which Firefox gives no launcher when tabs are on top. `toggle()` is called directly, as it needs the user action. Remembers the click time for `toolbarTipWanted`. |
 | `runtime.onMessage` (`toolbar_tip`)           | Answers the sidebar with `toolbarTipWanted()`: true if the button is pinned and the sidebar opened without it (no click in 5 s, not restored at startup), until dismissed. Extensions can't unpin the button themselves.             |
 | `runtime.onMessage`                           | Accepts `native_action` from the sidebar. Rejects actions not in `ACTION_TIMEOUTS_MS`. Copies only `action`, `url`, `folder`, `filename`, `path` into the payload.                                                                   |
-| `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set, starts a `download`.                                                                                                                                  |
+| `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set, starts a `download`, then `checkHostInBackground`.                                                                                                    |
+| `checkHostInBackground()`                     | A silent `checkHost` for context-menu-only users, at most once a day: 1 min after startup and after a context-menu download. Any check counts; its start time is `storage.local.lastHostCheck` (§7.2).                               |
 | `runNativeAction(payload, requestId, origin)` | Runs the request (`get_version` through `checkHost`), relays intermediate responses, then exactly one final one; notifies for downloads.                                                                                             |
 | `hostRequest(payload, onProgress)`            | Opens the port, posts the payload, starts the timeout. Resolves once with `{ response, source }`; `source` is `host`, `timeout`, `disconnect` or `connect`.                                                                          |
 | `checkHost(onProgress)`                       | One check-and-repair at a time; a second caller shares the running one (§7.2).                                                                                                                                                       |
@@ -473,7 +474,10 @@ Installed layout (`mp3_installer.iss`):
 
 In a source checkout the icon comes from `packaging/assets/`. Only an installed host can
 update itself (`update_host` refuses otherwise). `DEFAULT_FOLDER` is
-`~/Documents/YT-MP3-Downloads`.
+`YT-MP3-Downloads` in the user's real Documents folder (`documents_folder()`, asked from
+Windows with `SHGetKnownFolderPath`, so a Documents folder moved into OneDrive is found;
+`~/Documents` if that fails). Hosts before 2.1.0 used `~/Documents`; sidebar users keep
+that folder, because the sidebar saved it as `lastFolder` on its first open.
 
 `setup_logging()` (called once from `MP3.py`'s `__main__`) writes one rotating `mp3.log`
 (1 MB, plus `mp3.log.1`). The `YTMP3_LOG_LEVEL` environment variable overrides the level
@@ -719,6 +723,11 @@ sequenceDiagram
 - Unknown values (`null`, e.g. offline) never trigger a repair.
 - Concurrent checks (two windows) share one run (`checkHost`); the second caller gets
   only the final answer.
+- Users who never open the sidebar are checked in the background (`checkHostInBackground`),
+  at most once a day: 1 min after the browser starts (not during its startup) and after a
+  context-menu download (after it, so it never delays the download). Any check counts, the
+  sidebar's too; its start time is kept in `storage.local.lastHostCheck`, so restarts don't
+  add checks. It shows nothing: what it can't repair, the sidebar shows when it opens.
 
 ### 7.3 yt-dlp updates (`updater.update_yt_dlp`)
 
@@ -833,9 +842,9 @@ flowchart TB
   created at runtime (`yt-dlp*.exe` leftovers, `deno.exe`, `update.lock`, `mp3.log*`),
   listed under `[UninstallDelete]` because they are not in `[Files]`. The default download
   folder is removed only if it is empty (`dirifempty`, so the user's MP3s are never
-  deleted), under both `%USERPROFILE%\Documents` (where the host creates it) and
-  `{userdocs}` (the real Documents folder, different when Windows moved it, e.g. into
-  OneDrive).
+  deleted), under both `{userdocs}` (the real Documents folder, where the host creates it
+  since 2.1.0; different when Windows moved it, e.g. into OneDrive) and
+  `%USERPROFILE%\Documents` (where older hosts created it).
 
 ### 7.6 Repair during a download (`core.download_with_repair`)
 

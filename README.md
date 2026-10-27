@@ -64,7 +64,8 @@ the app updates itself.
   download notification shows it in its folder.
 - **Open in app** opens the same download form in its own window.
 
-The default folder is `%USERPROFILE%\Documents\YT-MP3-Downloads`; choose another one in
+The default folder is `YT-MP3-Downloads` in your Documents folder (also when Windows moved
+it, e.g. into OneDrive); choose another one in
 the sidebar (the right-click menu uses it too).
 
 ## Updates and repairs
