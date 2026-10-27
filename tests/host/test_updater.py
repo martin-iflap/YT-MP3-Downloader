@@ -540,16 +540,42 @@ def test_a_started_installer_is_not_started_again_right_away(
     assert server.gets(updater.INSTALLER_ASSET) == 1
 
 
-def test_after_the_grace_period_the_checked_installer_is_reused(
+def test_a_failed_install_is_not_retried_until_the_next_day(
     host_install: Launches, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     latest(monkeypatch, host="v99.0.0")
     publish_host(server)
     monkeypatch.setattr(updater, "INSTALL_GRACE_S", 0)
     updater.update_host()
+    with pytest.raises(UpdateError, match=r"The v99\.0\.0 update did not install, next try in about 24 h"):
+        updater.update_host()
+    assert len(host_install.commands) == 1
+
+
+def test_after_the_retry_period_the_checked_installer_is_reused(
+    host_install: Launches, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest(monkeypatch, host="v99.0.0")
+    publish_host(server)
+    monkeypatch.setattr(updater, "INSTALL_GRACE_S", 0)
+    monkeypatch.setattr(updater, "INSTALL_RETRY_S", 0)
+    updater.update_host()
     updater.update_host()
     assert len(host_install.commands) == 2
     assert server.gets(updater.INSTALLER_ASSET) == 1, "the verified copy is started again, not downloaded"
+
+
+def test_a_release_republished_under_the_same_tag_is_installed_at_once(
+    host_install: Launches, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    latest(monkeypatch, host="v99.0.0")
+    publish_host(server)
+    monkeypatch.setattr(updater, "INSTALL_GRACE_S", 0)
+    updater.update_host()
+    publish_host(server, installer=b"MZ fixed installer")
+    assert updater.update_host() == "v99.0.0"
+    assert len(host_install.commands) == 2
+    assert (tmp_path / "update" / "v99.0.0" / updater.INSTALLER_ASSET).read_bytes() == b"MZ fixed installer"
 
 
 def test_a_damaged_installer_is_never_started(

@@ -24,6 +24,7 @@ version working (see mp3_installer.iss).
 import hashlib
 import http.client
 import logging
+import math
 import msvcrt
 import os
 import re
@@ -70,6 +71,9 @@ MAX_SUMS_BYTES = 1024 * 1024
 CHUNK_BYTES = 64 * 1024
 # a started installer is not started again for this long (it may still be running)
 INSTALL_GRACE_S = 600
+# after that this host is still outdated, so the installation failed: the same installer is
+# tried again only after this long (a release re-published under the same tag at once)
+INSTALL_RETRY_S = 24 * 60 * 60
 
 # installer downloads, one folder per tag
 UPDATE_DIR = Path(tempfile.gettempdir()) / "ytmp3-update"
@@ -428,19 +432,19 @@ def launch_detached(command: list[str] | str) -> None:
         _start(flags)
 
 
-def _installer(tag: str, folder: Path) -> Path:
-    """The verified installer of release tag in folder, downloading it unless a verified copy is there."""
+def _installer(tag: str, folder: Path) -> tuple[Path, str]:
+    """The verified installer of release tag in folder and its SHA-256, downloading it unless a verified copy is there."""
     installer = folder / INSTALLER_ASSET
     expected = expected_sha256(HOST_REPO, tag, HOST_SUMS, INSTALLER_ASSET)
     if installer.exists() and sha256_file(installer) == expected:
-        return installer
+        return installer, expected
     partial = folder / f"{INSTALLER_ASSET}.download"
     actual = download(asset_url(HOST_REPO, tag, INSTALLER_ASSET), partial, INSTALLER_DOWNLOAD_S)
     if actual != expected:
         partial.unlink(missing_ok=True)
         raise UpdateError(f"The downloaded app installer {tag} is damaged (checksum mismatch)")
     partial.replace(installer)
-    return installer
+    return installer, expected
 
 
 def update_host() -> str | None:
@@ -448,14 +452,16 @@ def update_host() -> str | None:
 
     The installer runs on after this host exits; the new version answers the
     next request. An installer started less than INSTALL_GRACE_S ago is not
-    started again.
+    started again. One started longer ago failed (this host is still outdated),
+    so the same installer is not retried until INSTALL_RETRY_S after its start;
+    a release re-published with a different installer is started right away.
 
     Returns:
         The tag being installed, or None if this host is already the latest.
     Raises:
         UpdateError: If this host can't update itself (not installed, e.g. a
-            source checkout), or the installer could not be downloaded, checked
-            or started.
+            source checkout), the installer could not be downloaded, checked
+            or started, or it failed to install less than INSTALL_RETRY_S ago.
     """
     if not INSTALLED:
         raise UpdateError("Only an installed app can update itself")
@@ -466,17 +472,24 @@ def update_host() -> str | None:
 
         folder = UPDATE_DIR / tag
         folder.mkdir(parents=True, exist_ok=True)
-        marker = folder / STARTED_MARKER
-        if marker.exists() and time.time() - marker.stat().st_mtime < INSTALL_GRACE_S:
+        installer, digest = _installer(tag, folder)
+        marker = folder / STARTED_MARKER  # holds the SHA-256 of the installer started
+        try:
+            age = time.time() - marker.stat().st_mtime if marker.read_text().strip() == digest else None
+        except OSError:
+            age = None
+        if age is not None and age < INSTALL_GRACE_S:
             logger.info("The %s installer was started recently, not starting it again", tag)
             return tag
+        if age is not None and age < INSTALL_RETRY_S:
+            hours = math.ceil((INSTALL_RETRY_S - age) / 3600)
+            raise UpdateError(f"The {tag} update did not install, next try in about {hours} h")
 
-        installer = _installer(tag, folder)
         try:
             launch_detached([str(installer), *INSTALLER_ARGS, f"/LOG={folder / 'install.log'}"])
         except OSError as e:
             raise UpdateError(f"Could not start the app installer: {e}") from e
-        marker.touch()
+        marker.write_text(digest)
         logger.info("Started the %s installer", tag)
 
         for other in UPDATE_DIR.iterdir():  # downloads of older releases

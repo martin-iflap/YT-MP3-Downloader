@@ -328,3 +328,25 @@ test('two sidebars asking at once share one check and both get a final answer', 
   const finals = state.sent.filter(m => m.final === true);
   assert.deepStrictEqual(finals.map(m => [m.requestId, m.status]), [['window-1', 'success'], ['window-2', 'success']]);
 });
+
+test('a sidebar that joins a running check gets its progress, the last message first', async () => {
+  let updatePort = null;
+  const { nativeHost, calls } = scriptedHost({
+    get_version: [report(OLD_YT_DLP), report()],
+    update_yt_dlp: port => { updatePort = port; } // answered below, once the second sidebar joined
+  });
+  const { browser, state } = loadBackground({ nativeHost });
+  browser.runtime.onMessage.fire({ type: 'native_action', requestId: 'window-1', action: 'get_version' });
+  await settle();
+  browser.runtime.onMessage.fire({ type: 'native_action', requestId: 'window-2', action: 'get_version' });
+  await settle();
+  const progressOf = id => state.sent.filter(m => m.requestId === id && m.final === false).map(m => m.message);
+  assert.deepStrictEqual(progressOf('window-2'), progressOf('window-1'), 'the update message, though sent before it joined');
+  assert.equal(progressOf('window-2').length, 1);
+
+  updatePort.reply({ status: 'success', yt_dlp: { version: '2026.08.19' }, final: true });
+  await settle();
+  assert.deepStrictEqual(calls, ['get_version', 'update_yt_dlp', 'get_version']);
+  const finals = state.sent.filter(m => m.final === true);
+  assert.deepStrictEqual(finals.map(m => [m.requestId, m.status]), [['window-1', 'success'], ['window-2', 'success']]);
+});

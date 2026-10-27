@@ -302,11 +302,26 @@ async function checkAndRepairHost(onProgress) {
 }
 
 // One check (with its repairs) at a time: a sidebar that asks meanwhile, e.g. in a second
-// window, shares the running one and gets only its final answer.
+// window, shares the running one. It gets the last progress message at once (e.g. "Updating
+// the app...", which can last minutes), then the later ones and the final answer.
 let runningCheck = null;
+const checkListeners = new Set();
+let lastCheckProgress = null;
 
 function checkHost(onProgress) {
-  if (!runningCheck) runningCheck = checkAndRepairHost(onProgress).finally(() => { runningCheck = null; });
+  checkListeners.add(onProgress);
+  if (runningCheck) {
+    if (lastCheckProgress) onProgress(lastCheckProgress);
+  } else {
+    runningCheck = checkAndRepairHost((progress) => {
+      lastCheckProgress = progress;
+      checkListeners.forEach(listener => listener(progress));
+    }).finally(() => {
+      runningCheck = null;
+      checkListeners.clear();
+      lastCheckProgress = null;
+    });
+  }
   return runningCheck;
 }
 
