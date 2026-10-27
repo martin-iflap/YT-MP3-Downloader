@@ -9,7 +9,7 @@
 #define MyAppName         "YouTube MP3 Downloader"
 ; Must match __version__ in host\src\ytmp3_host\__init__.py
 ; (tests\host\test_versions.py checks it).
-#define MyAppVersion      "2.0.0"
+#define MyAppVersion      "2.1.0"
 #define MyAppPublisher    "Martin"
 
 ; Must match browser_specific_settings.gecko.id in the
@@ -390,8 +390,10 @@ end;
 // NewVersionWorks
 // ============================================================
 // Runs the new version's mp3.exe --self-check (selfcheck.py):
-// it imports every host module and runs ffmpeg.exe. Exit code
-// 0 means it works; the problems are in {app}\mp3.log.
+// it imports every host module, sends a ping to a second mp3.exe
+// and runs the ffmpeg steps of a download on a generated tone
+// (offline, ~1 s). Exit code 0 means it works; the problems are
+// in {app}\mp3.log.
 
 function NewVersionWorks(): Boolean;
 var

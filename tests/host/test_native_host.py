@@ -412,8 +412,8 @@ def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:
         assert (result.returncode, result.stderr) == (0, "")
     else:
         assert result.returncode == 1
-        [problem] = result.stderr.strip().splitlines()  # the modules and the framing are fine
-        assert problem.startswith(f"{config.FFMPEG_PATH} does not run")
+        [problem] = result.stderr.strip().splitlines()  # the modules and the request are fine
+        assert problem.startswith(f"{config.FFMPEG_PATH} does not work")
 
 
 def test_headless_path_does_not_load_the_gui_health_or_updater(tmp_path: Path) -> None:

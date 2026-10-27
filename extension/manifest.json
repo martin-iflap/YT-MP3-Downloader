@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
   "name": "YouTube MP3 Downloader",
-  "version": "2.0.0",
-  "description": "Download YouTube videos as MP3 files",
+  "version": "2.1.0",
+  "description": "Download YouTube videos and audio from other sites (SoundCloud, Bandcamp, Mixcloud and more) as MP3 files",
 
   "browser_specific_settings": {
     "gecko": {
