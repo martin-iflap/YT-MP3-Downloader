@@ -20,21 +20,21 @@ from pathlib import Path
 
 import pytest
 
-from ytmp3_host import config, core, health, updater
+from ytmp3_host import config, core, files, health, updater, ytdlp
 
 FAKE_YT_DLP = Path(__file__).with_name("fake_yt_dlp.py")
 
 
 @pytest.fixture(autouse=True)
 def default_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point core.DEFAULT_FOLDER at <tmp_path>/default in every test (autouse).
+    """Point files.DEFAULT_FOLDER at <tmp_path>/default in every test (autouse).
 
     Keeps the code under test away from the real ~/Documents/YT-MP3-Downloads.
     The folder is not created, so tests can check that resolve_folder creates it.
     Returns its path.
     """
     folder = tmp_path / "default"
-    monkeypatch.setattr(core, "DEFAULT_FOLDER", folder)
+    monkeypatch.setattr(files, "DEFAULT_FOLDER", folder)
     return folder
 
 
@@ -94,9 +94,9 @@ class FakeYtDlp:
 def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     """Make download_audio run fake_yt_dlp.py instead of yt-dlp.exe.
 
-    - Creates empty yt-dlp.exe and ffmpeg.exe in <tmp_path>/bin and points core at
+    - Creates empty yt-dlp.exe and ffmpeg.exe in <tmp_path>/bin and points core and ytdlp at
       them, so the "binary exists" checks in download_audio pass. They never run.
-    - Wraps core.build_download_command and health.yt_dlp_version_command: the real
+    - Wraps ytdlp.build_download_command and health.yt_dlp_version_command: the real
       command is built, then only its executable is swapped for `python
       fake_yt_dlp.py`. The fake reads the real -o and --print arguments, so a broken
       output template or title marker fails the tests.
@@ -110,16 +110,16 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     bin_dir.mkdir()
     for name in ("yt-dlp.exe", "ffmpeg.exe"):
         (bin_dir / name).write_bytes(b"")
-    for module in (core, health):
+    for module in (core, ytdlp, health):
         monkeypatch.setattr(module, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
         monkeypatch.setattr(module, "FFMPEG_PATH", bin_dir / "ffmpeg.exe")
     monkeypatch.setattr(updater, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
-    for module in (core, health, updater):
+    for module in (ytdlp, health, updater):
         monkeypatch.setattr(module, "DENO_PATH", bin_dir / "deno.exe")
 
-    real_build = core.build_download_command
+    real_build = ytdlp.build_download_command
     monkeypatch.setattr(
-        core,
+        ytdlp,
         "build_download_command",
         lambda url, temp_stem: [sys.executable, str(FAKE_YT_DLP), *real_build(url, temp_stem)[1:]],
     )

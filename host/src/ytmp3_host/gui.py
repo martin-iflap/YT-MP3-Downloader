@@ -16,20 +16,17 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from ytmp3_host.config import ICON_PATH
-from ytmp3_host.core import (
-    describe_error,
-    download_with_repair,
+from ytmp3_host.core import describe_error, download_with_repair
+from ytmp3_host.files import (
     ensure_default_folder,
     folder_is_writable,
-    is_web_url,
-    kill_process_tree,
     open_file,
     remove_temp_files,
-    requested_filename,
     resolve_folder,
-    safe_filename,
     show_in_folder,
 )
+from ytmp3_host.naming import is_web_url, requested_filename, safe_filename
+from ytmp3_host.ytdlp import kill_process_tree
 from ytmp3_host.native_messaging import send_current_folder, send_message
 
 logger = logging.getLogger(__name__)

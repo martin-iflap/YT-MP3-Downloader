@@ -1,4 +1,4 @@
-from ytmp3_host.core import safe_filename
+from ytmp3_host.naming import safe_filename
 from ytmp3_host.config import YT_DLP_PATH
 from pathlib import Path
 from PIL import Image

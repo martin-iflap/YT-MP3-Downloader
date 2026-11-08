@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import core
+from ytmp3_host import core, files, ytdlp
 from ytmp3_host.core import download_audio
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -149,7 +149,7 @@ def test_removes_stale_temp_files_but_keeps_recent_ones(
     stale, recent = out_dir / "_ytmp3_old.webm.part", out_dir / "_ytmp3_new.webm.part"
     stale.write_bytes(b"killed host")
     recent.write_bytes(b"running download")
-    old = time.time() - core.STALE_TEMP_AGE_S - 60
+    old = time.time() - files.STALE_TEMP_AGE_S - 60
     os.utime(stale, (old, old))
 
     download_audio(URL, out_dir, "Song")
@@ -231,14 +231,14 @@ def test_cancel_through_on_start_stops_the_download(
     # what the GUI's cancel button does, here as soon as the download is running
     # (killing right at on_start can beat the launcher to spawning its child)
     fake_yt_dlp.set("hang")
-    processes: list[subprocess.Popen[str]] = []
+    started: list[subprocess.Popen[str]] = []
 
     def _cancel(_fraction: float) -> None:
-        core.kill_process_tree(processes[0])
+        ytdlp.kill_process_tree(started[0])
 
     start = time.monotonic()
     with pytest.raises(subprocess.CalledProcessError):
-        download_audio(URL, out_dir, on_progress=_cancel, on_start=lambda p, _s: processes.append(p))
+        download_audio(URL, out_dir, on_progress=_cancel, on_start=lambda p, _s: started.append(p))
 
     assert time.monotonic() - start < 15
     assert leftovers(out_dir) == []
@@ -248,17 +248,17 @@ def test_raising_progress_callback_does_not_leave_yt_dlp_running(
     fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
     fake_yt_dlp.set("hang")
-    processes: list[subprocess.Popen[str]] = []
+    prcs: list[subprocess.Popen[str]] = []
 
     def _broken_progress(_fraction: float) -> None:
         raise RuntimeError("UI is gone")
 
     start = time.monotonic()
     with pytest.raises(RuntimeError, match="UI is gone"):
-        download_audio(URL, out_dir, on_progress=_broken_progress, on_start=lambda p, _s: processes.append(p))
+        download_audio(URL, out_dir, on_progress=_broken_progress, on_start=lambda p, _s: prcs.append(p))
 
     assert time.monotonic() - start < 15
-    assert processes[0].poll() is not None
+    assert prcs[0].poll() is not None
     assert leftovers(out_dir) == []
 
 

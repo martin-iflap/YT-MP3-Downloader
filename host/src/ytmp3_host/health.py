@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ytmp3_host import __version__
 from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, INSTALLED, YT_DLP_PATH
-from ytmp3_host.core import kill_process_tree
+from ytmp3_host.ytdlp import kill_process_tree
 from ytmp3_host.github import HOST_REPO, YT_DLP_REPO, latest_release_tag
 
 logger = logging.getLogger(__name__)

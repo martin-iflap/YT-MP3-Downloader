@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 # every module a request can load; the lazy imports in MP3 would only fail on first use
 MODULES = (
+    "ytmp3_host.naming",
+    "ytmp3_host.metadata",
+    "ytmp3_host.files",
+    "ytmp3_host.ytdlp",
     "ytmp3_host.core",
     "ytmp3_host.native_messaging",
     "ytmp3_host.health",

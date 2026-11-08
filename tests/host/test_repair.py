@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import core, health, updater
+from ytmp3_host import core, health, updater, ytdlp
 from ytmp3_host.updater import UpdateError
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -122,10 +122,10 @@ def test_no_deno_download_for_other_sites(repairs: Repairs, out_dir: Path) -> No
 
 
 def test_an_installed_deno_is_passed_to_yt_dlp(repairs: Repairs, tmp_path: Path) -> None:
-    command = core.build_download_command(URL, tmp_path / "stem")
+    command = ytdlp.build_download_command(URL, tmp_path / "stem")
     assert "--js-runtimes" not in command
     (repairs.bin_dir / "deno.exe").write_bytes(b"deno")
-    command = core.build_download_command(URL, tmp_path / "stem")
+    command = ytdlp.build_download_command(URL, tmp_path / "stem")
     assert command[command.index("--js-runtimes") + 1] == f"deno:{repairs.bin_dir / 'deno.exe'}"
 
 

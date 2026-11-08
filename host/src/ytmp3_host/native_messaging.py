@@ -10,17 +10,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from ytmp3_host.core import (
-    describe_error,
-    download_with_repair,
-    downloaded_mp3,
-    folder_is_writable,
-    is_web_url,
-    open_file,
-    requested_filename,
-    resolve_folder,
-    show_in_folder,
-)
+from ytmp3_host.core import describe_error, download_with_repair
+from ytmp3_host.files import downloaded_mp3, folder_is_writable, open_file, resolve_folder, show_in_folder
+from ytmp3_host.naming import is_web_url, requested_filename
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,6 @@
 """Stand-in for yt-dlp.exe in the host tests.
 
-Run as `python fake_yt_dlp.py <the arguments core.build_download_command builds>`.
+Run as `python fake_yt_dlp.py <the arguments ytdlp.build_download_command builds>`.
 It honors the real `-o` output template and the `--print` info template (`%(.{fields})j`:
 a JSON object of the requested fields the video has), so the tests also check the
 command contract. With `--version` (health.yt_dlp_version_command) it only prints its
@@ -54,7 +54,7 @@ def main() -> None:
         print_version(mode)
         return
     stem = args[args.index("-o") + 1].removesuffix(".%(ext)s")
-    template = re.fullmatch(r"before_dl:(.*)%\(\.\{(.*)\}\)j", args[args.index("--print") + 1])
+    template = re.fullmatch(r"before_dl:(.*)%\(\.\{(.*)}\)j", args[args.index("--print") + 1])
     assert template, "unexpected --print template"
     marker, fields = template.groups()
     info = json.loads(os.environ.get("FAKE_YTDLP_INFO", '{"channel": "Some Channel"}'))

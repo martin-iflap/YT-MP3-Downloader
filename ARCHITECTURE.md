@@ -71,8 +71,8 @@ live in the host, because WebExtensions cannot do them.
 | Add or change a host action                            | `MP3.ACTIONS` + `ACTION_TIMEOUTS_MS` in `background.js` (see §11)                   |
 | Download logic (headless and GUI)                      | `core.download_audio`; request handling in `native_messaging.run_native` / `gui.py` |
 | Retry after a yt-dlp failure, Deno on demand           | `core.download_with_repair`                                                         |
-| yt-dlp arguments                                       | `core.build_download_command`                                                       |
-| Filename cleanup, cover art, tags                      | `core.safe_filename`, `core.embed_thumbnail`, `core.artist_for`, `core.extra_tags`  |
+| yt-dlp arguments                                       | `ytdlp.build_download_command`                                                       |
+| Filename cleanup, cover art, tags                      | `naming.safe_filename`, `core.embed_thumbnail`, `metadata.artist_for`, `metadata.extra_tags`  |
 | Updates of yt-dlp, Deno and the host                   | `host/src/ytmp3_host/updater.py`                                                    |
 | Versions and tool state reported to the extension      | `host/src/ytmp3_host/health.py`                                                     |
 | What a new version must pass before it is switched to  | `host/src/ytmp3_host/selfcheck.py`                                                  |
@@ -98,7 +98,11 @@ host/
     __init__.py             __version__ (the host version)
     MP3.py                  Entry point: ACTIONS dispatch table, the request loop, --self-check
     native_messaging.py     stdio framing, run_native() (headless download), run_open_file(), send_current_folder()
-    core.py                 Download pipeline and repair, filename sanitizing, folders, tags, cover art, file opening
+    core.py                 Download pipeline and repair, cover art, describe_error()
+    naming.py               Filename sanitizing, artist/title from a filename, URL checks
+    metadata.py             The video info yt-dlp prints: title-based filename, artist and other tags
+    files.py                Folders, temp file cleanup, Show in folder / Play
+    ytdlp.py                yt-dlp arguments, the download with its watchdog, kill_process_tree()
     config.py               Install layout and paths, DEFAULT_FOLDER, setup_logging()
     health.py               get_version facts: versions, tool state; version parsing and comparison
     github.py               latest_release_tag() (one HEAD request per lookup)
@@ -239,15 +243,15 @@ Exceptions:
 | `download_gui`       | `url?`, `folder?`, `filename?` | Opens the pre-filled Tk window, `gui.open_gui()`                                                    | 30 s (until `"GUI opened"`) |
 | `select_folder`      | `folder?`                      | Folder picker starting at `folder`; returns the selection, or `folder` (else the default) on cancel | 10 min (user interaction)   |
 | `get_current_folder` | —                              | Returns the default folder, creating it if missing                                                  | 15 s                        |
-| `show_in_folder`     | `path`                         | Opens the MP3's folder in Explorer with it selected (`core.show_in_folder`)                         | 15 s                        |
-| `play`               | `path`                         | Opens the MP3 in its default app, through Explorer (`core.open_file`)                               | 15 s                        |
+| `show_in_folder`     | `path`                         | Opens the MP3's folder in Explorer with it selected (`files.show_in_folder`)                         | 15 s                        |
+| `play`               | `path`                         | Opens the MP3 in its default app, through Explorer (`files.open_file`)                               | 15 s                        |
 | `get_version`        | —                              | The host version and the state of its tools (`health.host_status`, §7.1)                            | 30 s                        |
 | `update_yt_dlp`      | —                              | Installs the latest yt-dlp, or repairs a missing/broken one (`updater.update_yt_dlp`)               | 7 min                       |
 | `update_host`        | —                              | Starts the installer of a newer host release (`updater.update_host`)                                | 9 min                       |
 | `ping`               | —                              | Answers with `version` only; sent by the self-check (§7.5), not by the extension                    | —                           |
 
 `show_in_folder` and `play` only accept an absolute path to an existing `.mp3`
-(`core.downloaded_mp3`); anything else is "The MP3 was moved or deleted". `play` must
+(`files.downloaded_mp3`); anything else is "The MP3 was moved or deleted". `play` must
 never run a program.
 
 The host treats a missing or unknown `action` as `download`. `background.js` rejects
@@ -404,7 +408,7 @@ stateDiagram-v2
 - `isWebUrl(value)`: any http(s) URL, what the sidebar accepts when pasted (yt-dlp knows
   many sites and reports the ones it can't download).
 
-The host validates more loosely (`core.is_web_url`: http(s) with a host name, which also
+The host validates more loosely (`naming.is_web_url`: http(s) with a host name, which also
 keeps a URL from being read as a yt-dlp option).
 
 ---
@@ -425,10 +429,25 @@ flowchart BT
     GUI["gui.py<br/>customtkinter"]
     MP3["MP3.py<br/>entry point"]
 
+    NA["naming.py"]
+    ME["metadata.py"]
+    FI["files.py"]
+    YD["ytdlp.py"]
+
     CORE --> CFG
+    CORE --> NA
+    CORE --> ME
+    CORE --> FI
+    CORE --> YD
+    YD --> CFG
+    YD --> ME
+    ME --> NA
+    FI --> CFG
     NM --> CORE
+    NM --> NA
+    NM --> FI
     HE --> CFG
-    HE --> CORE
+    HE --> YD
     HE --> GH
     UP --> CFG
     UP --> GH
@@ -436,6 +455,9 @@ flowchart BT
     SC --> CFG
     GUI --> NM
     GUI --> CORE
+    GUI --> NA
+    GUI --> FI
+    GUI --> YD
     GUI --> CFG
     MP3 --> NM
     MP3 --> CFG
@@ -443,14 +465,15 @@ flowchart BT
     MP3 -. "lazy" .-> HE
     MP3 -. "lazy" .-> UP
     MP3 -. "lazy" .-> SC
-    CORE -. "lazy (repair path, open_file)" .-> UP
+    CORE -. "lazy (repair path)" .-> UP
     CORE -. "lazy (repair path)" .-> HE
+    FI -. "lazy (open_file)" .-> UP
 ```
 
 Arrows point from importer to imported. `MP3.py` is the only entry point. The dotted
 imports are PEP 810 `lazy from … import` / `lazy from ytmp3_host import …` (module level,
 Python 3.15): they load on first use, so a headless `download` never loads customtkinter,
-Tk or urllib, and `core` can lazily import `health`, which imports `core`.
+Tk or urllib.
 
 ### 6.2 `config.py`
 
@@ -536,9 +559,9 @@ the main thread only, and the worker thread changes widgets only via `self.after
 | `run_native_gui(url, folder, filename)`                     | Pre-fills the fields. Invalid folder → the default folder is kept, the window's status label and the final `"GUI opened, folder not found …"` message say so. Schedules the final response (100 ms) and blocks in `mainloop()`.                                                                                                                                       |
 | `start_download()`                                          | Main thread: validates URL (`is_web_url`) and folder (`resolve_folder`), switches the button to Cancel (so a second click cannot start a second download), then starts `_download_thread` with the values.                                                                                                                                                            |
 | `_download_thread(url, folder_path, filename, download_id)` | Calls `core.download_with_repair` with `on_progress` (progress bar), `on_start` (remembers the process for cancel; kills it if Cancel was clicked before yt-dlp started), `on_info` (repair messages) and `is_cancelled`. Shows the result. Once a newer download started (`download_id` changed), a canceled thread that is still repairing leaves the window alone. |
-| `show_saved(mp3_path, warnings)`                            | The "Saved" status with "Show in folder" and "Play" below it (`core.show_in_folder`, `core.open_file`).                                                                                                                                                                                                                                                               |
+| `show_saved(mp3_path, warnings)`                            | The "Saved" status with "Show in folder" and "Play" below it (`files.show_in_folder`, `files.open_file`).                                                                                                                                                                                                                                                               |
 | `cancel_download()`                                         | Sets `download_cancelled`, kills the yt-dlp tree, resets the UI, starts `cleanup_partial_downloads()` on a thread.                                                                                                                                                                                                                                                    |
-| `cleanup_partial_downloads(temp_stem)`                      | Waits 2 s, then `core.remove_temp_files` (fallback; `download_audio` already cleans up on exit).                                                                                                                                                                                                                                                                      |
+| `cleanup_partial_downloads(temp_stem)`                      | Waits 2 s, then `files.remove_temp_files` (fallback; `download_audio` already cleans up on exit).                                                                                                                                                                                                                                                                      |
 | `reset_fields()`                                            | Clears URL and filename and restores the "Download MP3" button.                                                                                                                                                                                                                                                                                                       |
 | `select_folder(folder)`                                     | Hidden topmost root + `askdirectory` starting at `folder` (else the default). Sends the selection, or the start folder on cancel.                                                                                                                                                                                                                                     |
 
@@ -557,7 +580,7 @@ stateDiagram-v2
 ### 6.5 `native_messaging.py`
 
 `read_message()` / `send_message()`: see §3.2. `send_current_folder(folder)` answers the
-folder actions via `core.resolve_folder`. `run_open_file(path, select)` handles
+folder actions via `files.resolve_folder`. `run_open_file(path, select)` handles
 `show_in_folder` / `play`.
 
 `run_native(url, folder, filename)` handles a headless `download`:
@@ -582,7 +605,13 @@ flowchart TB
 Error texts come from `core.describe_error`, shared with the GUI: yt-dlp failures show
 yt-dlp's own last `ERROR:` line (e.g. "This video is unavailable"), never the command line.
 
-### 6.6 `core.py`
+### 6.6 `core.py` and the helper modules
+
+`core.py` holds the pipeline: `download_audio`, `download_with_repair`, `embed_thumbnail`, `describe_error`.
+The rest of this table lives in `naming.py` (URL checks, `safe_filename`,
+`requested_filename`), `metadata.py` (`title_filename`, `artist_for`, `extra_tags`),
+`files.py` (folders, temp files, file actions) and `ytdlp.py` (`build_download_command`,
+`kill_process_tree`).
 
 | Function                                                                            | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                                          |
 |-------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -1107,15 +1136,15 @@ folders or a real video; everything else runs for real. Real `Popen` and pipes, 
 | `test_versions.py`        | Versions and names the host, the installer, the release and the extension must agree on; no new extension permissions.  |
 | `test_network.py`         | Opt-in (`-m network`): a real download with the real binaries.                                                          |
 
-**Fixtures** (`conftest.py`). Autouse: `default_folder` (`core.DEFAULT_FOLDER` →
+**Fixtures** (`conftest.py`). Autouse: `default_folder` (`files.DEFAULT_FOLDER` →
 `tmp_path/default`, not created up front), `no_github` (every latest release is unknown,
 as offline, and any updater download raises, unless a test sets up its own server),
 `update_paths` (the lock file and the installer download folder in `tmp_path`). On
 request: `fake_yt_dlp` (dummy `YT_DLP_PATH` / `FFMPEG_PATH`, and `build_download_command`
 wrapped to run `python fake_yt_dlp.py` with the real arguments), `fake_embed` (records
 `embed_thumbnail`'s arguments and copies the temp MP3), `ffmpeg` and `media` (the real
-binary from `host/bin/` or `PATH`, a generated 1 s MP3 and PNG). `core` imports its paths
-by name, so they are patched on `core`, not on `config`.
+binary from `host/bin/` or `PATH`, a generated 1 s MP3 and PNG). `core` and `ytdlp` import
+their paths by name, so they are patched on those modules, not on `config`.
 
 **`fake_yt_dlp.py`** takes the real yt-dlp arguments (including `--version`), honors the
 real `-o` and `--print` templates, prints yt-dlp-style progress lines, writes a
@@ -1179,7 +1208,7 @@ internet or the real binaries gets `@pytest.mark.network`.
    `tests/host/test_native_host.py` for the host's responses.
 7. A new host module goes into `selfcheck.MODULES` (a test checks it).
 
-**Changing yt-dlp arguments:** `core.build_download_command`. Measure download time
+**Changing yt-dlp arguments:** `ytdlp.build_download_command`. Measure download time
 before and after (see the project priorities in `CLAUDE.md`), and never trade quality for
 speed silently.
 
@@ -1202,12 +1231,12 @@ Resolved:
 | A second sidebar during an update showed nothing until the end (2.0.0)                                                           | A sidebar that joins a running check gets its progress messages (2.1.0).                                                                                                    |
 | A path with non-ASCII characters (e.g. an accented user name) broke the native-messaging manifest                                | The installer writes the manifest as ASCII with `\uXXXX` escapes (1.x wrote it in the ANSI code page).                                                                      |
 | 1.x stopped the install when yt-dlp could not be downloaded                                                                      | The install goes on; the host downloads yt-dlp itself.                                                                                                                      |
-| `get_current_folder` did not create the default folder                                                                           | `send_current_folder` uses `core.resolve_folder`, which creates the default folder when it is requested.                                                                    |
+| `get_current_folder` did not create the default folder                                                                           | `send_current_folder` uses `files.resolve_folder`, which creates the default folder when it is requested.                                                                    |
 | Host lingered after `download_gui` (rejected folder, and also after the window was closed)                                       | An invalid folder opens the window with the default folder and says so (window + final message); `MP3.download_gui` exits the host when the window closes or fails to open. |
 | Headless download only logged "file exists" / "ffmpeg missing"                                                                   | `core.download_audio` raises `FileExistsError` / `FileNotFoundError`, which `run_native` reports with a specific message.                                                   |
 | `select_folder` cancel returned the default folder                                                                               | The sidebar sends its current folder; the picker starts there and returns it on cancel.                                                                                     |
 | GUI read Tk variables from the download thread; double click could start two downloads; Cancel before yt-dlp started was ignored | Fixed in `gui.py` (§6.4).                                                                                                                                                   |
-| `.part` files could survive a killed download (Windows locks)                                                                    | `core.remove_temp_files` retries locked files; `remove_stale_temp_files` removes what a killed host left.                                                                   |
+| `.part` files could survive a killed download (Windows locks)                                                                    | `files.remove_temp_files` retries locked files; `remove_stale_temp_files` removes what a killed host left.                                                                   |
 | Error messages contained the raw yt-dlp command line                                                                             | `core.describe_error`.                                                                                                                                                      |
 | ffmpeg 7 exits 0 when `-n` refuses to overwrite, so an existing file was reported as a fresh download                            | `embed_thumbnail` raises `FileExistsError` itself.                                                                                                                          |
 | Noise-word removal cut real titles ("Live and Let Die" → "and Let Die"); "Jay-Z - Song" got the artist "Jay"                     | Only bracket groups made entirely of noise words are removed; the artist ends at the first spaced dash.                                                                     |

@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import MP3, __version__, config, core, health, native_messaging, updater
+from ytmp3_host import MP3, __version__, config, core, files, health, native_messaging, updater
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -201,7 +201,7 @@ def test_play_opens_through_explorer_outside_the_job(monkeypatch: pytest.MonkeyP
     launched: list[object] = []
     monkeypatch.setattr(updater, "launch_detached", launched.append)
     mp3 = tmp_path / "A, B & C - 100% Song.mp3"
-    core.open_file(mp3)
+    files.open_file(mp3)
     # one command line, path quoted: explorer.exe splits an unquoted path at commas
     assert launched == [f'explorer.exe "{mp3}"']
 

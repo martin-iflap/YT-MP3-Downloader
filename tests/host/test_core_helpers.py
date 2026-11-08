@@ -1,4 +1,4 @@
-"""Pure helpers of core.py: filenames, artist and tags, folders, URL check, error messages."""
+"""Pure helpers of core and the modules around it: filenames, artist and tags, folders, URL check, error messages."""
 
 import subprocess
 import sys
@@ -6,25 +6,21 @@ from pathlib import Path
 
 import pytest
 
-from ytmp3_host import core
-from ytmp3_host.core import (
+from ytmp3_host import files, ytdlp
+from ytmp3_host.core import describe_error
+from ytmp3_host.files import downloaded_mp3, resolve_folder
+from ytmp3_host.metadata import artist_for, extra_tags, parse_info, title_filename
+from ytmp3_host.naming import (
     DEFAULT_FILENAME,
     UNKNOWN_ARTIST,
-    artist_for,
     artist_from_filename,
-    build_download_command,
-    describe_error,
-    downloaded_mp3,
-    extra_tags,
     is_web_url,
     is_youtube_url,
-    parse_info,
     requested_filename,
-    resolve_folder,
     safe_filename,
-    title_filename,
     title_from_filename,
 )
+from ytmp3_host.ytdlp import build_download_command
 
 
 @pytest.mark.parametrize(
@@ -210,30 +206,30 @@ def test_resolve_folder_rejects_relative_paths(folder: str) -> None:
 
 
 def test_folder_is_writable_leaves_nothing_behind(tmp_path: Path) -> None:
-    assert core.folder_is_writable(tmp_path)
+    assert files.folder_is_writable(tmp_path)
     assert list(tmp_path.iterdir()) == []
 
 
 def test_folder_is_writable_probe_is_gone_when_the_host_is_killed(tmp_path: Path) -> None:
     # the host killed while the probe is open: Windows still deletes it (O_TEMPORARY)
     code = (
-        "import os, sys, time; from ytmp3_host import core\n"
-        "core.os.close = lambda fd: (print('open', flush=True), time.sleep(60))\n"
-        "core.folder_is_writable(core.Path(sys.argv[1]))\n"
+        "import os, sys, time; from ytmp3_host import files\n"
+        "files.os.close = lambda fd: (print('open', flush=True), time.sleep(60))\n"
+        "files.folder_is_writable(files.Path(sys.argv[1]))\n"
     )
     child = subprocess.Popen([sys.executable, "-c", code, str(tmp_path)], stdout=subprocess.PIPE, text=True)
     assert child.stdout is not None
     assert child.stdout.readline().strip() == "open"
     assert len(list(tmp_path.glob("_ytmp3_*.probe"))) == 1
     # the venv's python.exe is a launcher with the real Python as its child
-    core.kill_process_tree(child)
+    ytdlp.kill_process_tree(child)
     child.wait()
     assert list(tmp_path.iterdir()) == []
 
 
 def test_folder_is_writable_false_when_windows_refuses(tmp_path: Path) -> None:
     # a folder that can't take a file, like a missing one
-    assert not core.folder_is_writable(tmp_path / "missing")
+    assert not files.folder_is_writable(tmp_path / "missing")
 
 
 def test_resolve_folder_names_missing_default(default_folder: Path) -> None:
@@ -282,17 +278,17 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path) -> No
     def value(flag: str) -> str:
         return cmd[cmd.index(flag) + 1]
 
-    assert cmd[0] == str(core.YT_DLP_PATH)
+    assert cmd[0] == str(ytdlp.YT_DLP_PATH)
     assert cmd[-1] == "https://youtu.be/abc"
     assert value("--audio-format") == "mp3"
     assert value("--audio-quality") == "0"  # LAME V0, see CLAUDE.md priorities
     assert value("--playlist-items") == "1"  # a playlist URL still gives one file
     assert value("-o") == f"{stem}.%(ext)s"
     assert value("--print") == (
-        f"before_dl:{core.INFO_MARKER}%(.{{title,artists,album,release_year,track_number,channel,uploader,webpage_url,extractor_key}})j"
+        f"before_dl:{ytdlp.INFO_MARKER}%(.{{title,artists,album,release_year,track_number,channel,uploader,webpage_url,extractor_key}})j"
     )
     assert "--no-simulate" in cmd  # --print must never turn the call into a dry run
-    assert value("--ffmpeg-location") == str(core.FFMPEG_PATH)
+    assert value("--ffmpeg-location") == str(ytdlp.FFMPEG_PATH)
     assert {"--no-playlist", "--write-thumbnail", "-x", "--newline", "--progress"} <= set(cmd)
 
 
