@@ -1,19 +1,25 @@
 """File names: cleaning up titles, reading artist and title from a name, and URL checks."""
 
 import re
+from pathlib import Path
 from urllib.parse import urlsplit
 
 DEFAULT_FILENAME = "Youtube MP3"
 UNKNOWN_ARTIST = "<unknown>"
 YOUTUBE_HOSTS = ("youtube.com", "youtu.be/")
-NOISE_WORDS = ("Official", "Music", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean", "Live", "4K")
+NOISE_WORDS = ("Official", "Music", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean", "4K")
+# a file name can have 255 UTF-16 units on Windows, and ".mp3" takes four
+MAX_FILENAME_CHARS = 251
+# a longer whole path works in ffmpeg, but Python can't see the file then (unless Windows allows long paths)
+MAX_PATH_CHARS = 259
 
 WINDOWS_RESERVED_NAMES = frozenset(
     ["CON", "PRN", "AUX", "NUL"] + [f"{port}{i}" for port in ("COM", "LPT") for i in range(1, 10)]
 )
 
+FORBIDDEN_CHARS_RE = re.compile(r'[\\/*?:"<>|]')
 # control characters \x1c-\x1f count as whitespace and are collapsed by WHITESPACE_RE
-INVALID_CHARS_RE = re.compile(r'[\\/*?:"<>|\x00-\x08\x0e-\x1b]')
+CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0e-\x1b]")
 _NOISE_WORD = "(?:" + "|".join(map(re.escape, NOISE_WORDS)) + ")"
 # a bracket group made only of noise words, e.g. "(Official Music Video)" or "[HD]";
 # noise words outside brackets are part of the title ("Live and Let Die")
@@ -55,6 +61,59 @@ def is_youtube_url(url: str) -> bool:
     return any(host in url for host in YOUTUBE_HOSTS)
 
 
+def clean_title(name: str) -> str:
+    """Remove control characters, bracketed YouTube title noise, empty brackets and repeated whitespace.
+
+    Args:
+        name: The raw title.
+    Returns:
+        The cleaned title, which may still hold characters a filename can't (for the tags).
+    """
+    name = CONTROL_CHARS_RE.sub("", name)
+    name = NOISE_GROUP_RE.sub("", name)
+    name = EMPTY_BRACKETS_RE.sub("", name)
+    return WHITESPACE_RE.sub(" ", name).strip()
+
+
+def _utf16_units(name: str) -> bytes:
+    return name.encode("utf-16-le", errors="surrogatepass")
+
+
+def filename_limit(folder: Path | None = None) -> int:
+    """The longest filename (without extension, in UTF-16 units like Windows counts) that fits.
+    Args:
+        folder: The folder it goes in; None for the limit of the name alone.
+    """
+    if folder is None:
+        return MAX_FILENAME_CHARS
+    room = MAX_PATH_CHARS - len(_utf16_units(str(folder))) // 2 - len("\\.mp3")
+    return max(1, min(MAX_FILENAME_CHARS, room))
+
+
+def filename_too_long(name: str, folder: Path | None = None) -> bool:
+    """Whether a filename without extension is longer than filename_limit."""
+    return len(_utf16_units(name)) > filename_limit(folder) * 2
+
+
+def filename_too_long_message(folder: Path) -> str:
+    """What the user is told when the filename they asked for does not fit in folder."""
+    return f"The filename is too long for this folder (at most {filename_limit(folder)} characters)"
+
+
+def fit_filename(name: str, folder: Path | None = None) -> str:
+    """Shorten a filename made from a video title to what Windows allows.
+
+    Args:
+        name: The sanitized filename without extension.
+        folder: The folder it goes in, see filename_limit.
+    Returns:
+        The name, cut at filename_limit without splitting a character.
+    """
+    if not filename_too_long(name, folder):
+        return name
+    return _utf16_units(name)[:filename_limit(folder) * 2].decode("utf-16-le", errors="ignore").rstrip()
+
+
 def safe_filename(name: object) -> str:
     """Turn a video title or user input into a valid Windows filename.
     Removes characters Windows forbids in filenames, bracketed YouTube title noise
@@ -72,10 +131,7 @@ def safe_filename(name: object) -> str:
     """
     if not isinstance(name, str):
         return DEFAULT_FILENAME
-    name = INVALID_CHARS_RE.sub("", name)
-    name = NOISE_GROUP_RE.sub("", name)
-    name = EMPTY_BRACKETS_RE.sub("", name)
-    name = WHITESPACE_RE.sub(" ", name).strip()
+    name = clean_title(FORBIDDEN_CHARS_RE.sub("", name))
     # Windows ignores everything after the first dot (and trailing spaces) here
     if name.split(".", 1)[0].rstrip().upper() in WINDOWS_RESERVED_NAMES:
         name = f"_{name}"
@@ -102,14 +158,10 @@ def artist_from_filename(filename: str) -> str:
         filename: The final filename without extension, e.g. "Artist - Song".
     Returns:
         The text before the first spaced dash (" - ", " – ", " — "), so "Jay-Z - Song"
-        gives "Jay-Z"; without one the text before the first "-"; UNKNOWN_ARTIST if
-        there is no dash at all.
+        gives "Jay-Z"; UNKNOWN_ARTIST without one ("Anti-Hero" names no artist).
     """
-    if match := ARTIST_SEPARATOR_RE.search(filename):
-        artist = filename[:match.start()].strip()
-    else:
-        artist = filename.split("-", 1)[0].strip() if "-" in filename else ""
-    return artist or UNKNOWN_ARTIST
+    match = ARTIST_SEPARATOR_RE.search(filename)
+    return (filename[:match.start()].strip() if match else "") or UNKNOWN_ARTIST
 
 
 def title_from_filename(filename: str) -> str:
@@ -118,11 +170,8 @@ def title_from_filename(filename: str) -> str:
     Args:
         filename: The final filename without extension, e.g. "Artist - Song".
     Returns:
-        The text after the dash that artist_from_filename splits at, or the whole
-        filename if there is no dash (or nothing after it).
+        The text after the spaced dash that artist_from_filename splits at, or the
+        whole filename if there is none (or nothing after it).
     """
-    if match := ARTIST_SEPARATOR_RE.search(filename):
-        title = filename[match.end():].strip()
-    else:
-        title = filename.split("-", 1)[1].strip() if "-" in filename else ""
-    return title or filename
+    match = ARTIST_SEPARATOR_RE.search(filename)
+    return (filename[match.end():].strip() if match else "") or filename

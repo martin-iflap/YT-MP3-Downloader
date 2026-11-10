@@ -26,7 +26,8 @@ class Repairs:
     """What the fake repairs did, and how they behave (set the fields before the download)."""
     bin_dir: Path
     fake_yt_dlp: FakeYtDlp
-    new_yt_dlp: bool = False  # update_yt_dlp installs a new exe that downloads fine
+    new_yt_dlp: bool = False  # update_yt_dlp installs a new exe
+    new_yt_dlp_works: bool = True  # and it downloads fine
     update_error: type[Exception] | None = None  # update_yt_dlp raises this
     calls: list[str] = field(default_factory=list)
     infos: list[str] = field(default_factory=list)
@@ -37,7 +38,8 @@ class Repairs:
             raise self.update_error("GitHub could not be reached")
         if self.new_yt_dlp:
             (self.bin_dir / "yt-dlp.exe").write_bytes(b"a newer yt-dlp")
-            self.fake_yt_dlp.set("success")
+            if self.new_yt_dlp_works:
+                self.fake_yt_dlp.set("success")
         return "2026.10.21"
 
     def install_deno(self) -> str:
@@ -96,6 +98,41 @@ def test_a_missing_yt_dlp_is_downloaded_and_the_download_retried(repairs: Repair
     repairs.new_yt_dlp = True
     assert repairs.download(out_dir).exists()
     assert repairs.calls == ["update_yt_dlp"]
+
+
+def test_a_download_that_fails_again_is_retried_only_once(repairs: Repairs, out_dir: Path) -> None:
+    repairs.fake_yt_dlp.set("fail")
+    repairs.new_yt_dlp, repairs.new_yt_dlp_works = True, False
+    with pytest.raises(subprocess.CalledProcessError):
+        repairs.download(out_dir)
+    assert repairs.calls == ["update_yt_dlp"]
+    assert repairs.infos == [CHECKING, RETRYING]
+
+
+def test_a_corrupt_yt_dlp_is_replaced_and_the_download_retried(
+    repairs: Repairs, out_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    exe = repairs.bin_dir / "yt-dlp.exe"
+    exe.write_bytes(b"MZ half a download")  # Windows refuses to start it
+    runs_python = ytdlp.build_download_command
+
+    def _real_exe_until_updated(url: str, stem: Path) -> list[str]:
+        command = runs_python(url, stem)
+        return command if exe.read_bytes() == b"a newer yt-dlp" else [str(exe), *command[2:]]
+
+    monkeypatch.setattr(ytdlp, "build_download_command", _real_exe_until_updated)
+    repairs.new_yt_dlp = True
+    assert repairs.download(out_dir).exists()
+    assert repairs.calls == ["update_yt_dlp"]
+
+
+def test_a_missing_ffmpeg_is_not_a_yt_dlp_repair(
+    repairs: Repairs, out_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(core, "FFMPEG_PATH", tmp_path / "gone.exe")
+    with pytest.raises(FileNotFoundError, match="ffmpeg.exe not found"):
+        repairs.download(out_dir)
+    assert repairs.calls == []
 
 
 def test_deno_is_installed_when_youtube_wants_javascript(repairs: Repairs, out_dir: Path) -> None:

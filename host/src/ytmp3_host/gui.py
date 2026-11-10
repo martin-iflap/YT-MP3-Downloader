@@ -25,7 +25,7 @@ from ytmp3_host.files import (
     resolve_folder,
     show_in_folder,
 )
-from ytmp3_host.naming import is_web_url, requested_filename, safe_filename
+from ytmp3_host.naming import filename_too_long, filename_too_long_message, is_web_url, requested_filename, safe_filename
 from ytmp3_host.ytdlp import kill_process_tree
 from ytmp3_host.native_messaging import send_current_folder, send_message
 
@@ -94,6 +94,7 @@ class DownloaderApp(ctk.CTk):
         self.current_stem: Path | None = None
         self.download_cancelled = False
         self.download_id = 0
+        self.protocol("WM_DELETE_WINDOW", self._close)
 
         # Window icon
         try:
@@ -295,6 +296,10 @@ class DownloaderApp(ctk.CTk):
         if not folder_is_writable(folder_path):
             self.show_status("Windows doesn't allow saving in this folder, pick another one", "error")
             return
+        filename = requested_filename(self.name_entry.get())
+        if filename_too_long(filename, folder_path):
+            self.show_status(filename_too_long_message(folder_path), "error")
+            return
         self.folder_var.set(str(folder_path))
 
         self.download_cancelled = False
@@ -306,7 +311,6 @@ class DownloaderApp(ctk.CTk):
         self.show_status("Downloading...", "info")
         self._set_main_button("Cancel", self.cancel_download)
 
-        filename = requested_filename(self.name_entry.get())
         args = (url, folder_path, filename, self.download_id)
         threading.Thread(target=self._download_thread, args=args, daemon=True).start()
 
@@ -380,6 +384,17 @@ class DownloaderApp(ctk.CTk):
 
         if self.current_stem:
             threading.Thread(target=cleanup_partial_downloads, args=(self.current_stem,), daemon=True).start()
+
+    def _close(self) -> None:
+        """Close the window; a running yt-dlp is stopped and its partial files removed first."""
+        self.download_id += 1
+        process, stem = self.current_process, self.current_stem
+        if process and process.poll() is None:
+            self.withdraw()
+            kill_process_tree(process)
+            if stem:
+                cleanup_partial_downloads(stem)
+        self.destroy()
 
     def reset_fields(self) -> None:
         """Clear the URL and filename fields for the next download."""

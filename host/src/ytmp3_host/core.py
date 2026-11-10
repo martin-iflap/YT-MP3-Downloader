@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ytmp3_host.config import FFMPEG_PATH, YT_DLP_PATH
 from ytmp3_host.files import remove_stale_temp_files, remove_temp_files
-from ytmp3_host.metadata import artist_for, extra_tags, info_text, title_filename
+from ytmp3_host.metadata import artist_for, extra_tags, info_text, named_title, title_filename
 from ytmp3_host.naming import DEFAULT_FILENAME, is_youtube_url, title_from_filename
 from ytmp3_host.ytdlp import find_thumbnail, run_yt_dlp
 # only download_with_repair's failure path uses these
@@ -22,7 +22,7 @@ lazy from ytmp3_host import health, updater
 
 logger = logging.getLogger(__name__)
 
-DOWNLOAD_TIMEOUT_S = 300
+DOWNLOAD_TIMEOUT_S = 900
 EMBED_TIMEOUT_S = 50
 # what yt-dlp prints when YouTube asks for a JavaScript challenge it could not solve without a runtime
 JS_CHALLENGE_FAILURES = ("Signature solving failed", "n challenge solving failed", "Requested format is not available")
@@ -143,7 +143,7 @@ def download_audio(
 
     def _check_title(inf: dict[str, object]) -> None:
         if not filename:
-            _ensure_not_exists(folder / f"{title_filename(inf)}.mp3")
+            _ensure_not_exists(folder / f"{title_filename(inf, folder)}.mp3")
 
     if filename:
         _ensure_not_exists(folder / f"{filename}.mp3")
@@ -160,10 +160,12 @@ def download_audio(
         downloaded = time.perf_counter()
         logger.debug("yt-dlp took %.2f s, info: %r", downloaded - start, info)
 
+        tag_name = filename  # the tags can hold what a filename can't ("AC/DC")
         if not filename:
             if not info_text(info, "title"):
                 _warn(f"Could not fetch the video title, using '{DEFAULT_FILENAME}'")
-            filename = title_filename(info)
+            filename = title_filename(info, folder)
+            tag_name = named_title(info) or filename
         output = folder / f"{filename}.mp3"
         _ensure_not_exists(output)  # again: it may have appeared during the download
 
@@ -175,7 +177,7 @@ def download_audio(
         if thumb_file is None:
             _warn("No thumbnail found, the MP3 is saved without cover art")
         embed_thumbnail(
-            temp_mp3, thumb_file, artist_for(filename, info), title_from_filename(filename), output, extra_tags(info)
+            temp_mp3, thumb_file, artist_for(tag_name, info), title_from_filename(tag_name), output, extra_tags(info)
         )
         if not output.exists():  # cheap guard: never report success for a file that is not there
             raise FileNotFoundError(errno.ENOENT, "ffmpeg did not create the MP3", str(output))

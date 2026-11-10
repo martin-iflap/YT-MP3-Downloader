@@ -18,17 +18,17 @@ const HOST_BROKEN_MESSAGE = 'The YT MP3 Downloader app is not working (it closed
 const LEGACY_HOST_REPLY = 'Invalid YouTube URL';
 const LEGACY_HOST_MESSAGE = "This version of the YT MP3 Downloader app can't update itself. Install the new version once, from then on it keeps itself up to date.";
 
-// Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
+// Per-action timeouts. The host allows 900s for yt-dlp plus 50s for the ffmpeg cover pass,
 // and select_folder waits on the user, so these must stay above that. get_version waits
 // up to 20s for `yt-dlp --version`. The updates (updater.py) may first wait 60s for another
 // host's update, look up the tag (5s) and fetch the checksums (30s), then download for up
 // to 180s (yt-dlp) or 360s (the installer), plus up to 30s for the last read, and test-run a
 // new exe (20s): about 345s for yt-dlp (with its 20s version check first) and 485s for the
 // installer. A download that fails in yt-dlp is retried once after a repair
-// (core.download_with_repair): 350s, a yt-dlp update (345s), Deno (about 455s), 350s
-// again, so the worst case is about 25 min.
+// (core.download_with_repair): 950s, a yt-dlp update (345s), Deno (about 455s), 950s
+// again, so the worst case is about 45 min (test_versions.py checks the sum).
 const ACTION_TIMEOUTS_MS = {
-  download: 27 * 60 * 1000,
+  download: 47 * 60 * 1000,
   download_gui: 30 * 1000,
   select_folder: 10 * 60 * 1000,
   get_current_folder: 15 * 1000,
@@ -65,6 +65,8 @@ browser.contextMenus.create({
     '*://youtube.com/watch*',
     '*://m.youtube.com/watch*',
     '*://music.youtube.com/watch*',
+    '*://music.youtube.com/shorts/*',
+    '*://music.youtube.com/live/*',
     '*://youtu.be/*',
     '*://www.youtube.com/shorts/*',
     '*://youtube.com/shorts/*',

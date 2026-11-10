@@ -105,7 +105,7 @@ test('a healthy host is relayed as success with its report, and nothing is repai
   assert.equal(state.ports[0].disconnected, true);
 });
 
-test('a missing JavaScript runtime is not reported yet (no fix is shipped)', async () => {
+test('a missing JavaScript runtime is not reported (the host installs it when a download needs it)', async () => {
   const { final } = await checkHost({ get_version: report({ js_runtime: { name: 'deno', installed: false } }) });
   assert.equal(final.status, 'success');
 });

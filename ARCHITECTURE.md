@@ -239,7 +239,7 @@ Exceptions:
 
 | `action`             | Fields                         | Host behaviour                                                                                      | Timeout (`background.js`)   |
 |----------------------|--------------------------------|-----------------------------------------------------------------------------------------------------|-----------------------------|
-| `download`           | `url`, `folder?`, `filename?`  | Headless download, `run_native()` (with one repair and retry, §7.6)                                 | 27 min                      |
+| `download`           | `url`, `folder?`, `filename?`  | Headless download, `run_native()` (with one repair and retry, §7.6)                                 | 47 min                      |
 | `download_gui`       | `url?`, `folder?`, `filename?` | Opens the pre-filled Tk window, `gui.open_gui()`                                                    | 30 s (until `"GUI opened"`) |
 | `select_folder`      | `folder?`                      | Folder picker starting at `folder`; returns the selection, or `folder` (else the default) on cancel | 10 min (user interaction)   |
 | `get_current_folder` | —                              | Returns the default folder, creating it if missing                                                  | 15 s                        |
@@ -617,11 +617,11 @@ The rest of this table lives in `naming.py` (URL checks, `safe_filename`,
 |-------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `is_web_url(url)`                                                                   | The request check: http(s) with a host name.                                                                                                                                                                                                                                                                                                                                                                                       |
 | `is_youtube_url(url)`                                                               | Substring check for `youtube.com` / `youtu.be/`. Only decides whether a failure may need Deno (other sites also print "Requested format is not available").                                                                                                                                                                                                                                                                        |
-| `safe_filename(name)`                                                               | Strips `\/*?:"<>\|` and control characters; removes bracket groups made only of noise words (`NOISE_WORDS`: `Official`, `Music`, `Video`, `HD`, `Lyrics`, `Live`, …), e.g. `(Official Music Video)`, `[HD]`, while noise words elsewhere stay (`Live and Let Die`); removes empty `()`/`[]`; collapses whitespace; prefixes Windows device names (`CON`, `NUL`, `COM1`, …) with `_`. Empty → `DEFAULT_FILENAME` (`"Youtube MP3"`). |
+| `safe_filename(name)`                                                               | Strips `\/*?:"<>\|` and control characters; removes bracket groups made only of noise words (`NOISE_WORDS`: `Official`, `Music`, `Video`, `HD`, `Lyrics`, …), e.g. `(Official Music Video)`, `[HD]`, while noise words elsewhere stay (`Live and Let Die`); removes empty `()`/`[]`; collapses whitespace; prefixes Windows device names (`CON`, `NUL`, `COM1`, …) with `_`. Empty → `DEFAULT_FILENAME` (`"Youtube MP3"`). |
 | `requested_filename(name)`                                                          | `safe_filename`, but returns `""` when nothing meaningful is left, meaning "name it after the title".                                                                                                                                                                                                                                                                                                                              |
 | `ensure_default_folder()`, `resolve_folder(folder)`                                 | Empty or the default folder → the (created) default folder; an existing directory → itself; otherwise `None`.                                                                                                                                                                                                                                                                                                                      |
 | `title_filename(info)`                                                              | The name of a file named after its title. A title without a spaced dash gets the site's `artists` in front ("Forss - Flickermood"), never the channel (a vlog stays "Me at the zoo").                                                                                                                                                                                                                                              |
-| `artist_for(filename, info)`                                                        | The text before the first spaced dash (` - `, ` – `, ` — `) in the filename, else before the first `-`; without a dash the video's `artists` (`info_artists`, which ignores Mixcloud's: a mix's tracklist), else the channel without " - Topic", else the uploader, else `<unknown>`. The title tag is the text after the dash (`title_from_filename`).                                                                            |
+| `artist_for(filename, info)`                                                        | The text before the first spaced dash (` - `, ` – `, ` — `) in the filename (a dash inside a word does not separate); without one the video's `artists` (`info_artists`, which ignores Mixcloud's: a mix's tracklist), else the channel without " - Topic", else the uploader, else `<unknown>`. The title tag is the text after the dash (`title_from_filename`).                                                                            |
 | `extra_tags(info)`                                                                  | Album, year (`release_year` only: an official video's upload year is often decades after the song), track number, the video URL as the comment; each only when the video has it.                                                                                                                                                                                                                                                   |
 | `download_audio(url, folder, filename, on_progress, on_start, on_warning, timeout)` | The single pipeline (§6.7). Verifies the final MP3 exists before returning it. Raises `FileExistsError`, `FileNotFoundError` (ffmpeg/yt-dlp missing, no MP3 produced), `TimeoutExpired`, `CalledProcessError`. Temp files are always removed.                                                                                                                                                                                      |
 | `download_with_repair(...)`                                                         | `download_audio`, retried once after a yt-dlp failure that a repair may fix (§7.6). Used by both the headless and the GUI path.                                                                                                                                                                                                                                                                                                    |
@@ -648,7 +648,7 @@ yt-dlp.exe --no-playlist --playlist-items 1 --concurrent-fragments 3
 
 ```mermaid
 flowchart LR
-    U["video / track URL"] --> Y["yt-dlp.exe (300 s watchdog)"]
+    U["video / track URL"] --> Y["yt-dlp.exe (900 s watchdog)"]
     Y -- "audio, LAME V0" --> M["_ytmp3_hex.mp3"]
     Y -- "raw thumbnail" --> J["_ytmp3_hex.webp"]
     Y -- "stdout, before_dl" --> T["video info JSON after YTMP3_INFO:"]
@@ -942,7 +942,7 @@ sequenceDiagram
     SB->>SB: isWebUrl(url)
     SB->>BG: native_action download, requestId
     BG->>BG: whitelist check, runNativeAction(origin sidebar)
-    BG->>H: connectNative + postMessage, start 27 min timer
+    BG->>H: connectNative + postMessage, start 47 min timer
     H->>H: main() then run_native()
     opt folder doesn't exist
         H-->>BG: error, final true (the folder is named, nothing is downloaded)
@@ -1178,9 +1178,9 @@ internet or the real binaries gets `@pytest.mark.network`.
 - No stdout output in host code other than `send_message`.
 - Exactly one `final: true` response per request. Intermediate responses must set
   `final: false` explicitly.
-- `ACTION_TIMEOUTS_MS` must stay above the host's worst case: `download` (27 min) above
-  the yt-dlp call (300 s) + ffmpeg (50 s) + a yt-dlp update + Deno + one retry (about
-  25 min); `update_yt_dlp` (7 min) above ~345 s; `update_host` (9 min) above ~485 s. The
+- `ACTION_TIMEOUTS_MS` must stay above the host's worst case: `download` (47 min) above
+  the yt-dlp call (900 s) + ffmpeg (50 s) + a yt-dlp update + Deno + one retry (about
+  45 min); `update_yt_dlp` (7 min) above ~345 s; `update_host` (9 min) above ~485 s. The
   sums are in the comment above `ACTION_TIMEOUTS_MS`.
 - `app_manifest`, `yt.downloader@converter.org`, `mp3.exe`, the installer's `AppName` and
   its output name are fixed (§3.1).

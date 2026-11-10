@@ -1,5 +1,6 @@
 """Running yt-dlp: its command line, the download with its watchdog, and stopping its process tree."""
 
+import errno
 import logging
 import re
 import subprocess
@@ -77,7 +78,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
         "--progress", "--newline",
         "--encoding", "utf-8",
         *js_runtime,
-        "-o", f"{temp_stem}.%(ext)s",
+        "-o", f"{str(temp_stem).replace('%', '%%')}.%(ext)s",  # a % in the folder is not part of the template
         url,
     ]
 
@@ -123,16 +124,22 @@ def run_yt_dlp(
         subprocess.TimeoutExpired: If the download exceeded timeout.
         subprocess.CalledProcessError: If yt-dlp exited with an error. `output`
             holds the last lines of its output, without progress lines.
+        FileNotFoundError: If yt-dlp.exe can't be started (e.g. a corrupt file), for the
+            repair in download_with_repair, like a missing one.
     """
-    with subprocess.Popen(
-        build_download_command(url, temp_stem),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        encoding="utf-8",
-        errors="replace",
-        bufsize=1,
-    ) as process:
+    try:
+        process = subprocess.Popen(
+            build_download_command(url, temp_stem),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+    except OSError as e:
+        raise FileNotFoundError(errno.ENOENT, "yt-dlp.exe could not be started", str(YT_DLP_PATH)) from e
+    with process:
         timed_out = threading.Event()
 
         def _kill_on_timeout() -> None:

@@ -59,6 +59,12 @@ def test_title_without_artist_takes_the_channel(fake_yt_dlp: FakeYtDlp, fake_emb
     assert fake_embed[0].tags == {}
 
 
+def test_tags_keep_what_a_filename_can_not_hold(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    fake_yt_dlp.set(title="AC/DC - Thunder: Live? (Official Video)")
+    assert download_audio(URL, out_dir).name == "ACDC - Thunder Live.mp3"
+    assert (fake_embed[0].artist, fake_embed[0].title) == ("AC/DC", "Thunder: Live?")
+
+
 def test_existing_artist_title_file_stops_before_downloading(
     fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
@@ -209,20 +215,30 @@ def test_missing_binary_raises_before_downloading(
     assert started == []
 
 
+def process_running(pid: int) -> bool:
+    return str(pid) in subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+
+
 def test_timeout_kills_the_whole_process_tree(
-    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # the fake leaves a grandchild holding stdout open for 30 s: if only the direct
     # child were killed, reading stdout would block until the grandchild exits
     fake_yt_dlp.set("hang")
+    pid_file = tmp_path / "child.pid"
+    monkeypatch.setenv("FAKE_YTDLP_CHILD_PID_FILE", str(pid_file))
     start = time.monotonic()
 
     with pytest.raises(subprocess.TimeoutExpired) as info:
-        download_audio(URL, out_dir, timeout=1)
+        download_audio(URL, out_dir, timeout=3)
 
     assert time.monotonic() - start < 15
-    assert info.value.timeout == 1
+    assert info.value.timeout == 3
     assert leftovers(out_dir) == []
+    deadline = time.monotonic() + 5
+    while process_running(child := int(pid_file.read_text())) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not process_running(child), "the process behind yt-dlp was left running"
 
 
 def test_cancel_through_on_start_stops_the_download(

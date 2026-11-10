@@ -14,6 +14,7 @@ Behavior comes from environment variables:
     FAKE_YTDLP_VERSION  the version to print (default 2026.08.19)
     FAKE_YTDLP_MP3      an MP3 to copy as the download (default: junk bytes)
     FAKE_YTDLP_THUMB    an image to copy as the .png thumbnail (default: junk .webp)
+    FAKE_YTDLP_CHILD_PID_FILE  where hang mode writes the PID of the process it leaves behind
 """
 
 import json
@@ -32,7 +33,9 @@ def emit(line: str) -> None:
 
 def hang() -> None:
     """Like the real yt-dlp child behind the PyInstaller bootloader: a second process keeps stdout open."""
-    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=sys.stdout)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"], stdout=sys.stdout)
+    if pid_file := os.environ.get("FAKE_YTDLP_CHILD_PID_FILE"):
+        Path(pid_file).write_text(str(child.pid))
     time.sleep(30)
     sys.exit(0)
 
@@ -53,7 +56,7 @@ def main() -> None:
     if args == ["--version"]:
         print_version(mode)
         return
-    stem = args[args.index("-o") + 1].removesuffix(".%(ext)s")
+    stem = args[args.index("-o") + 1].removesuffix(".%(ext)s").replace("%%", "%")
     template = re.fullmatch(r"before_dl:(.*)%\(\.\{(.*)}\)j", args[args.index("--print") + 1])
     assert template, "unexpected --print template"
     marker, fields = template.groups()

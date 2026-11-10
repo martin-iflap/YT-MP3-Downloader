@@ -9,6 +9,7 @@ import pytest
 from conftest import FakeYtDlp, Media
 from ytmp3_host import core
 from ytmp3_host.core import download_audio, embed_thumbnail
+from ytmp3_host.naming import filename_limit
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +59,26 @@ def test_extra_tags_become_id3v23_frames(ffmpeg: Path, media: Media, tmp_path: P
     for frame in (b"TALB", b"TYER", b"TRCK", b"COMM"):  # the v2.3 frames players read (TYER, not v2.4's TDRC)
         assert frame in header
     assert audio_md5(ffmpeg, output) == audio_md5(ffmpeg, media.mp3)
+
+
+def test_the_cover_is_a_high_quality_jpeg(media: Media, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    commands: list[list[str]] = []
+    real_run = subprocess.run
+
+    def _recording_run(command: list[str], **kwargs: object) -> object:
+        commands.append(command)
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(core.subprocess, "run", _recording_run)
+    embed_thumbnail(media.mp3, media.cover, "x", "y", tmp_path / "out.mp3")
+    [cmd] = commands
+    assert cmd[cmd.index("-q:v") + 1] == "2"  # see the project priorities in CLAUDE.md
+
+
+def test_the_longest_allowed_filename_can_be_written(media: Media, tmp_path: Path) -> None:
+    output = tmp_path / f"{'x' * filename_limit(tmp_path)}.mp3"
+    embed_thumbnail(media.mp3, None, "x", "y", output)
+    assert output.is_file()  # past the limit ffmpeg still writes it, but Python can't see it
 
 
 def test_without_thumbnail_only_sets_the_tags(ffmpeg: Path, media: Media, tmp_path: Path) -> None:

@@ -7,7 +7,6 @@ with `final: false`, and nothing but valid frames on stdout.
 import functools
 import io
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +16,7 @@ import pytest
 
 from conftest import EmbedCall, FakeYtDlp
 from ytmp3_host import MP3, __version__, config, core, files, health, native_messaging, updater
+from ytmp3_host.naming import MAX_FILENAME_CHARS, filename_too_long_message
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -68,11 +68,11 @@ def finals(responses: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def assert_one_final_per_request(responses: list[dict[str, Any]], request_count: int) -> None:
-    """The contract background.js relies on: one final per request, last message final, warnings never final."""
+    """The contract background.js relies on: one final per request, last message final, warnings and infos never final."""
     assert len(finals(responses)) == request_count
     assert responses[-1]["final"] is True
-    assert all(r["status"] in {"success", "error", "warning"} for r in responses)
-    assert all(r["final"] is False for r in responses if r["status"] == "warning")
+    assert all(r["status"] in {"success", "error", "warning", "info"} for r in responses)
+    assert all(r["final"] is False for r in responses if r["status"] in {"warning", "info"})
 
 
 # --- framing ------------------------------------------------------------------
@@ -145,6 +145,15 @@ def test_get_current_folder_creates_the_default(monkeypatch: pytest.MonkeyPatch,
     [response] = run_host(monkeypatch, frame({"action": "get_current_folder"}))
     assert response == {"status": "success", "folder": str(default_folder), "final": True}
     assert default_folder.is_dir()
+
+
+def test_a_window_that_can_not_open_is_one_final_error_and_the_host_exits(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail(*_args: object) -> None:
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(MP3, "open_gui", _fail)
+    [response] = run_host(monkeypatch, requests({"action": "download_gui"}, {"action": "get_current_folder"}))
+    assert response == {"status": "error", "message": "Could not open the app window: no display", "final": True}
 
 
 # --- show_in_folder and play --------------------------------------------------
@@ -281,6 +290,15 @@ def test_invalid_url(monkeypatch: pytest.MonkeyPatch, url: object) -> None:
     assert response == {"status": "error", "message": "Invalid URL", "final": True}
 
 
+def test_a_filename_windows_can_not_hold_fails_before_downloading(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    request = {"action": "download", "url": URL, "folder": str(out_dir), "filename": "x" * (MAX_FILENAME_CHARS + 1)}
+    [response] = run_host(monkeypatch, frame(request))  # only this answer: yt-dlp never ran
+    assert response == {"status": "error", "message": filename_too_long_message(out_dir.resolve()), "final": True}
+    assert fake_embed == []
+
+
 def test_successful_download(
     monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
@@ -382,18 +400,11 @@ def test_several_requests_in_one_session(
 # --- the real entry point in its own process ----------------------------------
 
 
-def host_env(tmp_path: Path) -> dict[str, str]:
-    """Environment for a host started as a child process, where monkeypatch can't reach."""
-    env = dict(os.environ)
-    env["YTMP3_LOG_LEVEL"] = "CRITICAL"  # don't write mp3.log into the repo
-    return env
-
-
 def test_host_process_over_real_pipes(tmp_path: Path) -> None:
     # neither request touches a folder: the default one is the user's real Documents
     stdin = requests({"action": "download", "url": "bad"}, {"action": "play", "path": str(tmp_path / "missing.mp3")})
     result = subprocess.run(
-        [sys.executable, "-m", "ytmp3_host.MP3"], input=stdin, capture_output=True, env=host_env(tmp_path), timeout=60
+        [sys.executable, "-m", "ytmp3_host.MP3"], input=stdin, capture_output=True, timeout=60
     )
     assert result.returncode == 0, result.stderr
     responses = parse_frames(result.stdout)
@@ -401,11 +412,11 @@ def test_host_process_over_real_pipes(tmp_path: Path) -> None:
     assert all(r["final"] for r in responses)
 
 
-def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:
+def test_self_check_runs_instead_of_the_request_loop() -> None:
     # what the installer runs; stdin stays open, so the request loop would block
     result = subprocess.run(
         [sys.executable, "-m", "ytmp3_host.MP3", MP3.SELF_CHECK_ARG],
-        stdin=subprocess.PIPE, capture_output=True, text=True, env=host_env(tmp_path), timeout=60,
+        stdin=subprocess.PIPE, capture_output=True, text=True, timeout=60,
     )
     assert result.stdout == ""
     if config.FFMPEG_PATH.exists():
@@ -416,7 +427,7 @@ def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:
         assert problem.startswith(f"{config.FFMPEG_PATH} does not work")
 
 
-def test_headless_path_does_not_load_the_gui_health_or_updater(tmp_path: Path) -> None:
+def test_headless_path_does_not_load_the_gui_health_or_updater() -> None:
     # host startup must stay light: customtkinter/Tk only load for the GUI actions,
     # health and the updater (and urllib with them) only for get_version and the updates
     code = (
@@ -426,5 +437,5 @@ def test_headless_path_does_not_load_the_gui_health_or_updater(tmp_path: Path) -
         "loaded = [m for m in heavy if m in sys.modules]\n"
         "assert not loaded, loaded\n"
     )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=host_env(tmp_path))
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr

@@ -2,8 +2,16 @@
 
 import json
 import logging
+from pathlib import Path
 
-from ytmp3_host.naming import ARTIST_SEPARATOR_RE, UNKNOWN_ARTIST, artist_from_filename, safe_filename
+from ytmp3_host.naming import (
+    ARTIST_SEPARATOR_RE,
+    UNKNOWN_ARTIST,
+    artist_from_filename,
+    clean_title,
+    fit_filename,
+    safe_filename,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,37 +57,61 @@ def info_text(info: dict[str, object], key: str) -> str:
     return str(value).strip()
 
 
-def info_artists(info: dict[str, object]) -> str:
-    """The artists the site names for the track e.g. "ACDC"; "" if none.
+def _site_artists(info: dict[str, object]) -> list[str]:
+    """The artists the site names for the track.
     Mixcloud's `artists` are the artists of the tracks in a mix, so they are left out.
-
-    Args:
-        info: The video info (see INFO_FIELDS).
-    Returns:
-        The artists joined with ", ".
     """
     artists = info.get("artists")
     if info_text(info, "extractor_key") in TRACKLIST_EXTRACTORS or not isinstance(artists, list):
-        return ""
-    return ", ".join(a.strip() for a in artists if isinstance(a, str) and a.strip())
+        return []
+    return [a.strip() for a in artists if isinstance(a, str) and a.strip()]
 
 
-def title_filename(info: dict[str, object]) -> str:
-    """The filename of a download named after its title.
-    A title that names no artist (no spaced dash, as on YouTube Music and SoundCloud)
-    gets the site's artists in front, so the file is "Artist - Title" like most titles.
+def info_artists(info: dict[str, object]) -> str:
+    """The artists the site names for the track, joined with ", "; "" if none.
+    Args:
+        info: The video info (see INFO_FIELDS).
+    """
+    return ", ".join(_site_artists(info))
+
+
+def _title_names_artist(title: str, artists: list[str]) -> bool:
+    """Whether the text before title's spaced dash is one of artists (not "Song - Remastered 2011")."""
+    match = ARTIST_SEPARATOR_RE.search(title)
+    if not match:
+        return False
+    front = title[:match.start()].casefold()
+    return any(artist.casefold() in front or front in artist.casefold() for artist in artists)
+
+
+def named_title(info: dict[str, object]) -> str:
+    """The title as "Artist - Title", before it is made into a filename (the tags are read from it).
+    A title that does not name the site's artists (as on YouTube Music and SoundCloud)
+    gets them in front.
 
     Args:
         info: The video info (see INFO_FIELDS).
     Returns:
-        The sanitized filename without extension; DEFAULT_FILENAME without a title.
+        The cleaned title; "" without a title.
     """
-    title = info_text(info, "title")
-    name = safe_filename(title)
-    artists = info_artists(info)
-    if title and artists and not ARTIST_SEPARATOR_RE.search(name):
-        return safe_filename(f"{artists} - {title}")
-    return name
+    title = clean_title(info_text(info, "title"))
+    artists = _site_artists(info)
+    if title and artists and not _title_names_artist(title, artists):
+        return f"{', '.join(artists)} - {title}"
+    return title
+
+
+def title_filename(info: dict[str, object], folder: Path | None = None) -> str:
+    """The filename of a download named after its title (see named_title).
+
+    Args:
+        info: The video info (see INFO_FIELDS).
+        folder: The folder it goes in, see filename_limit.
+    Returns:
+        The sanitized filename without extension, shortened to what Windows allows;
+        DEFAULT_FILENAME without a title.
+    """
+    return fit_filename(safe_filename(named_title(info)), folder)
 
 
 def artist_for(filename: str, info: dict[str, object]) -> str:

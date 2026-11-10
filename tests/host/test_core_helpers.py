@@ -12,8 +12,11 @@ from ytmp3_host.files import downloaded_mp3, resolve_folder
 from ytmp3_host.metadata import artist_for, extra_tags, parse_info, title_filename
 from ytmp3_host.naming import (
     DEFAULT_FILENAME,
+    MAX_FILENAME_CHARS,
     UNKNOWN_ARTIST,
     artist_from_filename,
+    filename_limit,
+    filename_too_long,
     is_web_url,
     is_youtube_url,
     requested_filename,
@@ -29,7 +32,7 @@ from ytmp3_host.ytdlp import build_download_command
         ("Artist - Song (Official Video) [HD]", "Artist - Song"),
         ("Artist - Song (Official Music Video)", "Artist - Song"),
         ("Artist - Song [Official Lyric Video]", "Artist - Song"),
-        ("Artist - Song (Lyrics) (Live)", "Artist - Song"),
+        ("Artist - Song (Lyrics) (Live)", "Artist - Song (Live)"),  # a live version is another recording
         ("Artist - Song (official video - HD)", "Artist - Song"),
         # noise words outside brackets, or next to other words, are part of the title
         ("Paul McCartney - Live and Let Die", "Paul McCartney - Live and Let Die"),
@@ -81,7 +84,8 @@ def test_requested_filename(name: str, expected: str) -> None:
         ("AC-DC - Thunderstruck - Live", "AC-DC"),
         ("Artist – Song", "Artist"),
         ("Artist — Song", "Artist"),
-        ("Artist-Song", "Artist"),
+        ("Artist-Song", UNKNOWN_ARTIST),  # only a spaced dash separates
+        ("Anti-Hero", UNKNOWN_ARTIST),
         ("Song without artist", UNKNOWN_ARTIST),
         ("- Song", UNKNOWN_ARTIST),
         ("-Song", UNKNOWN_ARTIST),
@@ -98,9 +102,9 @@ def test_artist_from_filename(filename: str, expected: str) -> None:
         ("Jay-Z - Empire State of Mind", "Empire State of Mind"),
         ("AC-DC - Thunderstruck - Live", "Thunderstruck - Live"),
         ("Artist – Song", "Song"),
-        ("Artist-Song", "Song"),
+        ("Anti-Hero", "Anti-Hero"),
         ("Song without artist", "Song without artist"),
-        ("- Song", "Song"),
+        ("- Song", "- Song"),
         ("Artist -", "Artist -"),
     ],
 )
@@ -116,6 +120,7 @@ def test_title_from_filename(filename: str, expected: str) -> None:
         ("Song", {"artists": ["Queen", "David Bowie"], "channel": "Queen - Topic"}, "Queen, David Bowie"),
         ("Song", {"channel": "Queen - Topic"}, "Queen"),
         ("Song", {"channel": "jawed"}, "jawed"),
+        ("Anti-Hero", {"channel": "Taylor Swift"}, "Taylor Swift"),
         ("Song", {"artists": ["Forss"], "uploader": "Forss"}, "Forss"),  # SoundCloud: no channel
         # Mixcloud's artists are the mix's tracklist: the uploader made the mix
         ("Mix", {"artists": ["A", "B"], "uploader": "Spartacus", "extractor_key": "Mixcloud"}, "Spartacus"),
@@ -137,6 +142,9 @@ def test_artist_for(filename: str, info: dict[str, object], expected: str) -> No
         ({"title": "Rick Astley - Never Gonna Give You Up", "artists": ["Rick Astley"]}, "Rick Astley - Never Gonna Give You Up"),
         # a dash inside a word is not an artist separator
         ({"title": "Spider-Man Theme", "artists": ["X"]}, "X - Spider-Man Theme"),
+        # the text before the dash is not the artist
+        ({"title": "Bohemian Rhapsody - Remastered 2011", "artists": ["Queen"]}, "Queen - Bohemian Rhapsody - Remastered 2011"),
+        ({"title": "AC/DC - Thunderstruck", "artists": ["AC/DC"]}, "ACDC - Thunderstruck"),
         # only a site's artists, not the channel: a vlog stays "Me at the zoo"
         ({"title": "Me at the zoo", "channel": "jawed"}, "Me at the zoo"),
         ({"title": "Party Time", "artists": ["A", "B"], "extractor_key": "Mixcloud"}, "Party Time"),
@@ -147,6 +155,26 @@ def test_artist_for(filename: str, info: dict[str, object], expected: str) -> No
 )
 def test_title_filename(info: dict[str, object], expected: str) -> None:
     assert title_filename(info) == expected
+
+
+@pytest.mark.parametrize("title", ["x" * 300, "😀" * 200], ids=["ascii", "two-unit-characters"])
+def test_a_title_too_long_for_windows_is_shortened(title: str) -> None:
+    name = title_filename({"title": title})
+    assert not filename_too_long(name)
+    assert name and set(name) == set(title[0])  # no half character at the cut
+
+
+def test_filename_limit_counts_like_windows() -> None:
+    assert not filename_too_long("x" * MAX_FILENAME_CHARS)
+    assert filename_too_long("x" * (MAX_FILENAME_CHARS + 1))
+    assert filename_too_long("😀" * (MAX_FILENAME_CHARS // 2 + 1))  # two UTF-16 units each
+
+
+def test_filename_limit_keeps_the_whole_path_within_max_path() -> None:
+    assert filename_limit(Path("C:\\")) == MAX_FILENAME_CHARS
+    deep = Path("C:\\" + "d" * 200)
+    assert len(str(deep / f"{'x' * filename_limit(deep)}.mp3")) == 259
+    assert len(title_filename({"title": "x" * 300}, deep)) == filename_limit(deep)
 
 
 def test_extra_tags_keeps_only_the_values_a_video_has() -> None:
@@ -228,11 +256,19 @@ def test_folder_is_writable_probe_is_gone_when_the_host_is_killed(tmp_path: Path
 
 
 def test_folder_is_writable_false_when_windows_refuses(tmp_path: Path) -> None:
-    # a folder that can't take a file, like a missing one
+    everyone_create_files = "*S-1-1-0:(WD)"  # by SID: the group's name depends on the Windows language
+    subprocess.run(["icacls", str(tmp_path), "/deny", everyone_create_files], check=True, capture_output=True)
+    try:
+        assert not files.folder_is_writable(tmp_path)
+    finally:  # or pytest could not delete the folder
+        subprocess.run(["icacls", str(tmp_path), "/remove:d", "*S-1-1-0"], check=True, capture_output=True)
+
+
+def test_folder_is_writable_false_for_a_missing_folder(tmp_path: Path) -> None:
     assert not files.folder_is_writable(tmp_path / "missing")
 
 
-def test_resolve_folder_names_missing_default(default_folder: Path) -> None:
+def test_resolve_folder_creates_the_default_when_named(default_folder: Path) -> None:
     assert resolve_folder(str(default_folder)) == default_folder
     assert default_folder.is_dir()
 
@@ -290,6 +326,11 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path) -> No
     assert "--no-simulate" in cmd  # --print must never turn the call into a dry run
     assert value("--ffmpeg-location") == str(ytdlp.FFMPEG_PATH)
     assert {"--no-playlist", "--write-thumbnail", "-x", "--newline", "--progress"} <= set(cmd)
+
+
+def test_a_percent_sign_in_the_folder_is_not_part_of_the_output_template(tmp_path: Path) -> None:
+    cmd = build_download_command("https://youtu.be/abc", tmp_path / "%(title)s" / "_ytmp3_x")
+    assert cmd[cmd.index("-o") + 1] == f"{tmp_path}\\%%(title)s\\_ytmp3_x.%(ext)s"
 
 
 # --- describe_error -----------------------------------------------------------

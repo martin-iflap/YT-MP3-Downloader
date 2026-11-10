@@ -11,9 +11,10 @@ import sys
 import tomllib
 from pathlib import Path
 
-from ytmp3_host import MP3, __version__, config, github, updater
-from ytmp3_host.github import HOST_REPO
-from ytmp3_host.health import is_outdated, parse_version
+from ytmp3_host import MP3, __version__, config, core, github, updater
+from ytmp3_host.github import HOST_REPO, LOOKUP_TIMEOUT_S
+from ytmp3_host.health import VERSION_TIMEOUT_S, is_outdated, parse_version
+from ytmp3_host.naming import MAX_FILENAME_CHARS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -81,6 +82,48 @@ def test_the_installer_downloads_and_checks_yt_dlp_like_the_updater() -> None:
 
 def test_the_installer_runs_the_self_check_the_host_knows() -> None:
     assert f"'{MP3.SELF_CHECK_ARG}'" in INSTALLER_SCRIPT.read_text(encoding="utf-8")
+
+
+def test_the_extension_and_the_installer_use_the_same_identifiers() -> None:
+    manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+    extension_id = manifest["browser_specific_settings"]["gecko"]["id"]
+    background = (REPO_ROOT / "extension" / "background.js").read_text(encoding="utf-8")
+    host_name = re.search(r"^const NATIVE_HOST_NAME = '([^']+)';", background, flags=re.MULTILINE)
+    assert host_name, "NATIVE_HOST_NAME not found in background.js"
+    assert iss_setting(r'^#define\s+ExtensionID\s+"([^"]+)"') == extension_id
+    assert iss_setting(r'^#define\s+NativeHostName\s+"([^"]+)"') == host_name.group(1)
+    dev_manifest = json.loads((REPO_ROOT / "packaging" / "app_manifest.dev.json").read_text(encoding="utf-8"))
+    assert (dev_manifest["name"], dev_manifest["allowed_extensions"]) == (host_name.group(1), [extension_id])
+
+
+def action_timeouts() -> str:
+    background = (REPO_ROOT / "extension" / "background.js").read_text(encoding="utf-8")
+    block = re.search(r"const ACTION_TIMEOUTS_MS = \{(.*?)};", background, flags=re.DOTALL)
+    assert block, "ACTION_TIMEOUTS_MS not found in background.js"
+    return block.group(1)
+
+
+def test_every_action_the_extension_sends_exists_in_the_host() -> None:
+    # the host treats an unknown action as a download
+    actions = re.findall(r"^\s*(\w+):", action_timeouts(), flags=re.MULTILINE)
+    assert actions and set(actions) <= set(MP3.ACTIONS)
+
+
+def test_the_extension_waits_longer_than_the_slowest_download() -> None:
+    minutes = re.search(r"^\s*download: (\d+) \* 60 \* 1000", action_timeouts(), flags=re.MULTILINE)
+    assert minutes, "the download timeout not found in ACTION_TIMEOUTS_MS"
+    start = updater.LOCK_TIMEOUT_S + VERSION_TIMEOUT_S + LOOKUP_TIMEOUT_S + updater.SOCKET_TIMEOUT_S
+    finish = updater.SOCKET_TIMEOUT_S + VERSION_TIMEOUT_S
+    yt_dlp_update, deno = start + updater.YT_DLP_DOWNLOAD_S + finish, start + updater.DENO_DOWNLOAD_S + finish
+    worst_case = 2 * (core.DOWNLOAD_TIMEOUT_S + core.EMBED_TIMEOUT_S) + yt_dlp_update + deno
+    assert int(minutes.group(1)) * 60 > worst_case
+
+
+def test_the_sidebar_limits_the_filename_like_the_host() -> None:
+    sidebar = (REPO_ROOT / "extension" / "sidebar.html").read_text(encoding="utf-8")
+    limit = re.search(r'id="filenameInput" maxlength="(\d+)"', sidebar)
+    assert limit, "the filename field has no maxlength"
+    assert int(limit.group(1)) == MAX_FILENAME_CHARS
 
 
 # The permissions of the extension 1.x users have. Firefox holds back an update that asks

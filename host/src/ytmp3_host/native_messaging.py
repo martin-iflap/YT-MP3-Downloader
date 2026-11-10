@@ -12,7 +12,7 @@ from typing import Any
 
 from ytmp3_host.core import describe_error, download_with_repair
 from ytmp3_host.files import downloaded_mp3, folder_is_writable, open_file, resolve_folder, show_in_folder
-from ytmp3_host.naming import is_web_url, requested_filename
+from ytmp3_host.naming import filename_too_long, filename_too_long_message, is_web_url, requested_filename
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +151,10 @@ def run_native(url: str, folder: str, filename: str) -> None:
     if not folder_is_writable(folder_path):
         send_message({"status": "error", "message": unwritable_folder_message(folder_path), "final": True})
         return
+    safe_name = requested_filename(filename)
+    if filename_too_long(safe_name, folder_path):
+        send_message({"status": "error", "message": filename_too_long_message(folder_path), "final": True})
+        return
 
     warnings: list[str] = []
 
@@ -162,7 +166,7 @@ def run_native(url: str, folder: str, filename: str) -> None:
         mp3_path = download_with_repair(
             url,
             folder_path,
-            requested_filename(filename),
+            safe_name,
             on_warning=_send_warning,
             on_info=lambda message: send_message({"status": "info", "message": message, "final": False}),
         )

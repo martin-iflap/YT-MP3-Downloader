@@ -22,6 +22,8 @@ def test_real_download(out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = core.download_audio(SHORT_VIDEO, out_dir, on_warning=warnings.append)
 
     assert result.exists() and result.stat().st_size > 50_000
-    assert result.read_bytes()[:4] == b"ID3\x03"
+    header = result.read_bytes()[:4096]
+    assert header[:4] == b"ID3\x03"
+    assert all(frame in header for frame in (b"TPE1", b"TIT2", b"APIC"))  # artist, title and cover
     assert warnings == []
     assert [p.name for p in out_dir.iterdir()] == [result.name]

@@ -23,11 +23,12 @@ from pathlib import Path
 
 import pytest
 
-from ytmp3_host import __version__, github, updater
+from ytmp3_host import __version__, github, updater, ytdlp
 from ytmp3_host.github import DENO_REPO, HOST_REPO, YT_DLP_REPO
 from ytmp3_host.updater import UpdateError
 
 OLD, NEW = "2026.08.19", "2026.09.01"
+CDN = "/cdn"
 
 
 def script(version: str | None) -> bytes:
@@ -66,6 +67,13 @@ def server(monkeypatch: pytest.MonkeyPatch) -> Iterator[ReleaseServer]:
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             state = states[0]
+            if not self.path.startswith(CDN):  # GitHub redirects every asset to its download host
+                self.send_response(302)
+                self.send_header("Location", f"{state.base_url}{CDN}{self.path}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.path = self.path.removeprefix(CDN)
             state.requests.append(self.path)
             data = state.files.get(self.path, 404)
             if isinstance(data, int):
@@ -368,12 +376,12 @@ def test_a_lock_held_by_a_killed_process_is_free(tmp_path: Path) -> None:
     )
     try:
         assert holder.stdout is not None and holder.stdout.readline().strip() == "locked"
-        with pytest.raises(UpdateError):
+        with pytest.raises(UpdateError, match="Another update"):
             with updater.update_lock(lock, timeout=0.2):
                 pass
     finally:
-        holder.kill()
-        holder.wait()
+        ytdlp.kill_process_tree(holder)  # the venv's python.exe is a launcher with the real Python as its child
+        holder.communicate()
     with updater.update_lock(lock, timeout=2):  # Windows dropped the dead process's lock
         pass
 
@@ -654,10 +662,16 @@ def test_an_installer_still_running_is_removed_later(tmp_path: Path) -> None:
     assert not (tmp_path / "update").exists()
 
 
-@pytest.mark.parametrize("tag", [None, "v-1.1"], ids=["offline", "1.x-style-tag"])
-def test_an_unknown_host_release_is_an_error(host_install: Launches, monkeypatch: pytest.MonkeyPatch, tag: str | None) -> None:
+@pytest.mark.parametrize(
+    ("tag", "message"),
+    [(None, "GitHub could not be reached"), ("v-1.1", "no version number")],
+    ids=["offline", "1.x-style-tag"],
+)
+def test_an_unknown_host_release_is_an_error(
+    host_install: Launches, monkeypatch: pytest.MonkeyPatch, tag: str | None, message: str
+) -> None:
     latest(monkeypatch, host=tag)
-    with pytest.raises(UpdateError):
+    with pytest.raises(UpdateError, match=message):
         updater.update_host()
     assert host_install.commands == []
 
@@ -665,10 +679,25 @@ def test_an_unknown_host_release_is_an_error(host_install: Launches, monkeypatch
 # --- launching outside the job ------------------------------------------------
 
 
-def test_launch_detached_starts_a_process_that_outlives_the_call(tmp_path: Path) -> None:
+def test_launch_detached_survives_the_job_firefox_ends_with_the_host(tmp_path: Path) -> None:
+    # a host in a job like Firefox's starts the process, then the job is ended: what happens when the host exits.
+    # The started process sleeps first, so it would be killed with the job; it then writes the marker and exits.
     marker = tmp_path / "ran"
-    code = f"import os; open({str(marker)!r}, 'w').write(os.getcwd())"
-    updater.launch_detached([sys.executable, "-c", code])
+    installer = f"import os, time; time.sleep(2); open({str(marker)!r}, 'w').write(os.getcwd())"
+    host = (
+        "import ctypes, struct, sys\n"
+        "from ytmp3_host import updater\n"
+        "kernel32 = ctypes.windll.kernel32\n"
+        "kernel32.CreateJobObjectW.restype = kernel32.GetCurrentProcess.restype = ctypes.c_void_p\n"
+        "job = ctypes.c_void_p(kernel32.CreateJobObjectW(None, None))\n"
+        "limits = ctypes.create_string_buffer(144)  # JOBOBJECT_EXTENDED_LIMIT_INFORMATION; LimitFlags at 16\n"
+        "struct.pack_into('<I', limits, 16, 0x2000 | 0x800)  # KILL_ON_JOB_CLOSE | BREAKAWAY_OK\n"
+        "assert kernel32.SetInformationJobObject(job, 9, limits, 144)\n"
+        "assert kernel32.AssignProcessToJobObject(job, ctypes.c_void_p(kernel32.GetCurrentProcess()))\n"
+        "updater.launch_detached([sys.executable, '-c', sys.argv[1]])\n"
+        "kernel32.TerminateJobObject(job, 1)\n"
+    )
+    subprocess.run([sys.executable, "-c", host, installer], check=False, timeout=30)
     deadline = time.monotonic() + 20
     while not (marker.exists() and marker.read_text()) and time.monotonic() < deadline:
         time.sleep(0.1)

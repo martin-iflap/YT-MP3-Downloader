@@ -19,6 +19,32 @@ test('creates the context menu at startup', () => {
   assert.equal(state.menus[0].id, 'download-mp3');
 });
 
+test('the context menu appears on every kind of link a click accepts', () => {
+  const { state, context } = loadBackground();
+  // a match pattern as a regular expression: "*" is any text, a "*" scheme is http or https
+  const matchers = state.menus[0].targetUrlPatterns.map(pattern => new RegExp(
+    `^${pattern.replace(/[.?]/g, '\\$&').replace(/^\*/, 'https?').replace(/\*/g, '.*')}$`
+  ));
+  for (const url of [
+    'https://www.youtube.com/watch?v=abc',
+    'https://m.youtube.com/watch?v=abc',
+    'https://music.youtube.com/watch?v=abc',
+    'https://music.youtube.com/shorts/abc',
+    'https://music.youtube.com/live/abc',
+    'https://www.youtube.com/shorts/abc',
+    'https://www.youtube.com/live/abc',
+    'https://youtu.be/abc',
+    'https://soundcloud.com/forss/flickermood',
+    'https://m.soundcloud.com/forss/flickermood',
+    'https://on.soundcloud.com/AbC123',
+    'https://artist.bandcamp.com/track/song',
+    'https://www.mixcloud.com/spartacus/party-time/'
+  ]) {
+    assert.equal(context.isKnownSiteUrl(url), true, url);
+    assert.ok(matchers.some(m => m.test(url)), `no pattern matches ${url}`);
+  }
+});
+
 test('the toolbar button toggles the sidebar', () => {
   const { browser, state } = loadBackground();
   browser.browserAction.onClicked.fire({});
@@ -144,12 +170,12 @@ test('host exiting without a final response is reported as an error', async () =
   assert.equal(finals(state)[0].status, 'error');
 });
 
-test('long downloads are not cut off at 40s; a real timeout ends the request once', async () => {
+test('long downloads are not cut off early; a real timeout ends the request once', async () => {
   const { browser, state } = loadBackground();
   sidebarAction(browser, 'download', { url: VIDEO_URL });
   const [port] = state.ports;
 
-  mock.timers.tick(26 * 60 * 1000);
+  mock.timers.tick(46 * 60 * 1000);
   await flush();
   assert.equal(finals(state).length, 0, 'still within the host\'s budget for a download, a repair and a retry');
 

@@ -39,6 +39,12 @@ def default_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture(autouse=True)
+def no_log_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep hosts started as child processes from writing mp3.log into the repo (autouse)."""
+    monkeypatch.setenv(config.LOG_LEVEL_ENV, "CRITICAL")
+
+
+@pytest.fixture(autouse=True)
 def no_github(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep get_version and the updater from reaching GitHub in every test (autouse).
 
@@ -130,7 +136,7 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
         lambda exe=None: [sys.executable, str(FAKE_YT_DLP), *real_version(exe)[1:]],
     )
     for var in ("FAKE_YTDLP_MODE", "FAKE_YTDLP_TITLE", "FAKE_YTDLP_VERSION", "FAKE_YTDLP_INFO", "FAKE_YTDLP_MP3",
-                "FAKE_YTDLP_THUMB"):
+                "FAKE_YTDLP_THUMB", "FAKE_YTDLP_CHILD_PID_FILE"):
         monkeypatch.delenv(var, raising=False)
     return FakeYtDlp(monkeypatch)
 
