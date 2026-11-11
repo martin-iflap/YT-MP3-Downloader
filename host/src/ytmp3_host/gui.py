@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import TclError, filedialog
 
 import customtkinter as ctk
 
@@ -105,7 +105,7 @@ class DownloaderApp(ctk.CTk):
         # Window icon
         try:
             self.iconbitmap(str(ICON_PATH))
-        except Exception as e:
+        except TclError as e:
             logger.error("Icon not found: %s", e)
         self._match_title_bar()
 
@@ -365,7 +365,7 @@ class DownloaderApp(ctk.CTk):
             if _cancelled():
                 return
             msg = describe_error(e)
-            logger.error("%s: %s", msg, e)
+            logger.exception(msg)
             _show(self.show_status, msg, "error")
             _show(lambda: self._set_main_button("Download MP3", self.start_download, primary=True))
         else:

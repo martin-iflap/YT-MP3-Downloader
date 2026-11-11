@@ -45,7 +45,8 @@ def read_message() -> Message:
     Returns:
         The decoded message.
     Raises:
-        ValueError: If the message is not valid UTF-8 JSON or not a JSON object.
+        ValueError: If the message is not valid UTF-8 JSON.
+        TypeError: If the message is not a JSON object.
     """
     raw_length = _read_exact(LENGTH_PREFIX.size)
     if raw_length is None:
@@ -56,7 +57,7 @@ def read_message() -> Message:
         sys.exit(0)
     message = json.loads(raw_message.decode("utf-8"))
     if not isinstance(message, dict):
-        raise ValueError("Message is not a JSON object")
+        raise TypeError("Message is not a JSON object")
     return message
 
 
@@ -186,7 +187,7 @@ def run_native(url: str, folder: str, filename: str) -> None:
         send_message({"status": "error", "message": describe_error(e), "final": True})
         return
     except Exception as e:
-        logger.error("Download failed: %s", e)
+        logger.exception("Download failed")
         send_message({"status": "error", "message": f"Download failed: {describe_error(e)}", "final": True})
         return
 

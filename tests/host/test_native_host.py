@@ -404,7 +404,7 @@ def test_host_process_over_real_pipes(tmp_path: Path) -> None:
     # neither request touches a folder: the default one is the user's real Documents
     stdin = requests({"action": "download", "url": "bad"}, {"action": "play", "path": str(tmp_path / "missing.mp3")})
     result = subprocess.run(
-        [sys.executable, "-m", "ytmp3_host.MP3"], input=stdin, capture_output=True, timeout=60
+        [sys.executable, "-m", "ytmp3_host.MP3"], input=stdin, capture_output=True, timeout=60, check=False
     )
     assert result.returncode == 0, result.stderr
     responses = parse_frames(result.stdout)
@@ -416,7 +416,7 @@ def test_self_check_runs_instead_of_the_request_loop() -> None:
     # what the installer runs; stdin stays open, so the request loop would block
     result = subprocess.run(
         [sys.executable, "-m", "ytmp3_host.MP3", MP3.SELF_CHECK_ARG],
-        stdin=subprocess.PIPE, capture_output=True, text=True, timeout=60,
+        stdin=subprocess.PIPE, capture_output=True, text=True, timeout=60, check=False,
     )
     assert result.stdout == ""
     if config.FFMPEG_PATH.exists():
@@ -442,5 +442,5 @@ def test_headless_path_does_not_load_the_gui_health_or_updater() -> None:
         "loaded = [m for m in heavy if m in sys.modules]\n"
         "assert not loaded, loaded\n"
     )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=False)
     assert result.returncode == 0, result.stderr

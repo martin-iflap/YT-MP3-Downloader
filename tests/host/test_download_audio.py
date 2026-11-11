@@ -216,7 +216,8 @@ def test_missing_binary_raises_before_downloading(
 
 
 def process_running(pid: int) -> bool:
-    return str(pid) in subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True).stdout
+    tasks = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, check=True)
+    return str(pid) in tasks.stdout
 
 
 def test_timeout_kills_the_whole_process_tree(

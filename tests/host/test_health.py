@@ -14,7 +14,6 @@ from conftest import FakeYtDlp
 from ytmp3_host import __version__, health
 from ytmp3_host.github import HOST_REPO, YT_DLP_REPO
 
-
 # --- versions -----------------------------------------------------------------
 
 

@@ -19,8 +19,9 @@ def real_ffmpeg(ffmpeg: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def probe(ffmpeg: Path, file: Path) -> str:
-    """ffmpeg's description of file (streams and metadata)."""
-    result = subprocess.run([str(ffmpeg), "-hide_banner", "-nostdin", "-i", str(file)], capture_output=True, text=True)
+    """ffmpeg's description of file (streams and metadata); without an output file ffmpeg exits with 1."""
+    cmd = [str(ffmpeg), "-hide_banner", "-nostdin", "-i", str(file)]
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     return result.stderr
 
 

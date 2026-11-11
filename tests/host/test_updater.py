@@ -376,9 +376,8 @@ def test_a_lock_held_by_a_killed_process_is_free(tmp_path: Path) -> None:
     )
     try:
         assert holder.stdout is not None and holder.stdout.readline().strip() == "locked"
-        with pytest.raises(UpdateError, match="Another update"):
-            with updater.update_lock(lock, timeout=0.2):
-                pass
+        with pytest.raises(UpdateError, match="Another update"), updater.update_lock(lock, timeout=0.2):
+            pass
     finally:
         ytdlp.kill_process_tree(holder)  # the venv's python.exe is a launcher with the real Python as its child
         holder.communicate()

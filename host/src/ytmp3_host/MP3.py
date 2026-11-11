@@ -10,8 +10,6 @@ from collections.abc import Callable
 
 from ytmp3_host import __version__
 from ytmp3_host.config import setup_logging
-lazy from ytmp3_host.gui import open_gui, select_folder as pick_folder
-lazy from ytmp3_host.health import host_status
 from ytmp3_host.native_messaging import (
     Message,
     read_message,
@@ -20,6 +18,8 @@ from ytmp3_host.native_messaging import (
     send_current_folder,
     send_message,
 )
+lazy from ytmp3_host.gui import open_gui, select_folder as pick_folder
+lazy from ytmp3_host.health import host_status
 lazy from ytmp3_host.selfcheck import self_check
 lazy from ytmp3_host.updater import (
     UpdateError,

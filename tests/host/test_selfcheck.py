@@ -28,7 +28,7 @@ def host(monkeypatch: pytest.MonkeyPatch) -> UseHost:
     def use(code: str) -> None:
         monkeypatch.setattr(selfcheck, "host_command", lambda: [sys.executable, "-c", code])
     use(f"import sys; sys.stdin.buffer.read(); sys.stdout.buffer.write({PONG!r})")
-    monkeypatch.setattr(selfcheck, "_check_ffmpeg", lambda: [])
+    monkeypatch.setattr(selfcheck, "_check_ffmpeg", list)
     return use
 
 

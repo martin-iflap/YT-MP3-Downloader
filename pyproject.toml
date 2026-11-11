@@ -15,6 +15,7 @@ dev = [
     "pyinstaller>=6.22.2",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "ruff>=0.17.4",
 ]
 
 [build-system]
@@ -34,6 +35,20 @@ addopts = "-m 'not network'"
 # temp dirs of passing tests are deleted; only failures are kept to inspect
 tmp_path_retention_policy = "failed"
 markers = ["network: downloads a real video with the real yt-dlp.exe and ffmpeg.exe (opt-in: -m network)"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["legacy"]
+
+[tool.ruff.lint.isort]
+# `from x import a, b as c` stays one statement instead of one per alias
+combine-as-imports = true
+# the tests import the installed package; without this ruff sorts it with the third-party imports
+known-first-party = ["ytmp3_host", "conftest"]
+
+[tool.ruff.lint.per-file-ignores]
+# the module name is part of `python -m ytmp3_host.MP3`, the PyInstaller entry point and the logger name
+"host/src/ytmp3_host/MP3.py" = ["N999"]
 
 [tool.pyrefly]
 project-includes = ["host/**/*.py"]

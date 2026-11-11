@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 from ytmp3_host.config import DEFAULT_FOLDER
+
 # only open_file uses it
 lazy from ytmp3_host import processes
 

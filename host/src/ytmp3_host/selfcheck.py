@@ -56,7 +56,7 @@ def _check_modules() -> list[str]:
     for name in MODULES:
         try:
             importlib.import_module(name)
-        except Exception as e:  # a broken build can fail with anything, not just ImportError
+        except Exception as e:  # noqa: BLE001 - a broken build can fail with anything, not just ImportError
             problems.append(f"Could not import {name}: {e!r}")
     return problems
 
@@ -78,6 +78,7 @@ def _check_request() -> list[str]:
             capture_output=True,
             timeout=HOST_TIMEOUT_S,
             creationflags=subprocess.CREATE_NO_WINDOW,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError) as e:
         return [f"The host does not start: {e}"]
@@ -107,7 +108,7 @@ def _check_https() -> list[str]:
         ssl.create_default_context()  # also loads the Windows certificate store
         if not hasattr(urllib.request, "HTTPSHandler"):
             return ["urllib has no HTTPS support"]
-    except Exception as e:  # a broken build can fail with anything
+    except Exception as e:  # noqa: BLE001 - a broken build can fail with anything
         return [f"HTTPS does not work: {e!r}"]
     return []
 
