@@ -9,13 +9,14 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, YT_DLP_PATH
-from ytmp3_host.metadata import INFO_FIELDS, parse_info
+from ytmp3_host.metadata import INFO_FIELDS, VideoInfo, parse_info
 
 logger = logging.getLogger(__name__)
 
 INFO_MARKER = "YTMP3_INFO:"
 THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 PROGRESS_RE = re.compile(r"(\d+\.?\d*)%")
+TASKKILL_TIMEOUT_S = 10
 
 
 def kill_process_tree(process: subprocess.Popen[str]) -> None:
@@ -38,8 +39,9 @@ def kill_process_tree(process: subprocess.Popen[str]) -> None:
             stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW,
             check=True,
+            timeout=TASKKILL_TIMEOUT_S,
         )
-    except (OSError, subprocess.CalledProcessError) as e:
+    except (OSError, subprocess.SubprocessError) as e:
         logger.error("taskkill failed, killing only the main process: %s", e)
         process.kill()
 
@@ -101,11 +103,12 @@ def find_thumbnail(temp_stem: Path) -> Path | None:
 def run_yt_dlp(
     url: str,
     temp_stem: Path,
+    *,
     on_progress: Callable[[float], object] | None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None,
-    on_video_info: Callable[[dict[str, object]], None],
+    on_video_info: Callable[[VideoInfo], None],
     timeout: float,
-) -> dict[str, object]:
+) -> VideoInfo:
     """Run the yt-dlp download and return the video info.
 
     Args:
@@ -149,7 +152,7 @@ def run_yt_dlp(
         watchdog = threading.Timer(timeout, _kill_on_timeout)
         watchdog.start()
 
-        info: dict[str, object] = {}
+        info: VideoInfo = {}
         output_lines: list[str] = []
         try:
             if on_start:
@@ -172,7 +175,7 @@ def run_yt_dlp(
             # a raising callback must not leave yt-dlp running (Popen.__exit__ would wait for it)
             kill_process_tree(process)
 
-    if timed_out.is_set():
+    if timed_out.is_set() and process.returncode != 0:
         raise subprocess.TimeoutExpired(process.args, timeout)
     if process.returncode != 0:
         raise subprocess.CalledProcessError(process.returncode, process.args, "".join(output_lines[-20:]))

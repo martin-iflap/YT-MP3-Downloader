@@ -106,7 +106,8 @@ host/
     config.py               Install layout and paths, DEFAULT_FOLDER, setup_logging()
     health.py               get_version facts: versions, tool state; version parsing and comparison
     github.py               latest_release_tag() (one HEAD request per lookup)
-    updater.py              update_yt_dlp(), install_deno(), update_host(), launch_detached(), the update lock
+    updater.py              update_yt_dlp(), install_deno(), update_host(), the update lock
+    processes.py            launch_detached(): processes that outlive the host (installer, player)
     selfcheck.py            mp3.exe --self-check, run by the installer
     gui.py                  customtkinter window and folder picker (imported only by GUI actions)
   tests/smoke_native.py     Manual script: spawns the host and sends one message
@@ -222,7 +223,7 @@ Exceptions:
   `mainloop()` until the window is closed, and then exits by itself (`sys.exit(0)` in
   `MP3.download_gui`), since nothing will close its stdin.
 - Processes that must outlive the host (the installer of a host update, the player of
-  `play`) are started with `updater.launch_detached`: `DETACHED_PROCESS` +
+  `play`) are started with `processes.launch_detached`: `DETACHED_PROCESS` +
   `CREATE_BREAKAWAY_FROM_JOB`, so they leave Firefox's job object, which ends with the
   host. They start in the temp folder, not in the host's working directory (its version
   folder), so the installer can remove that folder.
@@ -629,7 +630,7 @@ The rest of this table lives in `naming.py` (URL checks, `safe_filename`,
 | `embed_thumbnail(temp_mp3, thumb, artist, title, output, tags)`                     | One ffmpeg pass (50 s timeout): audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3, artist, title and `tags`. Writes `output` directly, removes it on failure. Raises `FileExistsError` itself if `output` exists: ffmpeg 7 exits 0 when `-n` refuses to overwrite.                                                                                                                                              |
 | `kill_process_tree(process)`                                                        | `taskkill /F /T`; yt-dlp.exe is a onefile build, `Popen.kill()` only stops its bootloader.                                                                                                                                                                                                                                                                                                                                         |
 | `remove_temp_files(temp_stem)`, `remove_stale_temp_files(folder)`                   | Delete `<temp_stem>.*`, retrying files Windows still locks after a kill; before each download, delete `_ytmp3_*` files older than 1 h that a killed host left behind.                                                                                                                                                                                                                                                              |
-| `downloaded_mp3(path)`, `show_in_folder(file)`, `open_file(file)`                   | File actions. Show uses `SHOpenFolderAndSelectItems` (`explorer /select,` splits the path at commas). Play runs `explorer.exe "<path>"` via `updater.launch_detached`, so the player is not ended with the host.                                                                                                                                                                                                                   |
+| `downloaded_mp3(path)`, `show_in_folder(file)`, `open_file(file)`                   | File actions. Show uses `SHOpenFolderAndSelectItems` (`explorer /select,` splits the path at commas). Play runs `explorer.exe "<path>"` via `processes.launch_detached`, so the player is not ended with the host.                                                                                                                                                                                                                 |
 
 ### 6.7 Download pipeline
 

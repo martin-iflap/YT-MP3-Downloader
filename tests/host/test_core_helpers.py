@@ -280,6 +280,8 @@ def test_resolve_folder_creates_the_default_when_named(default_folder: Path) -> 
         ("https://music.youtube.com/watch?v=abc", True),
         ("https://youtu.be/abc", True),
         ("https://vimeo.com/123", False),
+        ("https://example.com/?ref=youtube.com", False),  # only the host counts
+        ("https://notyoutube.com/watch?v=abc", False),
         ("youtu.be", False),
         ("", False),
     ],

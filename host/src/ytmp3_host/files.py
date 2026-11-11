@@ -9,8 +9,8 @@ import uuid
 from pathlib import Path
 
 from ytmp3_host.config import DEFAULT_FOLDER
-# only open_file uses it (urllib)
-lazy from ytmp3_host import updater
+# only open_file uses it
+lazy from ytmp3_host import processes
 
 logger = logging.getLogger(__name__)
 
@@ -166,4 +166,4 @@ def open_file(file: Path) -> None:
     Raises:
         OSError: If explorer.exe could not be started.
     """
-    updater.launch_detached(f'explorer.exe "{file}"')
+    processes.launch_detached(f'explorer.exe "{file}"')

@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 DEFAULT_FILENAME = "Youtube MP3"
 UNKNOWN_ARTIST = "<unknown>"
-YOUTUBE_HOSTS = ("youtube.com", "youtu.be/")
+YOUTUBE_DOMAINS = ("youtube.com", "youtu.be")
 NOISE_WORDS = ("Official", "Music", "Video", "HD", "Lyrics", "Lyric", "Audio", "Explicit", "Clean", "4K")
 # a file name can have 255 UTF-16 units on Windows, and ".mp3" takes four
 MAX_FILENAME_CHARS = 251
@@ -51,14 +51,19 @@ def is_web_url(url: object) -> bool:
 
 
 def is_youtube_url(url: str) -> bool:
-    """Loosely check that a URL points to YouTube, for YouTube-only repairs (Deno).
+    """Check that a URL points to YouTube, for YouTube-only repairs (Deno).
 
     Args:
         url: The URL to check.
     Returns:
-        True if the URL contains a YouTube host name.
+        True if the URL's host is a YouTube domain or one of its subdomains
+        (www., m., music.); "youtube.com" elsewhere in the URL does not count.
     """
-    return any(host in url for host in YOUTUBE_HOSTS)
+    try:
+        host = urlsplit(url).hostname or ""
+    except ValueError:
+        return False
+    return any(host == domain or host.endswith(f".{domain}") for domain in YOUTUBE_DOMAINS)
 
 
 def clean_title(name: str) -> str:

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ytmp3_host.config import FFMPEG_PATH, YT_DLP_PATH
 from ytmp3_host.files import remove_stale_temp_files, remove_temp_files
-from ytmp3_host.metadata import artist_for, extra_tags, info_text, named_title, title_filename
+from ytmp3_host.metadata import VideoInfo, artist_for, extra_tags, info_text, named_title, title_filename
 from ytmp3_host.naming import DEFAULT_FILENAME, is_youtube_url, title_from_filename
 from ytmp3_host.ytdlp import find_thumbnail, run_yt_dlp
 # only download_with_repair's failure path uses these
@@ -102,19 +102,20 @@ def download_audio(
     url: str,
     folder: Path,
     filename: str = "",
+    *,
     on_progress: Callable[[float], object] | None = None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None = None,
     on_warning: Callable[[str], object] | None = None,
     timeout: float = DOWNLOAD_TIMEOUT_S,
 ) -> Path:
-    """Download a YouTube video's audio as an MP3 with cover art.
+    """Download a video's or track's audio as an MP3 with cover art.
     yt-dlp writes to a unique temp name in folder and prints the title before it
     downloads, so a title-named file that already exists stops the download early.
     Temp files are always removed, also on failure; stale ones that killed hosts
     left in folder are removed first.
 
     Args:
-        url: The YouTube video URL.
+        url: The video or track URL.
         folder: An existing folder to save the MP3 in.
         filename: The filename without extension, already sanitized. An empty
             filename means: name the file after the video title (title_filename).
@@ -141,9 +142,9 @@ def download_audio(
         if on_warning:
             on_warning(message)
 
-    def _check_title(inf: dict[str, object]) -> None:
+    def _check_title(video_info: VideoInfo) -> None:
         if not filename:
-            _ensure_not_exists(folder / f"{title_filename(inf, folder)}.mp3")
+            _ensure_not_exists(folder / f"{title_filename(video_info, folder)}.mp3")
 
     if filename:
         _ensure_not_exists(folder / f"{filename}.mp3")
@@ -156,7 +157,9 @@ def download_audio(
     temp_stem = folder / f"_ytmp3_{uuid.uuid4().hex[:12]}"
     start = time.perf_counter()
     try:
-        info = run_yt_dlp(url, temp_stem, on_progress, on_start, _check_title, timeout)
+        info = run_yt_dlp(
+            url, temp_stem, on_progress=on_progress, on_start=on_start, on_video_info=_check_title, timeout=timeout
+        )
         downloaded = time.perf_counter()
         logger.debug("yt-dlp took %.2f s, info: %r", downloaded - start, info)
 
@@ -186,6 +189,9 @@ def download_audio(
         return output
     except subprocess.CalledProcessError as e:
         logger.error("Error while downloading: %s\n%s", e, e.output or "")
+        raise
+    except FileExistsError as e:  # not an actual error
+        logger.info("Not downloaded, the file exists: %s", e.filename)
         raise
     except Exception as e:
         logger.error("Download error: %s", e)
@@ -248,6 +254,7 @@ def download_with_repair(
     url: str,
     folder: Path,
     filename: str = "",
+    *,
     on_progress: Callable[[float], object] | None = None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None = None,
     on_warning: Callable[[str], object] | None = None,
@@ -281,13 +288,16 @@ def download_with_repair(
         if on_info:
             on_info(message)
 
+    def _download() -> Path:
+        return download_audio(url, folder, filename, on_progress=on_progress, on_start=on_start, on_warning=on_warning)
+
     try:
-        return download_audio(url, folder, filename, on_progress, on_start, on_warning)
+        return _download()
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         if is_cancelled() or not _yt_dlp_failed(e) or not _repair_yt_dlp(url, e, _info) or is_cancelled():
             raise
     _info("Trying the download again...")
-    return download_audio(url, folder, filename, on_progress, on_start, on_warning)
+    return _download()
 
 
 def describe_error(error: Exception) -> str:

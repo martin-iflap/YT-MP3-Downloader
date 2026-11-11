@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from ytmp3_host import __version__, github, updater, ytdlp
+from ytmp3_host import __version__, github, processes, updater, ytdlp
 from ytmp3_host.github import DENO_REPO, HOST_REPO, YT_DLP_REPO
 from ytmp3_host.updater import UpdateError
 
@@ -686,7 +686,7 @@ def test_launch_detached_survives_the_job_firefox_ends_with_the_host(tmp_path: P
     installer = f"import os, time; time.sleep(2); open({str(marker)!r}, 'w').write(os.getcwd())"
     host = (
         "import ctypes, struct, sys\n"
-        "from ytmp3_host import updater\n"
+        "from ytmp3_host import processes\n"
         "kernel32 = ctypes.windll.kernel32\n"
         "kernel32.CreateJobObjectW.restype = kernel32.GetCurrentProcess.restype = ctypes.c_void_p\n"
         "job = ctypes.c_void_p(kernel32.CreateJobObjectW(None, None))\n"
@@ -694,7 +694,7 @@ def test_launch_detached_survives_the_job_firefox_ends_with_the_host(tmp_path: P
         "struct.pack_into('<I', limits, 16, 0x2000 | 0x800)  # KILL_ON_JOB_CLOSE | BREAKAWAY_OK\n"
         "assert kernel32.SetInformationJobObject(job, 9, limits, 144)\n"
         "assert kernel32.AssignProcessToJobObject(job, ctypes.c_void_p(kernel32.GetCurrentProcess()))\n"
-        "updater.launch_detached([sys.executable, '-c', sys.argv[1]])\n"
+        "processes.launch_detached([sys.executable, '-c', sys.argv[1]])\n"
         "kernel32.TerminateJobObject(job, 1)\n"
     )
     subprocess.run([sys.executable, "-c", host, installer], check=False, timeout=30)
@@ -713,8 +713,8 @@ def test_launch_detached_falls_back_when_the_job_forbids_breaking_away(monkeypat
         if creationflags & subprocess.CREATE_BREAKAWAY_FROM_JOB:
             raise PermissionError(13, "Access is denied")
 
-    monkeypatch.setattr(updater.subprocess, "Popen", _popen)
-    updater.launch_detached(["setup.exe"])
+    monkeypatch.setattr(processes.subprocess, "Popen", _popen)
+    processes.launch_detached(["setup.exe"])
     assert len(flags) == 2
     assert flags[0] & subprocess.CREATE_BREAKAWAY_FROM_JOB
     assert not flags[1] & subprocess.CREATE_BREAKAWAY_FROM_JOB

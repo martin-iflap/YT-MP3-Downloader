@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import MP3, __version__, config, core, files, health, native_messaging, updater
+from ytmp3_host import MP3, __version__, config, core, files, health, native_messaging, processes, updater
 from ytmp3_host.naming import MAX_FILENAME_CHARS, filename_too_long_message
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
@@ -208,7 +208,7 @@ def test_open_failure_is_one_final_error(monkeypatch: pytest.MonkeyPatch, tmp_pa
 
 def test_play_opens_through_explorer_outside_the_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     launched: list[object] = []
-    monkeypatch.setattr(updater, "launch_detached", launched.append)
+    monkeypatch.setattr(processes, "launch_detached", launched.append)
     mp3 = tmp_path / "A, B & C - 100% Song.mp3"
     files.open_file(mp3)
     # one command line, path quoted: explorer.exe splits an unquoted path at commas
@@ -429,10 +429,15 @@ def test_self_check_runs_instead_of_the_request_loop() -> None:
 
 def test_headless_path_does_not_load_the_gui_health_or_updater() -> None:
     # host startup must stay light: customtkinter/Tk only load for the GUI actions,
-    # health and the updater (and urllib with them) only for get_version and the updates
+    # health and the updater (and urllib with them) only for get_version and the updates;
+    # play starts the player through processes, not the updater
     code = (
         "import sys, ytmp3_host.MP3, ytmp3_host.native_messaging\n"
-        "heavy = ('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'ytmp3_host.updater',\n"
+        "from pathlib import Path\n"
+        "from ytmp3_host import files, processes\n"
+        "processes.launch_detached = lambda command: None\n"
+        "files.open_file(Path('C:/Song.mp3'))\n"
+        "heavy =('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'ytmp3_host.updater',\n"
         "         'ytmp3_host.selfcheck', 'urllib.request')\n"
         "loaded = [m for m in heavy if m in sys.modules]\n"
         "assert not loaded, loaded\n"

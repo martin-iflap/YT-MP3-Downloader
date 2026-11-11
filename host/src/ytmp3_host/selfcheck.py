@@ -30,6 +30,7 @@ MODULES = (
     "ytmp3_host.naming",
     "ytmp3_host.metadata",
     "ytmp3_host.files",
+    "ytmp3_host.processes",
     "ytmp3_host.ytdlp",
     "ytmp3_host.core",
     "ytmp3_host.native_messaging",

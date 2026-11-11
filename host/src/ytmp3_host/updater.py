@@ -29,7 +29,6 @@ import msvcrt
 import os
 import re
 import shutil
-import subprocess
 import tempfile
 import time
 import urllib.error
@@ -45,6 +44,7 @@ from ytmp3_host import __version__, github
 from ytmp3_host.config import DENO_PATH, INSTALLED, UPDATE_LOCK_PATH, YT_DLP_PATH
 from ytmp3_host.github import DENO_REPO, HOST_REPO, YT_DLP_REPO, latest_release_tag
 from ytmp3_host.health import deno_version_command, is_outdated, parse_version, read_version, yt_dlp_version_command
+from ytmp3_host.processes import launch_detached
 
 logger = logging.getLogger(__name__)
 
@@ -394,42 +394,6 @@ def install_deno() -> str:
 
 
 # --- host ---------------------------------------------------------------------
-
-
-def launch_detached(command: list[str] | str) -> None:
-    """Start a process that outlives this host and Firefox's native-messaging job.
-
-    Firefox runs the host in a job object and ends the job's processes with the
-    host, so the process breaks away from the job. If the job does not allow that
-    (CreateProcess then fails with access denied), it is started without breaking
-    away and may not survive; the extension then shows the manual download link
-    once the update does not arrive.
-
-    The process starts in the temp folder, not in this host's working directory
-    (its version folder): a process's current directory can't be deleted, so the
-    installer could not remove the old version folder.
-
-    Args:
-        command: The argument list, or a command line passed to Windows as it is
-            (for programs like explorer.exe that parse it their own way).
-    """
-    def _start(creationflags: int) -> None:
-        subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
-            close_fds=True,
-            cwd=tempfile.gettempdir(),
-        )
-
-    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-    try:
-        _start(flags | subprocess.CREATE_BREAKAWAY_FROM_JOB)
-    except PermissionError as e:
-        logger.warning("Could not break away from the job (%s), starting %s inside it", e, command)
-        _start(flags)
 
 
 def _installer(tag: str, folder: Path) -> tuple[Path, str]:

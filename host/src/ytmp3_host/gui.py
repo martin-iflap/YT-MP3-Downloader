@@ -25,9 +25,15 @@ from ytmp3_host.files import (
     resolve_folder,
     show_in_folder,
 )
-from ytmp3_host.naming import filename_too_long, filename_too_long_message, is_web_url, requested_filename, safe_filename
-from ytmp3_host.ytdlp import kill_process_tree
+from ytmp3_host.naming import (
+    filename_too_long,
+    filename_too_long_message,
+    is_web_url,
+    requested_filename,
+    safe_filename,
+)
 from ytmp3_host.native_messaging import send_current_folder, send_message
+from ytmp3_host.ytdlp import kill_process_tree
 
 logger = logging.getLogger(__name__)
 
@@ -318,7 +324,7 @@ class DownloaderApp(ctk.CTk):
         """Run core.download_with_repair and report the result in the window.
 
         Args:
-            url: The YouTube video URL.
+            url: The video or track URL.
             folder_path: An existing folder to save the MP3 in.
             filename: The sanitized filename; empty means name it after the video title.
             download_id: The download_id this download started with.
@@ -464,6 +470,7 @@ def select_folder(folder: str) -> None:
     finally:
         root.destroy()
     send_current_folder(chosen or str(initial))
+
 
 if __name__ == "__main__":
     # run as a script for testing the GUI without the extension

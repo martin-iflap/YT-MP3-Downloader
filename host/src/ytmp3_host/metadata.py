@@ -15,6 +15,9 @@ from ytmp3_host.naming import (
 
 logger = logging.getLogger(__name__)
 
+# what parse_info returns: untrusted JSON values, read through info_text and _site_artists
+type VideoInfo = dict[str, object]
+
 # the video info yt-dlp prints as JSON before downloading: the title names the file, the rest
 # become tags. artists/album/release_year/track_number exist only for YouTube Music uploads
 # and music sites (SoundCloud, Bandcamp, ...); other sites have an uploader instead of a channel.
@@ -26,7 +29,7 @@ TRACKLIST_EXTRACTORS = frozenset({"Mixcloud"})
 TOPIC_SUFFIX = " - Topic"  # YouTube Music's auto-generated artist channels, e.g. "Queen - Topic"
 
 
-def parse_info(text: str) -> dict[str, object]:
+def parse_info(text: str) -> VideoInfo:
     """Parse the video info yt-dlp printed after INFO_MARKER.
 
     Args:
@@ -42,7 +45,7 @@ def parse_info(text: str) -> dict[str, object]:
     return info if isinstance(info, dict) else {}
 
 
-def info_text(info: dict[str, object], key: str) -> str:
+def info_text(info: VideoInfo, key: str) -> str:
     """A video info field as stripped text, "" if it is missing or not a string or number.
 
     Args:
@@ -57,7 +60,7 @@ def info_text(info: dict[str, object], key: str) -> str:
     return str(value).strip()
 
 
-def _site_artists(info: dict[str, object]) -> list[str]:
+def _site_artists(info: VideoInfo) -> list[str]:
     """The artists the site names for the track.
     Mixcloud's `artists` are the artists of the tracks in a mix, so they are left out.
     """
@@ -67,7 +70,7 @@ def _site_artists(info: dict[str, object]) -> list[str]:
     return [a.strip() for a in artists if isinstance(a, str) and a.strip()]
 
 
-def info_artists(info: dict[str, object]) -> str:
+def info_artists(info: VideoInfo) -> str:
     """The artists the site names for the track, joined with ", "; "" if none.
     Args:
         info: The video info (see INFO_FIELDS).
@@ -84,7 +87,7 @@ def _title_names_artist(title: str, artists: list[str]) -> bool:
     return any(artist.casefold() in front or front in artist.casefold() for artist in artists)
 
 
-def named_title(info: dict[str, object]) -> str:
+def named_title(info: VideoInfo) -> str:
     """The title as "Artist - Title", before it is made into a filename (the tags are read from it).
     A title that does not name the site's artists (as on YouTube Music and SoundCloud)
     gets them in front.
@@ -101,7 +104,7 @@ def named_title(info: dict[str, object]) -> str:
     return title
 
 
-def title_filename(info: dict[str, object], folder: Path | None = None) -> str:
+def title_filename(info: VideoInfo, folder: Path | None = None) -> str:
     """The filename of a download named after its title (see named_title).
 
     Args:
@@ -114,7 +117,7 @@ def title_filename(info: dict[str, object], folder: Path | None = None) -> str:
     return fit_filename(safe_filename(named_title(info)), folder)
 
 
-def artist_for(filename: str, info: dict[str, object]) -> str:
+def artist_for(filename: str, info: VideoInfo) -> str:
     """The artist tag: from the filename, else from the video info.
 
     Args:
@@ -132,7 +135,7 @@ def artist_for(filename: str, info: dict[str, object]) -> str:
     return info_artists(info) or channel or info_text(info, "uploader") or UNKNOWN_ARTIST
 
 
-def extra_tags(info: dict[str, object]) -> dict[str, str]:
+def extra_tags(info: VideoInfo) -> dict[str, str]:
     """The tags besides artist and title, as ffmpeg metadata keys (ID3v2.3 frame in the comment).
     The year is the release year only: the upload year of an official video is
     often decades after the song.

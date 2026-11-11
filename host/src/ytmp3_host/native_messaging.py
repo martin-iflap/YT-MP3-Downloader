@@ -81,7 +81,10 @@ def send_message(message: Message, exit_code: int = 1) -> None:
 
 def missing_folder_message(folder: str) -> str:
     """What the user is told when the download folder they set does not exist (a typo, or deleted)."""
-    return f'The download folder "{folder.strip()}" doesn\'t exist. Check the path in the sidebar, or pick a folder with Choose.'
+    return (
+        f'The download folder "{folder.strip()}" doesn\'t exist. '
+        "Check the path in the sidebar, or pick a folder with Choose."
+    )
 
 
 def unwritable_folder_message(folder: Path) -> str:
@@ -135,7 +138,7 @@ def run_native(url: str, folder: str, filename: str) -> None:
     error response.
 
     Args:
-        url: The YouTube video URL.
+        url: The video or track URL.
         folder: The target folder; empty means the default folder.
         filename: The requested filename; empty means name it after the video title.
     """
