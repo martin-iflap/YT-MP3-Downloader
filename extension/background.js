@@ -441,6 +441,10 @@ browser.runtime.onMessage.addListener((msg) => {
   if (msg.folder) payload.folder = msg.folder;
   if (msg.filename) payload.filename = msg.filename;
   if (msg.path) payload.path = msg.path;
+  // a download in another format than MP3 (formats.js); MP3 sends none
+  if (msg.format) payload.format = msg.format;
+  if (msg.quality) payload.quality = msg.quality;
+  if (msg.codec) payload.codec = msg.codec;
 
   runNativeAction(payload, msg.requestId || crypto.randomUUID(), 'sidebar');
 });

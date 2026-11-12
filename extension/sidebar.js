@@ -1,4 +1,5 @@
-/* global isKnownSiteUrl, isWebUrl, filenameLimit, filenameTooLong, filenameTooLongMessage */
+/* global isKnownSiteUrl, isWebUrl, filenameLimit, filenameTooLong, filenameTooLongMessage,
+   FORMATS, DEFAULT_FORMAT, knownFormat, knownOption, formatRequest, hostSupports */
 
 const downloadBtn = document.getElementById('DownloadBtn');
 const openInAppBtn = document.getElementById('openInAppBtn');
@@ -10,6 +11,7 @@ const urlInput = document.getElementById('urlInput');
 const urlLabel = document.querySelector('label[for="urlInput"]');
 const folderInput = document.getElementById('folderInput');
 const filenameInput = document.getElementById('filenameInput');
+const filenameHelp = document.getElementById('filenameHelp');
 
 // ----- Native requests (relayed through background.js) -----
 
@@ -120,7 +122,68 @@ selectFolderBtn.addEventListener('click', () => {
   });
 });
 
+// ----- Format (formats.js) -----
+
+// One form for every format: the switch shows the fields marked with its data-format and
+// hides the others. The format and each format's choices are remembered
+// (storage.local `format`, `<format>Options`).
+const formatInputs = document.querySelectorAll('input[name="format"]');
+const optionSelects = document.querySelectorAll('select[data-option]');
+let currentFormat = DEFAULT_FORMAT;
+
+const formatOf = element => element.closest('[data-format]').dataset.format;
+
+for (const select of optionSelects) {
+  const choices = FORMATS[formatOf(select)].options[select.dataset.option];
+  select.append(...choices.map(([value, label]) => new Option(label, value)));
+}
+
+function showFormat(format) {
+  currentFormat = format;
+  for (const input of formatInputs) input.checked = input.value === format;
+  for (const element of document.querySelectorAll('[data-format]')) element.hidden = element.dataset.format !== format;
+  const { label } = FORMATS[format];
+  downloadBtn.textContent = `Download ${label}`;
+  filenameHelp.textContent = `Custom filename for the downloaded ${label} file`;
+}
+
+// The choices made in format's selects, as { option: value }.
+function selectedOptions(format) {
+  const choices = {};
+  for (const select of optionSelects) if (formatOf(select) === format) choices[select.dataset.option] = select.value;
+  return choices;
+}
+
+async function loadFormat() {
+  const stored = await browser.storage.local.get(['format', ...Object.keys(FORMATS).map(format => `${format}Options`)]);
+  for (const select of optionSelects) {
+    const format = formatOf(select);
+    select.value = knownOption(format, select.dataset.option, stored[`${format}Options`]?.[select.dataset.option]);
+  }
+  showFormat(knownFormat(stored.format));
+}
+
+loadFormat().catch(e => console.error('Could not load the format:', e));
+
+for (const input of formatInputs) {
+  input.addEventListener('change', () => {
+    showFormat(input.value);
+    browser.storage.local.set({ format: input.value }).catch(e => console.error('Could not save the format:', e));
+  });
+}
+
+for (const select of optionSelects) {
+  select.addEventListener('change', () => {
+    const format = formatOf(select);
+    browser.storage.local.set({ [`${format}Options`]: selectedOptions(format) })
+      .catch(e => console.error('Could not save the format options:', e));
+  });
+}
+
 // ----- App status -----
+
+// The formats the host can download (its get_version answer), null until the check is done.
+let hostFormats = null;
 
 // Checked on every sidebar open. background.js repairs what it can (updates the app and
 // yt-dlp, reporting each step as an intermediate response) and then turns the result into
@@ -128,6 +191,7 @@ selectFolderBtn.addEventListener('click', () => {
 // missing or broken tools).
 function checkHost() {
   sendNativeAction({ action: 'get_version' }, (resp) => {
+    if (resp.final) hostFormats = resp.formats ?? [];
     if (resp.final && resp.status === 'success') {
       hostNotice.className = '';
       hostNotice.textContent = '';
@@ -180,6 +244,14 @@ downloadBtn.addEventListener('click', () => {
     filenameInput.focus();
     return;
   }
+  // A host that doesn't know the format would download an MP3 instead.
+  const format = currentFormat;
+  if (!hostSupports(hostFormats, format)) {
+    showResult(hostFormats === null
+      ? 'Still checking the app, try again in a moment'
+      : `Downloading ${FORMATS[format].label} needs a newer version of the YT MP3 Downloader app`, 'error');
+    return;
+  }
 
   setBusy(true);
   clearResult();
@@ -187,7 +259,8 @@ downloadBtn.addEventListener('click', () => {
     action: 'download',
     url,
     folder: folder || undefined,
-    filename: filename || undefined
+    filename: filename || undefined,
+    ...formatRequest(format, selectedOptions(format))
   }, (resp) => {
     if (!resp.final) {
       if (resp.message) showResult(resp.message, resp.status === 'warning' ? 'warning' : 'info');
@@ -196,7 +269,7 @@ downloadBtn.addEventListener('click', () => {
     setBusy(false);
     if (resp.status === 'success') {
       filenameInput.value = '';
-      showResult(resp.message || `Downloaded: ${resp.filename || 'the MP3'}`, 'success', undefined, resp.path);
+      showResult(resp.message || `Downloaded: ${resp.filename || `the ${FORMATS[format].label}`}`, 'success', undefined, resp.path);
     } else {
       showResult(resp.message || 'Download failed', 'error', resp.helpUrl);
     }

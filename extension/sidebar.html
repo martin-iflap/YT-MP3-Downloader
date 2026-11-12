@@ -18,6 +18,8 @@
         }
 
         :root {
+            /* the page is dark: Firefox then draws native parts (the open select list, scrollbars) dark too */
+            color-scheme: dark;
             --ease: cubic-bezier(.2,.9,.3,1); /* iOS-like spring-out */
             /* liquid glass: translucent fill, hairline border, light catching the top edge */
             --glass: linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.02) 100%);
@@ -109,9 +111,9 @@
             border: 1px solid rgba(255,255,255,0.03);
         }
 
-        input[type="text"] {
+        input[type="text"], select {
             width: 100%;
-            background: rgba(0,0,0,0.18); /* recessed into the glass */
+            background-color: rgba(0,0,0,0.18); /* recessed into the glass */
             border: 1px solid rgba(255,255,255,0.06);
             border-radius: 8px;
             padding: 10px 10px;
@@ -123,10 +125,10 @@
             box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
         }
 
-        input[type="text"]:hover { border-color: rgba(255,255,255,0.09); }
+        input[type="text"]:hover, select:hover { border-color: rgba(255,255,255,0.09); }
 
-        input[type="text"]:focus {
-            background: rgba(0,0,0,0.24);
+        input[type="text"]:focus, select:focus {
+            background-color: rgba(0,0,0,0.24);
             border-color: rgba(255,255,255,0.18);
             box-shadow: inset 0 1px 2px rgba(0,0,0,0.25), 0 0 0 3px rgba(255,255,255,0.05);
         }
@@ -134,6 +136,51 @@
         input[type="text"]::placeholder {
             color: #7e8488;
         }
+
+        /* selects look like the text fields, with a chevron in place of the native arrow */
+        select {
+            appearance: none;
+            cursor: pointer;
+            padding-right: 30px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239aa0a6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+        }
+        select option { background-color: #1f2023; color: #e6e6e6; }
+
+        /* author display rules (e.g. .input-group's flex) would otherwise show hidden fields */
+        [hidden] { display: none !important; }
+
+        /* MP3/MP4 switch: a glass segmented control; the radios stay focusable for the keyboard */
+        .format-switch {
+            position: relative;
+            display: flex;
+            gap: 4px;
+            padding: 3px;
+            background: rgba(0,0,0,0.18);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 999px;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+        }
+        .format-switch input { position: absolute; opacity: 0; pointer-events: none; }
+        .format-switch label {
+            flex: 1 1 0;
+            text-align: center;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #9aa0a6;
+            cursor: pointer;
+            transition: background 180ms var(--ease), color 180ms var(--ease), box-shadow 180ms var(--ease);
+        }
+        .format-switch label:hover { color: #d7dadd; }
+        .format-switch input:checked + label {
+            background: linear-gradient(180deg, rgba(255,255,255,0.11) 0%, rgba(255,255,255,0.045) 100%);
+            color: #f3f4f6;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 2px 8px rgba(0,0,0,0.3);
+        }
+        .format-switch input:focus-visible + label { box-shadow: 0 0 0 3px rgba(255,255,255,0.12); }
 
         /* Actions row - stack vertically for narrow sidebar */
         .actions {
@@ -237,6 +284,7 @@
            (hovering the folder row's input shows the helper below the row) */
         .input-row:has(> input[type="text"]:hover) + .helper,
         .input-group > input[type="text"]:hover + .helper,
+        .input-group > select:hover + .helper,
         .input-group > .helper:hover {
             transition-delay: 140ms; /* wait briefly before showing */
             max-height: 48px;
@@ -312,6 +360,12 @@
 <body>
     <div class="container">
         <h1>YouTube MP3 Downloader</h1>
+        <div class="format-switch" role="radiogroup" aria-label="Format">
+            <input type="radio" name="format" id="formatMp3" value="mp3" checked>
+            <label for="formatMp3">MP3</label>
+            <input type="radio" name="format" id="formatMp4" value="mp4">
+            <label for="formatMp4">MP4</label>
+        </div>
         <div id="hostNotice" role="alert"></div>
         <div id="toolbarTip" role="note">
             <span>You can open this from the sidebar, so you don't need the toolbar button. To remove it, right-click it and choose "Unpin from Toolbar".
@@ -340,6 +394,19 @@
                 <div id="filenameHelp" class="helper">Custom filename for the downloaded MP3 file</div>
             </div>
 
+            <!-- shown only for their format (data-format); sidebar.js fills the options from formats.js -->
+            <div class="input-group" data-format="mp4" hidden>
+                <label class="input-label" for="qualitySelect">Quality</label>
+                <select id="qualitySelect" data-option="quality" aria-describedby="qualityHelp"></select>
+                <div id="qualityHelp" class="helper">Higher quality means a bigger file and a longer download</div>
+            </div>
+
+            <div class="input-group" data-format="mp4" hidden>
+                <label class="input-label" for="codecSelect">Video Codec</label>
+                <select id="codecSelect" data-option="codec" aria-describedby="codecHelp"></select>
+                <div id="codecHelp" class="helper">Compatible plays on every device; Best is smaller but may not play in older players</div>
+            </div>
+
         </div>
 
         <div class="actions">
@@ -353,6 +420,7 @@
 
      <script src="youtube.js"></script>
      <script src="naming.js"></script>
+     <script src="formats.js"></script>
      <script src="sidebar.js"></script>
 </body>
 </html>

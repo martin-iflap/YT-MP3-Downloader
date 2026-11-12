@@ -95,6 +95,14 @@ test('toolbar tip: not when unpinned or dismissed', withClock(async () => {
   assert.equal(await toolbarTip(dismissed.browser), false);
 }));
 
+test('sidebar download in another format forwards its choices, and nothing else', () => {
+  const { browser, state } = loadBackground({ sidebarOpen: true });
+  sidebarAction(browser, 'download', { url: VIDEO_URL, format: 'mp4', quality: '720', codec: 'compatible', extra: 'x' });
+  assert.deepStrictEqual(state.ports[0].posted, [
+    { action: 'download', url: VIDEO_URL, format: 'mp4', quality: '720', codec: 'compatible' }
+  ]);
+});
+
 test('sidebar download: forwards payload, relays progress, then one final and disconnects', async () => {
   const { browser, state } = loadBackground({ sidebarOpen: true });
   sidebarAction(browser, 'download', { url: VIDEO_URL, folder: 'C:\\Music', filename: 'song' });
