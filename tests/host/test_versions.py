@@ -14,7 +14,7 @@ from pathlib import Path
 from ytmp3_host import MP3, __version__, config, core, github, updater
 from ytmp3_host.github import HOST_REPO, LOOKUP_TIMEOUT_S
 from ytmp3_host.health import VERSION_TIMEOUT_S, is_outdated, parse_version
-from ytmp3_host.naming import MAX_FILENAME_CHARS
+from ytmp3_host.naming import MAX_FILENAME_CHARS, MAX_PATH_CHARS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -120,10 +120,9 @@ def test_the_extension_waits_longer_than_the_slowest_download() -> None:
 
 
 def test_the_sidebar_limits_the_filename_like_the_host() -> None:
-    sidebar = (REPO_ROOT / "extension" / "sidebar.html").read_text(encoding="utf-8")
-    limit = re.search(r'id="filenameInput" maxlength="(\d+)"', sidebar)
-    assert limit, "the filename field has no maxlength"
-    assert int(limit.group(1)) == MAX_FILENAME_CHARS
+    naming = (REPO_ROOT / "extension" / "naming.js").read_text(encoding="utf-8")
+    limits = dict(re.findall(r"^const (MAX_FILENAME_CHARS|MAX_PATH_CHARS) = (\d+);", naming, flags=re.MULTILINE))
+    assert limits == {"MAX_FILENAME_CHARS": str(MAX_FILENAME_CHARS), "MAX_PATH_CHARS": str(MAX_PATH_CHARS)}
 
 
 # The permissions of the extension 1.x users have. Firefox holds back an update that asks

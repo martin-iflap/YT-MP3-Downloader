@@ -338,6 +338,75 @@ test('background check: a sidebar check counts', atNow(async () => {
   assert.equal(versionChecks(state).length, 1, 'only the sidebar\'s');
 }));
 
+test('toolbar tip: not on Firefox before 118 (no getUserSettings)', withClock(async () => {
+  const { browser } = loadBackground();
+  browser.browserAction.getUserSettings = async () => { throw new Error('getUserSettings is not a function'); };
+  mock.timers.tick(60 * 1000);
+  assert.equal(await toolbarTip(browser), false);
+}));
+
+test('a response without "final" is final when it is a success or an error', async () => {
+  const { browser, state } = loadBackground({ sidebarOpen: true });
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+  port.reply({ status: 'warning', message: 'No thumbnail found' });
+  port.reply({ status: 'info', message: 'Updating yt-dlp...' });
+  await flush();
+  assert.equal(finals(state).length, 0, 'warnings and info are progress');
+
+  port.reply({ status: 'success', filename: 'song' });
+  port.reply({ status: 'error', message: 'too late' });
+  await flush();
+  assert.deepStrictEqual(state.sent.map(m => [m.status, m.final]), [
+    ['warning', false], ['info', false], ['success', true]
+  ], 'nothing after the final response');
+  assert.equal(port.disconnected, true);
+
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  state.ports[1].reply({ status: 'error', message: 'Invalid YouTube URL' });
+  await flush();
+  assert.deepStrictEqual(finals(state).at(-1), {
+    type: 'native_response', status: 'error', message: 'Invalid YouTube URL', requestId: 'req-1', final: true
+  });
+  assert.equal(state.ports[1].disconnected, true);
+});
+
+test('a host that can not be started answers once with an error', async () => {
+  const { browser, state } = loadBackground();
+  browser.runtime.connectNative = () => { throw new Error('connectNative failed'); };
+  sidebarAction(browser, 'get_current_folder');
+  mock.timers.tick(60 * 60 * 1000);
+  await flush();
+
+  assert.deepStrictEqual(finals(state).map(m => [m.status, m.message]), [['error', 'Could not connect to native host']]);
+});
+
+test('a request that can not be sent answers once with an error and closes the port', async () => {
+  const { browser, state } = loadBackground();
+  const connect = browser.runtime.connectNative;
+  browser.runtime.connectNative = (name) => {
+    const port = connect(name);
+    port.postMessage = () => { throw new Error('Attempt to postMessage on disconnected port'); };
+    return port;
+  };
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  state.ports[0].exit(null); // Firefox then also reports the port as gone
+  mock.timers.tick(60 * 60 * 1000);
+  await flush();
+
+  assert.deepStrictEqual(finals(state).map(m => [m.status, m.message]), [['error', 'Failed to send to native host']]);
+  assert.equal(state.ports[0].disconnected, true);
+});
+
+test('clicks on other context menu entries are ignored', async () => {
+  const { browser, state } = loadBackground();
+  browser.contextMenus.onClicked.fire({ menuItemId: 'some-other-menu', linkUrl: VIDEO_URL });
+  await flush();
+
+  assert.equal(state.ports.length, 0);
+  assert.equal(state.notifications.length, 0);
+});
+
 test('context menu on a non-video link notifies and does not start the host', async () => {
   const { browser, state } = loadBackground();
   browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: 'https://www.youtube.com/@channel' });

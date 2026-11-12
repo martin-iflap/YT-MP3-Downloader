@@ -1,4 +1,4 @@
-/* global isKnownSiteUrl, isWebUrl */
+/* global isKnownSiteUrl, isWebUrl, filenameLimit, filenameTooLong, filenameTooLongMessage */
 
 const downloadBtn = document.getElementById('DownloadBtn');
 const openInAppBtn = document.getElementById('openInAppBtn');
@@ -73,8 +73,18 @@ function saveFolder(folder) {
   op.catch(e => console.error('Could not save folder:', e));
 }
 
+// The filename field takes no more than fits in the folder (naming.js), so a name that is
+// too long can't be typed. One typed before the folder changed is refused at download.
+function updateFilenameLimit() {
+  filenameInput.maxLength = filenameLimit(folderInput.value);
+}
+
+updateFilenameLimit();
+folderInput.addEventListener('input', updateFilenameLimit);
+
 function setFolder(folder) {
   folderInput.value = folder;
+  updateFilenameLimit();
   saveFolder(folder);
 }
 
@@ -82,6 +92,7 @@ async function loadFolder() {
   const { lastFolder } = await browser.storage.local.get('lastFolder');
   if (lastFolder) {
     folderInput.value = lastFolder;
+    updateFilenameLimit();
     return;
   }
   sendNativeAction({ action: 'get_current_folder' }, (resp) => {
@@ -162,14 +173,21 @@ downloadBtn.addEventListener('click', () => {
     showResult('Please enter a valid URL (starting with https://)', 'error');
     return;
   }
+  const folder = folderInput.value.trim();
+  const filename = filenameInput.value.trim();
+  if (filenameTooLong(filename, folder)) {
+    showResult(filenameTooLongMessage(folder), 'error');
+    filenameInput.focus();
+    return;
+  }
 
   setBusy(true);
   clearResult();
   sendNativeAction({
     action: 'download',
     url,
-    folder: folderInput.value.trim() || undefined,
-    filename: filenameInput.value.trim() || undefined
+    folder: folder || undefined,
+    filename: filename || undefined
   }, (resp) => {
     if (!resp.final) {
       if (resp.message) showResult(resp.message, resp.status === 'warning' ? 'warning' : 'info');

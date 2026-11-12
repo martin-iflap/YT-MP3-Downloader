@@ -22,6 +22,8 @@ test('rejects non-video pages, other hosts and junk', () => {
   for (const url of [
     'https://www.youtube.com/',
     'https://www.youtube.com/watch',
+    'https://www.youtube.com/watch?v=',
+    'https://www.youtube.com/watch?list=PL123&v=',
     'https://www.youtube.com/@channel',
     'https://youtu.be/',
     'https://www.youtube.com/shorts/',
@@ -55,6 +57,9 @@ test('known sites: YouTube videos and tracks on the audio sites', () => {
     'https://soundcloud.com/',
     'https://soundcloud.com/forss',
     'https://artist.bandcamp.com/album/record',
+    'https://bandcamp.com/track/song', // tracks live on <artist>.bandcamp.com only
+    'https://www.bandcamp.com/track/song',
+    'https://m.bandcamp.com/track/song',
     'https://bandcamp.com.evil.com/track/x',
     'https://evilbandcamp.com/track/x',
     'https://www.mixcloud.com/spartacus/',

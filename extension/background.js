@@ -272,6 +272,9 @@ function withRepairFailures(status, failures) {
   return Object.assign({}, status, { message: `${status.message} Automatic repair failed: ${reasons}.` });
 }
 
+// When the last check (sidebar or background) started in this session; see checkHostInBackground.
+let lastCheckStarted = 0;
+
 // Ask the host for its state, repair what can be repaired (each repair at most once),
 // and turn the state after the last repair into the one status the user is told.
 async function checkAndRepairHost(onProgress) {
@@ -333,7 +336,6 @@ function checkHost(onProgress) {
 // context-menu download. Silent: problems are shown when the sidebar opens.
 const BACKGROUND_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_CHECK_DELAY_MS = 60 * 1000; // keep the host off the browser's startup
-let lastCheckStarted = 0;
 
 async function checkHostInBackground() {
   try {
