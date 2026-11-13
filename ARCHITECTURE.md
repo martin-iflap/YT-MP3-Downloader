@@ -482,7 +482,10 @@ Installed layout (`mp3_installer.iss`):
 
 ```
 %LOCALAPPDATA%\YouTube MP3 Downloader\      INSTALL_DIR: what the host manages at runtime, shared by all versions
-    yt-dlp.exe                              YT_DLP_PATH, kept current by updater.py
+    yt-dlp\<tag>\                           YT_DLP_DIR: yt-dlp's onedir builds (yt-dlp.exe  _internal\), one per release
+    yt-dlp\onedir-failed                    ONEDIR_FAILED_PATH: the release whose onedir build failed, if any
+    yt-dlp.exe                              YT_DLP_PATH: the single-file build, only as that release's fallback
+                                            (config.yt_dlp_path() picks the one to run, §7.3)
     deno.exe                                DENO_PATH, only once a download needed it
     mp3.log, mp3.log.1                      LOG_PATH
     update.lock                             UPDATE_LOCK_PATH
@@ -776,21 +779,44 @@ Rules shared by every update (yt-dlp, Deno, host):
   waits up to 60 s.
 - `UpdateError` carries a message meant for the user; the installed tool is left as it was.
 
+Every user runs yt-dlp's onedir build (`yt-dlp_win.zip`, ~0.8 s faster per download than
+the single-file exe, which unpacks itself to `%TEMP%` on every run). The single-file
+`yt-dlp.exe` is only the fallback for a release whose onedir build can't be installed here.
+`config.yt_dlp_path()` picks what runs: the newest `yt-dlp\<tag>\`, unless
+`yt-dlp\onedir-failed` names a release as new or newer and `yt-dlp.exe` is there; without
+a build, `yt-dlp.exe`.
+
 ```mermaid
 flowchart TB
-    L["update_lock()"] --> R["recover_yt_dlp(): yt-dlp.exe missing but a .old copy there<br/>(killed between the renames) → put it back; remove leftovers"]
-    R --> V["current = yt-dlp --version"]
+    L["update_lock()"] --> R["recover_yt_dlp() (single-file exe, see below);<br/>remove &lt;tag&gt;.download\ and .download.zip leftovers"]
+    R --> V["current = --version of yt_dlp_path()"]
     V --> T{"latest tag?"}
     T -- "unknown (offline)" --> K1{"current works?"}
     K1 -- yes --> KEEP["keep it, no error"]
     K1 -- no --> ERR["UpdateError"]
-    T -- "not newer" --> KEEP
-    T -- newer --> D["download yt-dlp.download.exe<br/>check SHA-256, test-run --version"]
+    T -- "not newer, and an onedir build<br/>or the fallback for this tag" --> KEEP
+    T -- "newer, broken, or a single-file exe<br/>from before onedir" --> F{"onedir-failed<br/>names this tag?"}
+    F -- no --> O["download yt-dlp_win.zip, check SHA-256,<br/>unpack to &lt;tag&gt;.download\, test-run --version,<br/>rename to &lt;tag&gt;\"]
+    O -- "installed" --> DONE["the new build runs from now on"]
+    O -- "network problem, damaged download" --> ERR2["UpdateError<br/>(a current single-file exe is kept)"]
+    O -- "OnedirUnavailable: no zip, bad zip,<br/>does not run, can't be renamed" --> M["write the tag to onedir-failed"]
+    M --> SE
+    F -- yes --> SE{"yt-dlp.exe current<br/>and working?"}
+    SE -- yes --> KEEP
+    SE -- no --> D["download yt-dlp.download.exe<br/>check SHA-256, test-run --version"]
     D -- fails --> ERR
     D --> S["swap: yt-dlp.exe → yt-dlp.old.exe,<br/>yt-dlp.download.exe → yt-dlp.exe<br/>(a running exe can be renamed, not overwritten)"]
     S --> DEL["delete the old copy<br/>(kept while another host still runs it)"]
 ```
 
+- A `<tag>` folder is always complete: nothing runs from `<tag>.download\`, so the rename
+  works and is atomic. It is not fsynced (146 files); a power cut can leave a `<tag>`
+  folder that does not run, and the next update replaces it. Member paths outside the
+  folder and more than `MAX_UNPACKED_BYTES` unpacked are refused.
+- `onedir-failed` applies only to the tag it names: the next release tries onedir first
+  again, and only a new failure brings the single-file exe back, updated.
+- Old builds, the single-file exe and the marker stay for now (another host may still run
+  them); removing them once a working onedir build is there is the next step (PLAN).
 - If the second rename fails (e.g. a virus scanner holds the new file), the old copy is
   renamed back. An `.old` copy still running in another host can't be deleted; a later
   update removes it, and meanwhile a swap uses a unique `.old-<hex>` name.
@@ -914,7 +940,8 @@ flowchart TB
 | Situation                                                     | Result                                                                                                       |
 |---------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------|
 | Offline during a check                                        | `latest`/`outdated` are `null`, nothing is repaired, no notice.                                              |
-| Host killed mid-download of an update                         | Only a temp file is left (`yt-dlp.download.exe`, `*.download`); the next update removes it.                  |
+| Host killed mid-download of an update                         | Only a temp file is left (`yt-dlp.download.exe`, `yt-dlp\<tag>.download\` and `.zip`, `*.download`); the next update removes it. |
+| yt-dlp's onedir build can't be installed (e.g. antivirus)     | `yt-dlp\onedir-failed` names the release, and the single-file `yt-dlp.exe` runs until the next release.     |
 | Host killed between the two yt-dlp renames                    | `yt-dlp.exe` missing, `.old` copy there: the next update (or repair) puts it back, offline too.              |
 | Two hosts update at once                                      | The second waits for the lock, then finds yt-dlp current and downloads nothing.                              |
 | Download truncated or damaged, or the release lacks checksums | Checksum or size check fails, nothing is installed, the user is told why.                                    |
@@ -1141,7 +1168,7 @@ folders or a real video; everything else runs for real. Real `Popen` and pipes, 
 `tmp_path/default`, not created up front), `no_github` (every latest release is unknown,
 as offline, and any updater download raises, unless a test sets up its own server),
 `update_paths` (the lock file and the installer download folder in `tmp_path`). On
-request: `fake_yt_dlp` (dummy `YT_DLP_PATH` / `FFMPEG_PATH`, and `build_download_command`
+request: `fake_yt_dlp` (dummy `config.YT_DLP_PATH` / `FFMPEG_PATH`, and `build_download_command`
 wrapped to run `python fake_yt_dlp.py` with the real arguments), `fake_embed` (records
 `embed_thumbnail`'s arguments and copies the temp MP3), `ffmpeg` and `media` (the real
 binary from `host/bin/` or `PATH`, a generated 1 s MP3 and PNG). `core` and `ytdlp` import
@@ -1158,7 +1185,9 @@ given `--js-runtimes`). `FAKE_YTDLP_TITLE`, `FAKE_YTDLP_INFO`, `FAKE_YTDLP_VERSI
 
 In `test_updater.py` / `test_github.py` the fake `yt-dlp.exe` downloads are small Python
 scripts run as `python <file> --version`, so whether a download "runs" depends on its
-content, like the real exe.
+content, like the real exe. The fake onedir zip's `yt-dlp.exe` runs only next to its
+`_internal\` files, like the real one. `conftest.point_yt_dlp_at` points `config`'s three
+yt-dlp locations into `tmp_path`, so a dev's `host/bin/yt-dlp\<tag>\` is never found.
 
 **Temp files.** Everything is written below `tmp_path`. `tmp_path_retention_policy =
 "failed"` in `pyproject.toml` deletes the directories of passing tests after the run.

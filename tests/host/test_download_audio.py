@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import core, files, ytdlp
+from ytmp3_host import config, core, files, ytdlp
 from ytmp3_host.core import download_audio
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -204,11 +204,16 @@ def test_ffmpeg_without_output_is_not_reported_as_success(
     assert leftovers(out_dir) == []
 
 
-@pytest.mark.parametrize("missing", ["FFMPEG_PATH", "YT_DLP_PATH"])
+@pytest.mark.parametrize(("module", "missing"), [(core, "FFMPEG_PATH"), (config, "YT_DLP_PATH")])
 def test_missing_binary_raises_before_downloading(
-    fake_yt_dlp: FakeYtDlp, out_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
+    fake_yt_dlp: FakeYtDlp,
+    out_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    module: object,
+    missing: str,
 ) -> None:
-    monkeypatch.setattr(core, missing, tmp_path / "gone.exe")
+    monkeypatch.setattr(module, missing, tmp_path / "gone.exe")
     started: list[object] = []
     with pytest.raises(FileNotFoundError, match="please reinstall"):
         download_audio(URL, out_dir, on_start=lambda p, s: started.append(p))

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import point_yt_dlp_at
 from ytmp3_host import files, ytdlp
 from ytmp3_host.core import describe_error
 from ytmp3_host.files import downloaded_mp3, resolve_folder
@@ -309,14 +310,18 @@ def test_is_web_url(url: object, expected: bool) -> None:
     assert is_web_url(url) is expected
 
 
-def test_build_download_command_keeps_quality_and_contract(tmp_path: Path) -> None:
+def test_build_download_command_keeps_quality_and_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # set after ytdlp was imported: the command must look the exe up, an update can change it
+    point_yt_dlp_at(monkeypatch, tmp_path / "yt-dlp.exe")
+    build = tmp_path / "yt-dlp" / "2026.10.26"
+    build.mkdir(parents=True)
     stem = tmp_path / "_ytmp3_x"
     cmd = build_download_command("https://youtu.be/abc", stem)
 
     def value(flag: str) -> str:
         return cmd[cmd.index(flag) + 1]
 
-    assert cmd[0] == str(ytdlp.YT_DLP_PATH)
+    assert cmd[0] == str(build / "yt-dlp.exe")
     assert cmd[-1] == "https://youtu.be/abc"
     assert value("--audio-format") == "mp3"
     assert value("--audio-quality") == "0"  # LAME V0, see CLAUDE.md priorities

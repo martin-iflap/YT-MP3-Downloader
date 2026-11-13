@@ -72,6 +72,15 @@ def out_dir(tmp_path: Path) -> Path:
     return folder
 
 
+def point_yt_dlp_at(monkeypatch: pytest.MonkeyPatch, exe: Path) -> None:
+    """Make exe the single-file yt-dlp.exe (config.YT_DLP_PATH) and put the onedir builds (yt-dlp\\<tag>\\) and
+    the onedir-failed marker next to it. config.yt_dlp_path() and the updater read all three from config when
+    used; without the folder a dev's host/bin/yt-dlp\\<tag>\\ would be found."""
+    monkeypatch.setattr(config, "YT_DLP_PATH", exe)
+    monkeypatch.setattr(config, "YT_DLP_DIR", exe.with_name("yt-dlp"))
+    monkeypatch.setattr(config, "ONEDIR_FAILED_PATH", exe.with_name("yt-dlp") / "onedir-failed")
+
+
 @dataclass
 class FakeYtDlp:
     """Handle returned by the fake_yt_dlp fixture to choose how the fake behaves.
@@ -100,8 +109,9 @@ class FakeYtDlp:
 def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     """Make download_audio run fake_yt_dlp.py instead of yt-dlp.exe.
 
-    - Creates empty yt-dlp.exe and ffmpeg.exe in <tmp_path>/bin and points core and ytdlp at
-      them, so the "binary exists" checks in download_audio pass. They never run.
+    - Creates empty yt-dlp.exe and ffmpeg.exe in <tmp_path>/bin and points config.yt_dlp_path()
+      (point_yt_dlp_at) and core and ytdlp at them, so the "binary exists" checks in download_audio
+      pass. They never run.
     - Wraps ytdlp.build_download_command and health.yt_dlp_version_command: the real
       command is built, then only its executable is swapped for `python
       fake_yt_dlp.py`. The fake reads the real -o and --print arguments, so a broken
@@ -116,10 +126,9 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     bin_dir.mkdir()
     for name in ("yt-dlp.exe", "ffmpeg.exe"):
         (bin_dir / name).write_bytes(b"")
+    point_yt_dlp_at(monkeypatch, bin_dir / "yt-dlp.exe")
     for module in (core, ytdlp, health):
-        monkeypatch.setattr(module, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
         monkeypatch.setattr(module, "FFMPEG_PATH", bin_dir / "ffmpeg.exe")
-    monkeypatch.setattr(updater, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
     for module in (ytdlp, health, updater):
         monkeypatch.setattr(module, "DENO_PATH", bin_dir / "deno.exe")
 

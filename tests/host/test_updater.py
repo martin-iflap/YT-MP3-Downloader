@@ -1,8 +1,8 @@
 """updater: yt-dlp updates and repairs, and the host's self-update, against a local release server.
 
-The server answers like GitHub's release downloads. The "yt-dlp.exe" files are
-small Python scripts run as `python <file> --version`, so whether a download
-"runs" depends on its content, like the real exe. Nothing here touches the network
+The server answers like GitHub's release downloads. The "yt-dlp.exe" files (single-file,
+or inside a fake onedir zip) are small Python scripts run as `python <file> --version`,
+so whether a download "runs" depends on its content, like the real exe. Nothing here touches the network
 or the real install; the lock file and download folder are under tmp_path
 (update_paths in conftest).
 """
@@ -23,7 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from ytmp3_host import __version__, github, processes, updater, ytdlp
+from conftest import point_yt_dlp_at
+from ytmp3_host import __version__, config, github, processes, updater, ytdlp
 from ytmp3_host.github import DENO_REPO, HOST_REPO, YT_DLP_REPO
 from ytmp3_host.updater import UpdateError
 
@@ -106,24 +107,39 @@ def server(monkeypatch: pytest.MonkeyPatch) -> Iterator[ReleaseServer]:
 @dataclass
 class Install:
     """The yt-dlp install the updater works on, in <tmp_path>/app."""
-    exe: Path
+    exe: Path  # the single-file yt-dlp.exe (config.YT_DLP_PATH)
 
     @property
     def files(self) -> list[str]:
-        return sorted(p.name for p in self.exe.parent.iterdir() if p.name != "update.lock")
+        """Every file in the install, relative to it, e.g. "yt-dlp/<tag>/yt-dlp.exe"."""
+        app = self.exe.parent
+        return sorted(p.relative_to(app).as_posix() for p in app.rglob("*") if p.is_file())
+
+    def build(self, tag: str) -> Path:
+        """The folder of the onedir build of release tag."""
+        return self.exe.with_name("yt-dlp") / tag
+
+    @property
+    def onedir_failed(self) -> str | None:
+        """The release the onedir-failed marker names, None without one."""
+        marker = self.exe.with_name("yt-dlp") / "onedir-failed"
+        return marker.read_text() if marker.exists() else None
 
 
 @pytest.fixture
 def install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Install:
-    """An installed yt-dlp OLD; yt-dlp is run as `python <exe> --version`; latest releases are unknown."""
+    """An installed single-file yt-dlp OLD, as hosts before onedir have it; yt-dlp is run as
+    `python <exe> --version`; latest releases are unknown."""
     app = tmp_path / "app"
     app.mkdir()
     exe = app / "yt-dlp.exe"
     exe.write_bytes(script(OLD))
-    monkeypatch.setattr(updater, "YT_DLP_PATH", exe)
+    point_yt_dlp_at(monkeypatch, exe)
     monkeypatch.setattr(updater, "DENO_PATH", app / "deno.exe")
     monkeypatch.setattr(
-        updater, "yt_dlp_version_command", lambda path=None: [sys.executable, str(path or exe), "--version"]
+        updater,
+        "yt_dlp_version_command",
+        lambda path=None: [sys.executable, str(path or config.yt_dlp_path()), "--version"],
     )
     return Install(exe)
 
@@ -136,10 +152,40 @@ def latest(monkeypatch: pytest.MonkeyPatch, **tags: str | None) -> None:
 
 
 def publish_yt_dlp(server: ReleaseServer, tag: str = NEW, exe: bytes | None = None, checksum_of: bytes | None = None) -> bytes:
-    """Publish yt-dlp release tag with exe (default: a working NEW) and a checksum for checksum_of (default: exe)."""
+    """Publish yt-dlp release tag without an onedir build, so the update falls back to the single-file exe:
+    exe (default: a working NEW) and a checksum for checksum_of (default: exe)."""
     exe = script(NEW) if exe is None else exe
     server.release(YT_DLP_REPO, tag, **{"yt-dlp.exe": exe, "SHA2-256SUMS": sums(**{"yt-dlp.exe": checksum_of or exe})})
     return exe
+
+
+def onedir_zip(version: str | None = NEW, **extra: bytes) -> bytes:
+    """A yt-dlp_win.zip like the real one, yt-dlp.exe and _internal/ at its root, plus the extra members
+    (name -> content). Its yt-dlp.exe prints version only next to its _internal/ files, like the real one;
+    with version None it fails like a broken build."""
+    exe = (
+        "import pathlib, sys\n"
+        "if not (pathlib.Path(sys.argv[0]).parent / '_internal' / 'base_library.zip').exists(): raise SystemExit(1)\n"
+        f"print({version!r})\n"
+    ).encode() if version else script(None)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("yt-dlp.exe", exe)
+        zf.writestr("_internal/base_library.zip", b"the Python standard library")
+        for name, data in extra.items():
+            zf.writestr(name, data)
+    return archive.getvalue()
+
+
+def publish_release(
+    server: ReleaseServer, tag: str = NEW, archive: bytes | None = None, zip_checksum_of: bytes | None = None
+) -> None:
+    """Publish yt-dlp release tag like yt-dlp does: the onedir archive (default: a working build of tag) and a
+    working single-file yt-dlp.exe of tag, with checksums of both (the zip's of zip_checksum_of if given)."""
+    archive = onedir_zip(tag) if archive is None else archive
+    exe = script(tag)
+    checksums = sums(**{updater.YT_DLP_ZIP: zip_checksum_of or archive, "yt-dlp.exe": exe})
+    server.release(YT_DLP_REPO, tag, **{updater.YT_DLP_ZIP: archive, "yt-dlp.exe": exe, "SHA2-256SUMS": checksums})
 
 
 # --- checksums ----------------------------------------------------------------
@@ -156,17 +202,213 @@ def test_asset_url_quotes_the_tag_and_name(monkeypatch: pytest.MonkeyPatch) -> N
     assert updater.asset_url("o/r", "v2.0.0", "a b.exe") == "https://github.com/o/r/releases/download/v2.0.0/a%20b.exe"
 
 
-# --- yt-dlp updates -----------------------------------------------------------
+# --- the yt-dlp lookup --------------------------------------------------------
 
 
-def test_an_outdated_yt_dlp_is_replaced_by_the_checked_download(
+def test_the_lookup_takes_the_newest_onedir_build(install: Install) -> None:
+    for name in ("2026.08.19", "2026.10.01", "2026.09.30", "2026.12.01.download"):  # .download: still unpacking
+        install.build(name).mkdir(parents=True)
+    install.build("2026.11.01").write_bytes(b"a file, not a build")
+    assert config.yt_dlp_path() == install.build("2026.10.01") / "yt-dlp.exe"
+
+
+def test_without_an_onedir_build_the_lookup_takes_the_single_exe(install: Install) -> None:
+    assert config.yt_dlp_path() == install.exe
+    install.exe.unlink()
+    assert config.yt_dlp_path() == install.exe, "missing: the repair installs yt-dlp"
+
+
+@pytest.mark.parametrize(
+    ("failed", "single_exe", "expected"),
+    [
+        (NEW, True, "single"),  # the onedir build of the newest release failed
+        ("2026.10.01", True, "single"),
+        (OLD, True, "build"),  # an older failure: a newer onedir build works
+        (NEW, False, "build"),  # the fallback could not be installed: the older build still works
+        ("not a tag", True, "build"),
+    ],
+)
+def test_the_lookup_takes_the_single_exe_for_a_release_whose_onedir_build_failed(
+    install: Install, failed: str, single_exe: bool, expected: str
+) -> None:
+    install.build(NEW).mkdir(parents=True)
+    (install.build(NEW).parent / "onedir-failed").write_text(failed)
+    if not single_exe:
+        install.exe.unlink()
+    assert config.yt_dlp_path() == (install.exe if expected == "single" else install.build(NEW) / "yt-dlp.exe")
+
+
+# --- yt-dlp onedir updates ----------------------------------------------------
+
+
+def test_the_onedir_build_is_installed_from_the_checked_zip(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server)
+    assert updater.update_yt_dlp() == NEW
+    assert config.yt_dlp_path() == install.build(NEW) / "yt-dlp.exe"
+    # the old single-file exe stays: a host Firefox still runs may use it
+    assert install.files == ["yt-dlp.exe", f"yt-dlp/{NEW}/_internal/base_library.zip", f"yt-dlp/{NEW}/yt-dlp.exe"]
+    assert install.onedir_failed is None
+    assert server.requests == [
+        f"/{YT_DLP_REPO}/releases/download/{NEW}/SHA2-256SUMS",
+        f"/{YT_DLP_REPO}/releases/download/{NEW}/{updater.YT_DLP_ZIP}",
+    ]
+
+
+def test_a_current_single_exe_gets_the_onedir_build(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    # a host before onedir, e.g. run by the installer: its yt-dlp.exe is the latest release
+    latest(monkeypatch, yt_dlp=OLD)
+    publish_release(server, OLD)
+    assert updater.update_yt_dlp() == OLD
+    assert config.yt_dlp_path() == install.build(OLD) / "yt-dlp.exe"
+    assert server.gets("yt-dlp.exe") == 0
+
+
+def test_a_current_onedir_build_is_not_downloaded_again(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server)
+    updater.update_yt_dlp()
+    server.requests.clear()
+    assert updater.update_yt_dlp() == NEW
+    assert server.requests == []
+
+
+def test_a_broken_onedir_build_of_the_release_is_replaced(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build = install.build(NEW)
+    build.mkdir(parents=True)
+    (build / "yt-dlp.exe").write_bytes(script(None))  # e.g. a power cut before its files were on disk
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server)
+    assert updater.update_yt_dlp() == NEW
+    assert updater.read_version(updater.yt_dlp_version_command(build / "yt-dlp.exe")) == NEW
+
+
+@pytest.mark.parametrize(
+    ("archive", "limit"),
+    [
+        (b"not a zip", None),
+        (onedir_zip(**{"../evil.exe": b"x"}), None),
+        (onedir_zip(**{"C:/evil.exe": b"x"}), None),
+        (onedir_zip(), "MAX_UNPACKED_BYTES"),
+        (onedir_zip(None), None),
+    ],
+    ids=["bad-zip", "parent-path", "drive-path", "too-large", "does-not-run"],
+)
+def test_an_onedir_build_that_can_not_be_installed_falls_back_to_the_single_exe(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch, archive: bytes, limit: str | None
+) -> None:
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server, archive=archive)  # its checksum matches: the release itself is like this
+    if limit:
+        monkeypatch.setattr(updater, limit, 100)
+    assert updater.update_yt_dlp() == NEW
+    assert install.onedir_failed == NEW
+    assert config.yt_dlp_path() == install.exe
+    assert install.exe.read_bytes() == script(NEW)
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"], "nothing unpacked is left, nothing outside"
+
+
+def test_an_onedir_build_that_can_not_be_renamed_into_place_falls_back(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rename = Path.rename
+
+    def held(self: Path, target: Path) -> Path:
+        if self.name == f"{NEW}.download":  # e.g. a virus scanner holds a file in it
+            raise PermissionError(13, "Access is denied", str(self))
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", held)
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server)
+    assert updater.update_yt_dlp() == NEW
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]
+
+
+@pytest.mark.parametrize("problem", ["damaged", "dropped"])
+def test_a_damaged_or_dropped_onedir_download_fails_without_the_fallback(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    latest(monkeypatch, yt_dlp=NEW)
+    if problem == "damaged":
+        publish_release(server, zip_checksum_of=b"what the release really holds")
+    else:
+        publish_release(server)
+        server.drop.add(f"/{YT_DLP_REPO}/releases/download/{NEW}/{updater.YT_DLP_ZIP}")
+    with pytest.raises(UpdateError, match="damaged" if problem == "damaged" else "connection dropped"):
+        updater.update_yt_dlp()
+    assert install.onedir_failed is None, "the next update tries onedir again"
+    assert install.files == ["yt-dlp.exe"]
+    assert install.exe.read_bytes() == script(OLD)
+    assert server.gets("yt-dlp.exe") == 0
+
+
+def test_a_release_whose_onedir_build_failed_keeps_the_single_exe(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server, archive=onedir_zip(None))
+    updater.update_yt_dlp()
+    server.requests.clear()
+    assert updater.update_yt_dlp() == NEW
+    assert server.requests == [], "the current fallback is kept"
+    install.exe.write_bytes(script(None))  # the fallback broke
+    assert updater.update_yt_dlp() == NEW
+    assert server.gets(updater.YT_DLP_ZIP) == 0, "onedir is not tried again for this release"
+    assert server.gets("yt-dlp.exe") == 1
+
+
+def test_the_next_release_tries_onedir_again(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server, archive=onedir_zip(None))
+    updater.update_yt_dlp()
+    latest(monkeypatch, yt_dlp="2026.10.01")
+    publish_release(server, "2026.10.01")
+    assert updater.update_yt_dlp() == "2026.10.01"
+    assert config.yt_dlp_path() == install.build("2026.10.01") / "yt-dlp.exe"
+    assert server.gets("yt-dlp.exe") == 1, "only the fallback of the failed release"
+
+
+def test_a_fallback_is_used_over_an_older_onedir_build(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
+    latest(monkeypatch, yt_dlp=OLD)
+    publish_release(server, OLD)
+    updater.update_yt_dlp()  # the onedir build of OLD
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server, archive=onedir_zip(None))
+    assert updater.update_yt_dlp() == NEW
+    assert config.yt_dlp_path() == install.exe, "not the older, outdated build"
+    server.requests.clear()
+    assert updater.update_yt_dlp() == NEW
+    assert server.requests == []
+
+
+def test_a_killed_onedir_install_is_cleaned_up(install: Install) -> None:
+    unpacking = install.build(NEW).with_name(f"{NEW}.download")
+    (unpacking / "_internal").mkdir(parents=True)
+    (unpacking / "_internal" / "base_library.zip").write_bytes(b"partial")
+    unpacking.with_name(f"{NEW}.download.zip").write_bytes(b"partial")
+    assert updater.update_yt_dlp() == OLD  # offline: no_github
+    assert install.files == ["yt-dlp.exe"]
+
+
+# --- the single-file yt-dlp.exe (fallback) ------------------------------------
+
+
+def test_a_release_without_an_onedir_build_installs_the_single_exe(
     install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     latest(monkeypatch, yt_dlp=NEW)
     new_exe = publish_yt_dlp(server)
     assert updater.update_yt_dlp() == NEW
     assert install.exe.read_bytes() == new_exe
-    assert install.files == ["yt-dlp.exe"]  # the replaced exe is deleted right away
+    assert install.onedir_failed == NEW
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]  # the replaced exe is deleted right away
     assert server.requests == [
         f"/{YT_DLP_REPO}/releases/download/{NEW}/SHA2-256SUMS",
         f"/{YT_DLP_REPO}/releases/download/{NEW}/yt-dlp.exe",
@@ -188,18 +430,20 @@ def test_a_replaced_exe_still_running_is_removed_by_the_next_update(
     with monkeypatch.context() as m:
         m.setattr(Path, "unlink", running)
         assert updater.update_yt_dlp() == NEW
-    assert install.files == ["yt-dlp.exe", "yt-dlp.old.exe"]
+    assert install.files == ["yt-dlp.exe", "yt-dlp.old.exe", "yt-dlp/onedir-failed"]
     assert updater.read_version(updater.yt_dlp_version_command(install.exe.with_name("yt-dlp.old.exe"))) == OLD
     latest(monkeypatch, yt_dlp="2026.10.01")
     publish_yt_dlp(server, "2026.10.01", script("2026.10.01"))
     assert updater.update_yt_dlp() == "2026.10.01"
-    assert install.files == ["yt-dlp.exe"]
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]
 
 
-def test_a_current_yt_dlp_is_not_downloaded_again(install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch) -> None:
-    latest(monkeypatch, yt_dlp=OLD)
+def test_a_current_single_exe_is_kept_when_the_onedir_build_can_not_be_downloaded(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest(monkeypatch, yt_dlp=OLD)  # nothing published: every download fails
     assert updater.update_yt_dlp() == OLD
-    assert server.requests == []
+    assert install.files == ["yt-dlp.exe"], "no onedir-failed: the next update tries onedir again"
 
 
 @pytest.mark.parametrize("state", ["missing", "broken"])
@@ -222,7 +466,7 @@ def test_a_damaged_download_is_never_installed(install: Install, server: Release
     with pytest.raises(UpdateError, match="damaged"):
         updater.update_yt_dlp()
     assert install.exe.read_bytes() == script(OLD)
-    assert install.files == ["yt-dlp.exe"]
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]
 
 
 def test_a_download_that_does_not_run_is_never_installed(
@@ -233,7 +477,7 @@ def test_a_download_that_does_not_run_is_never_installed(
     with pytest.raises(UpdateError, match="does not run"):
         updater.update_yt_dlp()
     assert install.exe.read_bytes() == script(OLD)
-    assert install.files == ["yt-dlp.exe"]
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]
 
 
 def test_a_dropped_connection_leaves_the_install_as_it_was(
@@ -246,7 +490,7 @@ def test_a_dropped_connection_leaves_the_install_as_it_was(
     with pytest.raises(UpdateError, match=r"Could not download yt-dlp\.exe: the connection dropped"):
         updater.update_yt_dlp()
     assert install.exe.read_bytes() == script(OLD)
-    assert install.files == ["yt-dlp.exe"]
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]
 
 
 @pytest.mark.parametrize(
@@ -277,8 +521,7 @@ def test_too_large_or_too_slow_downloads_are_stopped(
     monkeypatch.setattr(updater, limit, -1)
     with pytest.raises(UpdateError, match=message):
         updater.update_yt_dlp()
-    assert install.files == ["yt-dlp.exe"]
-
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]
 
 
 def test_offline_with_a_working_yt_dlp_keeps_it(install: Install) -> None:
@@ -331,7 +574,7 @@ def test_an_old_copy_still_in_use_is_left_alone(install: Install, server: Releas
     with old.open("rb"):  # an open file can't be deleted on Windows, like a running exe
         assert updater.update_yt_dlp() == NEW
     # the swap moved the replaced exe to a unique name instead, and deleted it
-    assert install.files == ["yt-dlp.exe", "yt-dlp.old.exe"]
+    assert install.files == ["yt-dlp.exe", "yt-dlp.old.exe", "yt-dlp/onedir-failed"]
     assert old.read_bytes() == script("2026.01.01")
 
 
@@ -348,7 +591,7 @@ def test_a_swap_that_fails_keeps_the_working_exe(install: Install, server: Relea
     monkeypatch.setattr(Path, "rename", locked_download)
     with pytest.raises(UpdateError, match="could not be installed"):
         updater.update_yt_dlp()
-    assert install.files == ["yt-dlp.exe"]
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]
     assert install.exe.read_bytes() == script(OLD)
 
 

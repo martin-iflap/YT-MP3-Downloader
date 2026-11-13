@@ -14,7 +14,7 @@ SHORT_VIDEO = "https://www.youtube.com/watch?v=jNQXAC9IVRw"  # "Me at the zoo", 
 
 
 def test_real_download(out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for binary in (config.YT_DLP_PATH, config.FFMPEG_PATH):
+    for binary in (config.yt_dlp_path(), config.FFMPEG_PATH):
         if not binary.exists():
             pytest.skip(f"{binary} missing")
     warnings: list[str] = []

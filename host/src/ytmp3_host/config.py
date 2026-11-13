@@ -4,7 +4,8 @@ download folder (in the user's real Documents folder), plus the logging setup.
 Installed, each host version has its own folder (see mp3_installer.iss):
 
     <install dir>\\                    INSTALL_DIR: what the host manages at runtime
-        yt-dlp.exe  deno.exe (only once needed)  mp3.log  update.lock
+        yt-dlp\\<tag>\\  (yt-dlp.exe  _internal\\)  yt-dlp\\onedir-failed (only for a fallback)
+        yt-dlp.exe (only as the fallback)  deno.exe (only once needed)  mp3.log  update.lock
         versions\\2.0.0\\                BIN_DIR: what the installer ships
             mp3.exe  _internal\\  ffmpeg.exe  mp3.ico
 
@@ -62,14 +63,66 @@ else:
     LOG_DIR = REPO_ROOT
 
 FFMPEG_PATH = BIN_DIR / "ffmpeg.exe"
-# shared by all host versions and kept current by updater.py
-YT_DLP_PATH = INSTALL_DIR / "yt-dlp.exe"
+YT_DLP_EXE = "yt-dlp.exe"
+# yt-dlp's onedir builds (yt-dlp.exe and _internal\), one folder per release tag, shared by all host versions
+YT_DLP_DIR = INSTALL_DIR / "yt-dlp"
+# names the release whose onedir build could not be installed, so the single-file exe is used for it
+ONEDIR_FAILED_PATH = YT_DLP_DIR / "onedir-failed"
+# the single-file yt-dlp.exe: only the fallback for such a release, and the dev layout in host/bin/
+YT_DLP_PATH = INSTALL_DIR / YT_DLP_EXE
 # the JavaScript runtime yt-dlp uses for YouTube; only downloaded once a download needs it
 DENO_PATH = INSTALL_DIR / "deno.exe"
 UPDATE_LOCK_PATH = INSTALL_DIR / "update.lock"
 ICON_PATH = ICON_DIR / "mp3.ico"
 LOG_PATH = LOG_DIR / "mp3.log"
 DEFAULT_FOLDER = documents_folder() / "YT-MP3-Downloads"
+
+def tag_version(tag: str) -> tuple[int, ...] | None:
+    """The numbers of a yt-dlp release tag like "2026.10.26", None for any other name (e.g. "<tag>.download")."""
+    parts = tag.split(".")
+    return tuple(int(part) for part in parts) if all(part.isdigit() for part in parts) else None
+
+
+def onedir_builds() -> list[Path]:
+    """The installed onedir build folders (YT_DLP_DIR\\<tag>\\), newest release first.
+
+    A folder with a tag name is always complete: the updater unpacks to <tag>.download\\
+    and renames it only after the yt-dlp.exe inside has run.
+    """
+    try:
+        folders = [(version, p) for p in YT_DLP_DIR.iterdir() if (version := tag_version(p.name)) and p.is_dir()]
+    except OSError:  # no onedir build installed yet
+        return []
+    return [p for _, p in sorted(folders, reverse=True)]
+
+
+def onedir_failed_tag() -> str | None:
+    """The release whose onedir build could not be installed (ONEDIR_FAILED_PATH), None if there is none."""
+    try:
+        tag = ONEDIR_FAILED_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return tag if tag_version(tag) else None
+
+
+def yt_dlp_path() -> Path:
+    """The yt-dlp executable the host runs, looked up on every call.
+
+    An update can change it while the host runs (download_with_repair retries with
+    the new one), so callers must not keep it in a module constant.
+
+    The newest onedir build, unless the single-file YT_DLP_PATH was installed because
+    the onedir build of a release as new or newer failed (onedir_failed_tag). Without
+    any build it is YT_DLP_PATH, also when that is missing (the repair installs one).
+    """
+    builds = onedir_builds()
+    if not builds:
+        return YT_DLP_PATH
+    failed = onedir_failed_tag()
+    if failed and YT_DLP_PATH.exists() and (tag_version(builds[0].name) or ()) <= (tag_version(failed) or ()):
+        return YT_DLP_PATH
+    return builds[0] / YT_DLP_EXE
+
 
 LOG_MAX_BYTES = 1_000_000  # rotated once: mp3.log + mp3.log.1, at most ~2 MB in total
 LOG_LEVEL_ENV = "YTMP3_LOG_LEVEL"

@@ -1,5 +1,6 @@
-"""Updates and repairs: yt-dlp.exe is replaced in place, the host runs its installer,
-and deno.exe is installed once a download needs it.
+"""Updates and repairs: yt-dlp's onedir build is installed per release (the single-file
+yt-dlp.exe only as a fallback), the host runs its installer, and deno.exe is installed
+once a download needs it.
 
 A lost connection or a killed process must never leave a broken tool behind, so
 both updates follow the same rules:
@@ -9,10 +10,12 @@ both updates follow the same rules:
 - One update at a time: an OS file lock, which Windows releases when the process
   dies, so a killed host never leaves a stale lock.
 
-yt-dlp.exe is swapped by two renames (current -> .old, new -> current): a running
-exe can be renamed but not overwritten, so this also works while another host
-downloads with it. A host killed between the renames leaves only the .old file,
-which recover_yt_dlp() puts back, offline too.
+yt-dlp's onedir build goes into a new folder per release, so nothing that runs is
+touched: it is unpacked to <tag>.download\\, test-run and renamed to <tag>\\, the name
+config.yt_dlp_path() looks for. The single-file yt-dlp.exe is swapped by two renames
+(current -> .old, new -> current): a running exe can be renamed but not overwritten,
+so this also works while another host downloads with it. A host killed between the
+renames leaves only the .old file, which recover_yt_dlp() puts back, offline too.
 
 The host cannot replace its own files while it runs, so it downloads its installer
 and starts it silently, outside Firefox's job object (Firefox kills the job's
@@ -36,19 +39,21 @@ import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+import zlib
 from collections.abc import Generator
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
-from ytmp3_host import __version__, github
-from ytmp3_host.config import DENO_PATH, INSTALLED, UPDATE_LOCK_PATH, YT_DLP_PATH
+from ytmp3_host import __version__, config, github
+from ytmp3_host.config import DENO_PATH, INSTALLED, UPDATE_LOCK_PATH, YT_DLP_EXE, onedir_failed_tag, yt_dlp_path
 from ytmp3_host.github import DENO_REPO, HOST_REPO, YT_DLP_REPO, latest_release_tag
 from ytmp3_host.health import deno_version_command, is_outdated, parse_version, read_version, yt_dlp_version_command
 from ytmp3_host.processes import launch_detached
 
 logger = logging.getLogger(__name__)
 
-YT_DLP_ASSET = "yt-dlp.exe"
+YT_DLP_ASSET = "yt-dlp.exe"  # the single-file build
+YT_DLP_ZIP = "yt-dlp_win.zip"  # the onedir build: yt-dlp.exe and _internal\ at its root
 YT_DLP_SUMS = "SHA2-256SUMS"
 # the release assets the release checklist in CLAUDE.md requires
 INSTALLER_ASSET = "YT-MP3-Downloader-Setup.exe"
@@ -67,6 +72,7 @@ DENO_DOWNLOAD_S = 300  # ~43 MB, during a download the user waits for
 LOCK_TIMEOUT_S = 60  # waiting for another host's update
 LOCK_POLL_S = 0.5
 MAX_DOWNLOAD_BYTES = 300 * 1024 * 1024
+MAX_UNPACKED_BYTES = 300 * 1024 * 1024  # yt-dlp's onedir build unpacks to ~41 MB
 MAX_SUMS_BYTES = 1024 * 1024
 CHUNK_BYTES = 64 * 1024
 # a started installer is not started again for this long (it may still be running)
@@ -88,6 +94,12 @@ _opener = urllib.request.build_opener()
 
 class UpdateError(Exception):
     """An update or repair failed. The message is meant for the user."""
+
+
+class OnedirUnavailable(UpdateError):
+    """yt-dlp's onedir build of a release can't be installed here, for a reason the single-file
+    yt-dlp.exe may not share. Not raised for a network problem or a damaged download, which the
+    single-file exe would have too."""
 
 
 # --- downloads ----------------------------------------------------------------
@@ -256,6 +268,7 @@ def recover_yt_dlp(exe: Path) -> None:
 
 
 def _remove_leftovers(paths: list[Path]) -> None:
+    """Remove leftovers from a failed update."""
     for leftover in paths:
         try:
             leftover.unlink(missing_ok=True)
@@ -286,23 +299,152 @@ def _swap_in(new: Path, exe: Path) -> None:
         _remove_leftovers([old])
 
 
+def _remove_tree(folder: Path) -> None:
+    """Delete a folder; one with files still in use (e.g. another host runs them) is retried by a later call."""
+    try:
+        shutil.rmtree(folder)
+    except FileNotFoundError:
+        pass
+    except OSError as e:
+        logger.info("Could not remove %s yet: %s", folder.name, e)
+
+
+def _remove_onedir_leftovers() -> None:
+    """Remove what a onedir install killed midway leaves: <tag>.download\\ and <tag>.download.zip."""
+    for leftover in config.YT_DLP_DIR.glob("*.download*"):
+        if leftover.is_dir():
+            _remove_tree(leftover)
+        else:
+            _remove_leftovers([leftover])
+
+
+def _yt_dlp_version(exe: Path) -> str | None:
+    """The version a yt-dlp prints, None if it is missing or does not run."""
+    return read_version(yt_dlp_version_command(exe)) if exe.exists() else None
+
+
+def _unpack(archive: Path, dest: Path) -> None:
+    """Unpack a whole zip into the new folder dest.
+
+    Raises:
+        OnedirUnavailable: A bad zip, a member path outside dest (absolute, a drive or
+            ".."), more than MAX_UNPACKED_BYTES, or a file that can't be written.
+    """
+    try:
+        with zipfile.ZipFile(archive) as zf:
+            members = zf.infolist()
+            for member in members:
+                path = PureWindowsPath(member.filename)
+                if path.anchor or ".." in path.parts:
+                    raise OnedirUnavailable(f"{archive.name} has a file outside its folder: {member.filename}")
+            if sum(member.file_size for member in members) > MAX_UNPACKED_BYTES:
+                raise OnedirUnavailable(f"{archive.name} unpacks to more than expected")
+            zf.extractall(dest)
+    # zlib.error and EOFError for damaged data, RuntimeError for encryption or an unknown compression
+    except (zipfile.BadZipFile, OSError, ValueError, RuntimeError, EOFError, zlib.error) as e:
+        raise OnedirUnavailable(f"Could not unpack {archive.name}: {e}") from e
+
+
+def _install_onedir(tag: str, sums: dict[str, str]) -> str:
+    """Install the onedir build of release tag as YT_DLP_DIR\\<tag>\\.
+
+    It is unpacked to <tag>.download\\ and gets its tag name only once its yt-dlp.exe
+    has run, so config.yt_dlp_path() never finds an incomplete build. Not fsynced (143
+    files): a power cut can leave a <tag> folder that does not run, and the next update
+    replaces it.
+
+    Args:
+        tag: The release.
+        sums: The release's checksums (YT_DLP_SUMS).
+    Returns:
+        The version of the installed build.
+    Raises:
+        OnedirUnavailable: The release lists no onedir build, or it can't be unpacked,
+            run or put in place.
+        UpdateError: A network problem or a damaged download.
+    """
+    if YT_DLP_ZIP not in sums:
+        raise OnedirUnavailable(f"The {tag} release has no {YT_DLP_ZIP}")
+    folder = config.YT_DLP_DIR / tag
+    new, archive = folder.with_name(f"{tag}.download"), folder.with_name(f"{tag}.download.zip")
+    try:
+        config.YT_DLP_DIR.mkdir(parents=True, exist_ok=True)
+        if download(asset_url(YT_DLP_REPO, tag, YT_DLP_ZIP), archive, YT_DLP_DOWNLOAD_S) != sums[YT_DLP_ZIP]:
+            raise UpdateError(f"The downloaded yt-dlp {tag} is damaged (checksum mismatch)")
+        _unpack(archive, new)
+        _remove_leftovers([archive])
+        version = _yt_dlp_version(new / YT_DLP_EXE)
+        if version is None:
+            raise OnedirUnavailable(f"The downloaded yt-dlp {tag} does not run")
+        if folder.exists():  # rename fails if folder exists. It shouldn't but a killed or malformed installation could leave it there.
+            shutil.rmtree(folder)
+        new.rename(folder)
+    except OSError as e:
+        raise OnedirUnavailable(f"yt-dlp {tag} could not be installed: {e}") from e
+    finally:
+        _remove_leftovers([archive])
+        _remove_tree(new)
+    return version
+
+
+def _install_single_exe(tag: str, sums: dict[str, str]) -> str:
+    """Install the single-file yt-dlp.exe of release tag as config.YT_DLP_PATH (the fallback).
+
+    Args:
+        tag: The release.
+        sums: The release's checksums (YT_DLP_SUMS).
+    Returns:
+        The version of the installed exe.
+    Raises:
+        UpdateError: If it could not be installed; the installed one is left as it was.
+    """
+    exe = config.YT_DLP_PATH
+    if YT_DLP_ASSET not in sums:
+        raise UpdateError(f"The {tag} release has no checksum for {YT_DLP_ASSET}")
+    new = _new_path(exe)
+    try:
+        if download(asset_url(YT_DLP_REPO, tag, YT_DLP_ASSET), new, YT_DLP_DOWNLOAD_S) != sums[YT_DLP_ASSET]:
+            raise UpdateError(f"The downloaded yt-dlp {tag} is damaged (checksum mismatch)")
+        version = read_version(yt_dlp_version_command(new))
+        if version is None:
+            raise UpdateError(f"The downloaded yt-dlp {tag} does not run")
+        _swap_in(new, exe)
+    except OSError as e:
+        raise UpdateError(f"yt-dlp {tag} could not be installed: {e}") from e
+    finally:
+        _remove_leftovers([new])  # one a virus scanner holds must not replace the UpdateError
+    return version
+
+
 def update_yt_dlp() -> str:
-    """Install the latest yt-dlp release, or repair a missing or broken yt-dlp.exe.
-    Nothing is downloaded when the installed yt-dlp already runs and is current
-    (e.g. another host updated it while this one waited for the lock).
+    """Install the latest yt-dlp release, or repair a missing or broken yt-dlp.
+
+    Installs the release's onedir build. Only when that build can't be installed here
+    (OnedirUnavailable) is the release's single-file yt-dlp.exe used instead: the
+    release is written to ONEDIR_FAILED_PATH, so config.yt_dlp_path() picks that exe
+    and onedir is not tried again for this release. The next release tries onedir
+    first again. A network problem or a damaged download fails without the fallback,
+    which would fail the same way.
+
+    Nothing is downloaded when the yt-dlp which the host runs works and is current (e.g.
+    another host updated it while this one waited for the lock): a onedir build, or
+    the single-file exe of a release whose onedir build failed. A current single-file
+    exe without that (from a host before onedir, or the dev layout) gets the onedir
+    build, and is kept when a network problem stops that.
 
     Returns:
-        The version of the yt-dlp.exe now installed.
+        The version of the yt-dlp now installed.
     Raises:
         UpdateError: If no working, current yt-dlp could be installed. The
             installed one is left as it was.
     """
-    exe = YT_DLP_PATH
     with update_lock():
-        recover_yt_dlp(exe)
+        recover_yt_dlp(config.YT_DLP_PATH)
+        _remove_onedir_leftovers()
         # Deno is installed once, so a killed install would otherwise keep its ~140 MB until the uninstallation
         _remove_leftovers(list(_deno_leftovers(DENO_PATH)))
-        current = read_version(yt_dlp_version_command(exe)) if exe.exists() else None
+        exe = yt_dlp_path()
+        current = _yt_dlp_version(exe)
         try:
             tag = _checked_tag(YT_DLP_REPO)
         except UpdateError as e:
@@ -310,24 +452,37 @@ def update_yt_dlp() -> str:
                 logger.warning("Keeping yt-dlp %s: %s", current, e)
                 return current
             raise UpdateError(f"yt-dlp could not be downloaded: {e}") from e
-        if current and is_outdated(current, tag) is False:
+        onedir_failed = onedir_failed_tag() == tag
+        up_to_date = current is not None and is_outdated(current, tag) is False
+        if up_to_date and (exe != config.YT_DLP_PATH or onedir_failed):
             return current
 
-        new = _new_path(exe)
+        sums: dict[str, str] = {}
         try:
-            expected = expected_sha256(YT_DLP_REPO, tag, YT_DLP_SUMS, YT_DLP_ASSET)
-            actual = download(asset_url(YT_DLP_REPO, tag, YT_DLP_ASSET), new, YT_DLP_DOWNLOAD_S)
-            if actual != expected:
-                raise UpdateError(f"The downloaded yt-dlp {tag} is damaged (checksum mismatch)")
-            version = read_version(yt_dlp_version_command(new))
-            if version is None:
-                raise UpdateError(f"The downloaded yt-dlp {tag} does not run")
-            _swap_in(new, exe)
-        except OSError as e:
-            raise UpdateError(f"yt-dlp {tag} could not be installed: {e}") from e
-        finally:
-            _remove_leftovers([new])  # one a virus scanner holds must not replace the UpdateError
-    logger.info("Installed yt-dlp %s (was %s)", version, current)
+            sums = parse_checksums(fetch_text(asset_url(YT_DLP_REPO, tag, YT_DLP_SUMS)))
+            if not onedir_failed:
+                version = _install_onedir(tag, sums)
+                logger.info("Installed the yt-dlp %s onedir build (was %s)", version, current)
+                return version
+        except OnedirUnavailable as e:
+            logger.warning("Falling back to the single-file yt-dlp %s: %s", tag, e)
+            try:
+                config.YT_DLP_DIR.mkdir(parents=True, exist_ok=True)
+                config.ONEDIR_FAILED_PATH.write_text(tag, encoding="utf-8")
+            except OSError as write_error:
+                raise UpdateError(f"yt-dlp {tag} could not be installed: {write_error}") from write_error
+        except UpdateError as e:
+            if not up_to_date:
+                raise
+            # a current single-file exe from before onedir: it works, the next update tries onedir again
+            logger.warning("Keeping yt-dlp %s: %s", current, e)
+            return current
+
+        single = current if exe == config.YT_DLP_PATH else _yt_dlp_version(config.YT_DLP_PATH)
+        if single and is_outdated(single, tag) is False:
+            return single
+        version = _install_single_exe(tag, sums)
+    logger.info("Installed the single-file yt-dlp %s (was %s)", version, current)
     return version
 
 

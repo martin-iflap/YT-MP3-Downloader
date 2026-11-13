@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from ytmp3_host.config import FFMPEG_PATH, YT_DLP_PATH
+from ytmp3_host.config import FFMPEG_PATH, yt_dlp_path
 from ytmp3_host.files import remove_stale_temp_files, remove_temp_files
 from ytmp3_host.metadata import VideoInfo, artist_for, extra_tags, info_text, named_title, title_filename
 from ytmp3_host.naming import DEFAULT_FILENAME, is_youtube_url, title_from_filename
@@ -151,8 +151,8 @@ def download_audio(
         _ensure_not_exists(folder / f"{filename}.mp3")
     if not FFMPEG_PATH.exists():
         raise FileNotFoundError(errno.ENOENT, "ffmpeg.exe not found, please reinstall the app", str(FFMPEG_PATH))
-    if not YT_DLP_PATH.exists():
-        raise FileNotFoundError(errno.ENOENT, "yt-dlp.exe not found, please reinstall the app", str(YT_DLP_PATH))
+    if not (yt_dlp := yt_dlp_path()).exists():
+        raise FileNotFoundError(errno.ENOENT, "yt-dlp.exe not found, please reinstall the app", str(yt_dlp))
 
     remove_stale_temp_files(folder)
     temp_stem = folder / f"_ytmp3_{uuid.uuid4().hex[:12]}"
@@ -207,18 +207,20 @@ def _yt_dlp_failed(error: Exception) -> bool:
         case subprocess.CalledProcessError():  # yt-dlp's or ffmpeg's
             return not (isinstance(error.cmd, list) and error.cmd and error.cmd[0] == str(FFMPEG_PATH))
         case FileNotFoundError():
-            return error.filename == str(YT_DLP_PATH)
+            return error.filename == str(yt_dlp_path())
         case _:
             return False
 
 
-def _file_stamp(path: Path) -> tuple[int, int] | None:
-    """Size and modification time of path, to tell whether an update replaced it; None if missing."""
+def _yt_dlp_stamp() -> tuple[Path, int, int] | None:
+    """The yt-dlp the host runs, with its size and modification time, to tell whether an
+    update replaced it (in place, or by one at another path); None if it is missing."""
+    exe = yt_dlp_path()
     try:
-        stat = path.stat()
+        stat = exe.stat()
     except OSError:
         return None
-    return stat.st_size, stat.st_mtime_ns
+    return exe, stat.st_size, stat.st_mtime_ns
 
 
 def _repair_yt_dlp(url: str, error: Exception, on_info: Callable[[str], object]) -> bool:
@@ -229,14 +231,14 @@ def _repair_yt_dlp(url: str, error: Exception, on_info: Callable[[str], object])
         True if anything changed, so trying again can help. Repairs that fail are
         logged; the caller reports the original error.
     """
-    before = _file_stamp(YT_DLP_PATH)
+    before = _yt_dlp_stamp()
     on_info("The download failed, checking for a yt-dlp update...")
     # OSError: e.g. the update lock or a file a virus scanner holds; never hides the download's own error
     try:
         updater.update_yt_dlp()
     except (updater.UpdateError, OSError) as e:
         logger.error("Repair after a failed download: %s", e)
-    repaired = _file_stamp(YT_DLP_PATH) not in (None, before)
+    repaired = _yt_dlp_stamp() not in (None, before)
 
     output = str(getattr(error, "output", None) or "")
     js_challenge = is_youtube_url(url) and any(sign in output for sign in JS_CHALLENGE_FAILURES)

@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from ytmp3_host import __version__
-from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, INSTALLED, YT_DLP_PATH
+from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, INSTALLED, yt_dlp_path
 from ytmp3_host.github import HOST_REPO, YT_DLP_REPO, latest_release_tag
 from ytmp3_host.ytdlp import kill_process_tree
 
@@ -60,9 +60,9 @@ def is_outdated(version: str | None, latest: str | None) -> bool | None:
 def yt_dlp_version_command(exe: Path | None = None) -> list[str]:
     """The command that prints the version of a yt-dlp executable (the tests swap the executable).
     Args:
-        exe: The executable, e.g. a fresh download; None for the installed YT_DLP_PATH.
+        exe: The executable, e.g. a fresh download; None for the one the host runs (config.yt_dlp_path).
     """
-    return [str(exe or YT_DLP_PATH), "--version"]
+    return [str(exe or yt_dlp_path()), "--version"]
 
 
 def deno_version_command(exe: Path | None = None) -> list[str]:
@@ -138,8 +138,9 @@ def host_status() -> dict[str, object]:
     with ThreadPoolExecutor(max_workers=2) as pool:
         host_lookup = pool.submit(latest_release_tag, HOST_REPO)
         yt_dlp_lookup = pool.submit(latest_release_tag, YT_DLP_REPO)
-        installed = YT_DLP_PATH.exists()
-        version = read_version(yt_dlp_version_command()) if installed else None
+        exe = yt_dlp_path()  # once, so installed and version describe the same exe
+        installed = exe.exists()
+        version = read_version(yt_dlp_version_command(exe)) if installed else None
         host_latest, latest = host_lookup.result(), yt_dlp_lookup.result()
 
     return {

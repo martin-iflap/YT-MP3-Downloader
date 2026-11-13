@@ -8,7 +8,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, YT_DLP_PATH
+from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, yt_dlp_path
 from ytmp3_host.metadata import INFO_FIELDS, VideoInfo, parse_info
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
     """
     js_runtime = ["--js-runtimes", f"deno:{DENO_PATH}"] if DENO_PATH.exists() else []
     return [
-        str(YT_DLP_PATH),
+        str(yt_dlp_path()),
         "--no-playlist",
         "--playlist-items", "1",
         "--concurrent-fragments", "3",
@@ -141,7 +141,7 @@ def run_yt_dlp(
             bufsize=1,
         )
     except OSError as e:
-        raise FileNotFoundError(errno.ENOENT, "yt-dlp.exe could not be started", str(YT_DLP_PATH)) from e
+        raise FileNotFoundError(errno.ENOENT, "yt-dlp.exe could not be started", str(yt_dlp_path())) from e
     with process:
         timed_out = threading.Event()
 

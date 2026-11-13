@@ -6,14 +6,14 @@ from pathlib import Path
 
 from PIL import Image
 
-from ytmp3_host.config import YT_DLP_PATH
+from ytmp3_host.config import yt_dlp_path
 from ytmp3_host.naming import safe_filename
 
 ROOT_DIR = Path(__file__).parent.parent.parent
 url = "https://www.youtube.com/watch?v=1wYNFfgrXTI&list=RD1wYNFfgrXTI&start_radio=1"
 
 fetched_title = subprocess.run([
-                str(YT_DLP_PATH),
+                str(yt_dlp_path()),
                 "--no-playlist",
                 "--skip-download",
                 "--get-title",
