@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from conftest import EmbedCall, FakeYtDlp
+from conftest import EmbedCall, FakeYtDlp, point_yt_dlp_at
 from ytmp3_host import MP3, __version__, config, core, files, health, native_messaging, processes, updater
 from ytmp3_host.naming import MAX_FILENAME_CHARS, filename_too_long_message
 from ytmp3_host.native_messaging import LENGTH_PREFIX
@@ -289,6 +289,42 @@ def test_a_failed_update_is_one_final_error_with_its_reason(monkeypatch: pytest.
     responses = run_host(monkeypatch, requests({"action": action}, {"action": "get_current_folder"}))
     assert_one_final_per_request(responses, 2)
     assert responses[0] == {"status": "error", "message": "GitHub could not be reached", "final": True}
+
+
+# --- mp3.exe --install-yt-dlp, run by the installer ----------------------------------
+
+
+def test_install_yt_dlp_for_setup_exits_0_with_a_working_yt_dlp(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp
+) -> None:
+    # offline (no_github), so the real updater keeps the working one; the updater imported the
+    # version command before the fixture wrapped it in health
+    monkeypatch.setattr(updater, "yt_dlp_version_command", health.yt_dlp_version_command)
+    fake_yt_dlp.set(version="2026.09.01")
+    assert MP3.install_yt_dlp_for_setup() == 0
+
+
+def test_install_yt_dlp_for_setup_exits_1_and_logs_why_without_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # offline with nothing installed: the real updater raises; the installer only reads the exit code
+    point_yt_dlp_at(monkeypatch, tmp_path / "yt-dlp.exe")
+    assert MP3.install_yt_dlp_for_setup() == 1
+    [record] = [r for r in caplog.records if r.name == "ytmp3_host.MP3"]
+    assert record.levelname == "ERROR" and record.exc_info is not None
+    assert "yt-dlp could not be downloaded" in str(record.exc_info[1])
+
+
+def test_install_yt_dlp_for_setup_exits_1_on_an_unexpected_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # an uncaught exception would exit 1 too, but its traceback would only go to the hidden stderr
+    def _crash() -> str:
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(MP3, "install_yt_dlp", _crash)
+    assert MP3.install_yt_dlp_for_setup() == 1
+    assert "Access is denied" in caplog.text
 
 
 # --- headless download --------------------------------------------------------

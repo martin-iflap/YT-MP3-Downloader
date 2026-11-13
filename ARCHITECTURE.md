@@ -531,8 +531,10 @@ third-party libraries log WARNING and up. Every module logs through
 | `update_host`        | `updater.update_host()` (bound as `install_host_update`); `UpdateError` becomes a final error                         |
 
 Started as `mp3.exe --self-check` (`SELF_CHECK_ARG`), it runs `selfcheck.self_check()`
-and exits with its code instead of serving requests. Firefox starts the host with other
-arguments (the manifest path and the extension ID).
+and exits with its code instead of serving requests. Started as `mp3.exe --install-yt-dlp`
+(`INSTALL_YT_DLP_ARG`), it runs `install_yt_dlp_for_setup()`: `updater.update_yt_dlp()`,
+exit code 0, or 1 with the error in `mp3.log`. The installer runs both (§7.5). Firefox
+starts the host with other arguments (the manifest path and the extension ID).
 
 **`main()` request loop.**
 
@@ -877,15 +879,12 @@ serves a first install, a manual reinstall, an upgrade from 1.x and the silent s
 
 ```mermaid
 flowchart TB
-    P["PrepareToInstall"] --> PS{"silent and yt-dlp.exe there?<br/>(a self-update)"}
-    PS -- yes --> F
-    PS -- no --> YD["download latest yt-dlp.exe + SHA2-256SUMS to {tmp}<br/>(DownloadTemporaryFile checks the hash)"]
-    YD -- "fails" --> MSG["note: the app downloads it itself later<br/>(install goes on)"] --> F
-    YD -- ok --> F
     F["[Files]: dist\mp3\*, mp3.ico, ffmpeg.exe<br/>→ {app}\versions\&lt;version&gt;\"] --> SC{"versions\&lt;version&gt;\mp3.exe --self-check"}
     SC -- "fails" --> FAIL["remove the new folder (unless it is a reinstall<br/>of the installed version), keep the manifest,<br/>message, exit code 1"]
-    SC -- passes --> Y["yt-dlp.exe → {app}: copy to .tmp, MoveFileEx replace<br/>(failure only logged: the host repairs it)"]
-    Y --> M["manifest → .tmp, MoveFileEx replace<br/>(Firefox now starts the new version)"]
+    SC -- passes --> Y{"versions\&lt;version&gt;\mp3.exe --install-yt-dlp<br/>(update_yt_dlp → {app}\yt-dlp\&lt;tag&gt;\)"}
+    Y -- "exit 1" --> MSG["note: the app installs it itself later<br/>(install goes on)"] --> M
+    Y -- "exit 0" --> M
+    M["manifest → .tmp, MoveFileEx replace<br/>(Firefox now starts the new version)"]
     M --> RM["remove other versions\* folders<br/>(not one whose mp3.exe still runs, retried 5 s)<br/>and the files of a 1.x install in {app}"]
 ```
 
@@ -902,14 +901,24 @@ flowchart TB
   the ID3v2.3 artist, title and cover frames). All offline, about 1 s, so no test URL can
   go stale. Exit code 0 or 1; problems go to `mp3.log` and stderr. yt-dlp is not checked:
   all versions share it and the host repairs it.
-- yt-dlp is downloaded, not bundled (YouTube changes break old versions), except in a
-  silent update that finds one: the host keeps that one current.
+- yt-dlp is downloaded, not bundled (YouTube changes break old versions), by the new
+  version itself: `mp3.exe --install-yt-dlp` runs the host's own `update_yt_dlp()` (§7.3),
+  so the installer gets the onedir build, the checksum check, the update lock and the
+  single-file fallback without code of its own. A working, current yt-dlp is kept (one
+  GitHub lookup and a `--version`, a few seconds), so a silent self-update downloads
+  nothing in the usual case; a reinstall repairs a broken one. It installs only into new
+  folders, so it is safe before the switch, while Firefox still runs the old version; the
+  yt-dlp files that version used are removed by its successor's first `get_version`
+  (`remove_unused_yt_dlp`). Exit code 1 (e.g. offline) does not stop the installation:
+  the host repairs yt-dlp on its next check. The `[Files]` excludes leave out a `yt-dlp\`
+  folder that running the build straight from `dist\mp3\` created there.
 - A version folder whose `mp3.exe` still runs (e.g. a GUI window open during the update)
   is kept and removed by the next update or the uninstaller.
 - 1.x installed `mp3.exe` (onefile), `ffmpeg.exe` and `mp3.ico` directly in `{app}`,
   under the same AppId and folder; they are removed after the switch.
 - **Uninstall** removes the registry key, the manifest, `versions\`, and what the host
-  created at runtime (`yt-dlp*.exe` leftovers, `deno.exe`, `update.lock`, `mp3.log*`),
+  created at runtime (the `yt-dlp\` folder, `yt-dlp*.exe` and their leftovers, `deno.exe`,
+  `update.lock`, `mp3.log*`),
   listed under `[UninstallDelete]` because they are not in `[Files]`. The default download
   folder is removed only if it is empty (`dirifempty`, so the user's MP3s are never
   deleted), under both `{userdocs}` (the real Documents folder, where the host creates it

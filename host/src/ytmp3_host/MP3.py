@@ -24,6 +24,7 @@ lazy from ytmp3_host.selfcheck import self_check
 lazy from ytmp3_host.updater import (
     UpdateError,
     remove_installed_downloads,
+    remove_unused_yt_dlp,
     update_host as install_host_update,
     update_yt_dlp as install_yt_dlp,
 )
@@ -32,9 +33,11 @@ lazy from ytmp3_host.updater import (
 # "ytmp3_host" logger whose level setup_logging() sets
 logger = logging.getLogger("ytmp3_host.MP3")
 
-# The installer runs `mp3.exe --self-check` before switching Firefox to a new version.
-# Firefox starts the host with other arguments (the manifest path and the extension ID).
+# The installer runs `mp3.exe --self-check`, then `mp3.exe --install-yt-dlp`, before switching
+# Firefox to a new version. Firefox starts the host with other arguments (the manifest path
+# and the extension ID).
 SELF_CHECK_ARG = "--self-check"
+INSTALL_YT_DLP_ARG = "--install-yt-dlp"
 
 
 def download(request: Message) -> None:
@@ -82,10 +85,12 @@ def get_version(_request: Message) -> None:
 
     1.x hosts do not know this action and answer it as a download without a URL
     ("Invalid YouTube URL"); the extension relies on that to recognize them. It also
-    deletes the installer download of an update that is done (a few ms; the sidebar
-    sends this on every open, and the new version answers it after an update).
+    deletes the installer download of an update that is done and the yt-dlp files no
+    longer used (a few ms when there is nothing to delete; the sidebar sends this on
+    every open, and the new version answers it after an update).
     """
     remove_installed_downloads()
+    remove_unused_yt_dlp()
     send_message({"status": "success", **host_status(), "final": True})
 
 
@@ -120,6 +125,27 @@ def update_host(_request: Message) -> None:
         send_message({"status": "error", "message": str(e), "final": True})
         return
     send_message({"status": "success", "version": tag, "final": True})
+
+
+def install_yt_dlp_for_setup() -> int:
+    """What `mp3.exe --install-yt-dlp` runs: install or update yt-dlp, for the installer.
+
+    The installer runs it on the new version before switching Firefox to it, instead of
+    downloading yt-dlp itself, so a new installation gets the onedir build too. It installs
+    nothing next to the old version's files: the yt-dlp files the old version may still
+    run are removed later by remove_unused_yt_dlp.
+
+    Returns:
+        The exit code: 0 when a working yt-dlp is installed, 1 when not (the reason is in
+        mp3.log; the installation goes on, and the host repairs yt-dlp on its next check).
+    """
+    try:
+        version = install_yt_dlp()
+    except Exception as e:  # an exit code is the only answer the installer reads
+        logger.exception("Could not install yt-dlp %s", e)
+        return 1
+    logger.info("yt-dlp %s is installed", version)
+    return 0
 
 
 ACTIONS: dict[str, Callable[[Message], None]] = {
@@ -166,6 +192,8 @@ if __name__ == "__main__":
     setup_logging()
     if sys.argv[1:] == [SELF_CHECK_ARG]:
         sys.exit(self_check())
+    elif sys.argv[1:] == [INSTALL_YT_DLP_ARG]:
+        sys.exit(install_yt_dlp_for_setup())
     main()
 
 

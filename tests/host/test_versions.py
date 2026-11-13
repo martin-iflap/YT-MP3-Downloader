@@ -73,15 +73,18 @@ def test_the_extension_links_the_installer_the_updater_downloads() -> None:
     assert url.group(1) == f"{github.GITHUB_URL}/{HOST_REPO}/releases/latest/download/{updater.INSTALLER_ASSET}"
 
 
-def test_the_installer_downloads_and_checks_yt_dlp_like_the_updater() -> None:
-    release = iss_setting(r'^#define\s+YtDlpReleaseURL\s+"([^"]+)"')
-    assert release == f"{github.GITHUB_URL}/{github.YT_DLP_REPO}/releases/latest/download/"
-    assert iss_setting(r'^#define\s+YtDlpTempName\s+"([^"]+)"') == updater.YT_DLP_ASSET
-    assert iss_setting(r'^#define\s+YtDlpSumsName\s+"([^"]+)"') == updater.YT_DLP_SUMS
+def test_the_installer_runs_the_self_check_and_the_yt_dlp_install_the_host_knows() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    assert f"'{MP3.SELF_CHECK_ARG}'" in script
+    assert f"'{MP3.INSTALL_YT_DLP_ARG}'" in script
 
 
-def test_the_installer_runs_the_self_check_the_host_knows() -> None:
-    assert f"'{MP3.SELF_CHECK_ARG}'" in INSTALLER_SCRIPT.read_text(encoding="utf-8")
+def test_the_installer_knows_the_yt_dlp_folder_and_the_uninstaller_removes_it() -> None:
+    # the folder sits in {app}, which is config.INSTALL_DIR in the installed layout
+    folder = iss_setting(r'^#define\s+YtDlpDir\s+"([^"]+)"')
+    assert (folder, config.YT_DLP_DIR.parent) == (config.YT_DLP_DIR.name, config.INSTALL_DIR)
+    uninstall = INSTALLER_SCRIPT.read_text(encoding="utf-8").split("[UninstallDelete]")[1].split("\n[")[0]
+    assert 'Type: filesandordirs; Name: "{app}\\{#YtDlpDir}"' in uninstall
 
 
 def test_the_extension_and_the_installer_use_the_same_identifiers() -> None:
