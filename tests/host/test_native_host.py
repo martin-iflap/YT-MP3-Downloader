@@ -238,6 +238,16 @@ def test_get_version_is_one_final_with_the_host_and_tool_state(
     }
 
 
+def test_get_version_removes_the_unused_yt_dlp_files(monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp) -> None:
+    # the version Firefox uses answers get_version, so the installer's switch to it is done (test_updater
+    # tests what is removed); MP3 binds it with a lazy import, so it is patched there
+    calls: list[str] = []
+    monkeypatch.setattr(MP3, "remove_unused_yt_dlp", lambda: calls.append("removed"))
+    [response] = run_host(monkeypatch, frame({"action": "get_version"}))
+    assert calls == ["removed"]
+    assert response["status"] == "success"
+
+
 def test_get_version_with_a_broken_yt_dlp_still_succeeds(monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp) -> None:
     # the report itself works; telling the user is the extension's job
     fake_yt_dlp.set("fail")

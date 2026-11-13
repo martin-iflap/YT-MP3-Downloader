@@ -397,6 +397,88 @@ def test_a_killed_onedir_install_is_cleaned_up(install: Install) -> None:
     assert install.files == ["yt-dlp.exe"]
 
 
+# --- removing the yt-dlp files no longer used ---------------------------------
+
+
+def unpack_build(install: Install, tag: str, version: str | None = None) -> Path:
+    """Put the onedir build of release tag in place, as the updater leaves it; it prints version (default: tag)."""
+    with zipfile.ZipFile(io.BytesIO(onedir_zip(version or tag))) as zf:
+        zf.extractall(install.build(tag))
+    return install.build(tag)
+
+
+def build_files(*tags: str) -> list[str]:
+    """Install.files of the onedir builds of tags."""
+    return sorted(f"yt-dlp/{tag}/{name}" for tag in tags for name in ("_internal/base_library.zip", "yt-dlp.exe"))
+
+
+def test_unused_yt_dlp_files_are_removed_once_an_onedir_build_works(install: Install) -> None:
+    unpack_build(install, OLD)
+    unpack_build(install, NEW)
+    install.exe.with_name("yt-dlp.old.exe").write_bytes(script("2026.01.01"))
+    install.exe.with_name("yt-dlp.download.exe").write_bytes(b"half an exe")
+    (install.build(NEW).parent / "onedir-failed").write_text("2026.01.01")
+    killed = install.build("2026.10.01").with_name("2026.10.01.download")
+    (killed / "_internal").mkdir(parents=True)
+    updater.remove_unused_yt_dlp()
+    assert install.files == build_files(NEW)
+    assert [p.name for p in install.build(NEW).parent.iterdir()] == [NEW], "no empty folders left"
+    assert config.yt_dlp_path() == install.build(NEW) / "yt-dlp.exe"
+
+
+@pytest.mark.parametrize("state", ["no-build", "broken-build", "fallback"])
+def test_nothing_is_removed_without_a_working_onedir_build(install: Install, state: str) -> None:
+    install.exe.with_name("yt-dlp.old.exe").write_bytes(script("2026.01.01"))
+    if state != "no-build":
+        unpack_build(install, OLD)
+    if state == "broken-build":  # the newest build, e.g. after a power cut: the update replaces it
+        install.build(NEW).mkdir()
+        (install.build(NEW) / "yt-dlp.exe").write_bytes(script(None))
+    elif state == "fallback":  # the onedir build of NEW failed, the single-file NEW is used
+        install.exe.write_bytes(script(NEW))
+        (install.build(OLD).parent / "onedir-failed").write_text(NEW)
+    before = install.files
+    updater.remove_unused_yt_dlp()
+    assert install.files == before
+
+
+def test_nothing_is_removed_while_an_update_runs(install: Install) -> None:
+    unpack_build(install, NEW)
+    with updater.update_lock():
+        start = time.monotonic()
+        updater.remove_unused_yt_dlp()
+        assert time.monotonic() - start < updater.LOCK_TIMEOUT_S / 2, "it does not wait for the update"
+        assert install.files == ["yt-dlp.exe", *build_files(NEW)]
+    updater.remove_unused_yt_dlp()
+    assert install.files == build_files(NEW)
+
+
+def test_yt_dlp_files_another_host_still_runs_are_removed_later(install: Install) -> None:
+    unpack_build(install, OLD)
+    unpack_build(install, NEW)
+    # an open file can't be deleted, and its folder can't be renamed, like a running exe and its build
+    with install.exe.open("rb"), (install.build(OLD) / "yt-dlp.exe").open("rb"):
+        updater.remove_unused_yt_dlp()
+        assert install.files == ["yt-dlp.exe", *build_files(OLD, NEW)], "the running build is left whole"
+    updater.remove_unused_yt_dlp()
+    assert install.files == build_files(NEW)
+
+
+def test_an_update_leaves_the_files_it_replaced_to_the_cleanup(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest(monkeypatch, yt_dlp=OLD)
+    publish_release(server, OLD)
+    updater.update_yt_dlp()
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server)
+    updater.update_yt_dlp()
+    # the installer runs update_yt_dlp while Firefox still uses the previous host and its yt-dlp
+    assert install.files == ["yt-dlp.exe", *build_files(OLD, NEW)]
+    updater.remove_unused_yt_dlp()
+    assert install.files == build_files(NEW)
+
+
 # --- the single-file yt-dlp.exe (fallback) ------------------------------------
 
 

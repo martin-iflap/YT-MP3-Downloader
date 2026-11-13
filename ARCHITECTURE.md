@@ -526,7 +526,7 @@ third-party libraries log WARNING and up. Every module logs through
 | `get_current_folder` | `send_current_folder("")`: the default folder, created if missing                                                     |
 | `show_in_folder`     | `run_open_file(path, select=True)`                                                                                    |
 | `play`               | `run_open_file(path, select=False)`                                                                                   |
-| `get_version`        | `updater.remove_installed_downloads()`, then `health.host_status()`                                                   |
+| `get_version`        | `updater.remove_installed_downloads()` and `updater.remove_unused_yt_dlp()`, then `health.host_status()`              |
 | `update_yt_dlp`      | `updater.update_yt_dlp()` (bound as `install_yt_dlp`); `UpdateError` becomes a final error                            |
 | `update_host`        | `updater.update_host()` (bound as `install_host_update`); `UpdateError` becomes a final error                         |
 
@@ -815,8 +815,13 @@ flowchart TB
   folder and more than `MAX_UNPACKED_BYTES` unpacked are refused.
 - `onedir-failed` applies only to the tag it names: the next release tries onedir first
   again, and only a new failure brings the single-file exe back, updated.
-- Old builds, the single-file exe and the marker stay for now (another host may still run
-  them); removing them once a working onedir build is there is the next step (PLAN).
+- The update leaves older builds, the single-file exe and the marker: run by the installer,
+  it would take `yt-dlp.exe` from the previous host Firefox still uses. `get_version`
+  removes them (`remove_unused_yt_dlp()`), only once the lookup finds a working onedir
+  build, and never while an update holds the lock (it does not wait; the next call does
+  it). An older build is renamed to `<tag>.download\` before it is deleted: one another
+  host still runs can't be renamed, so it is left whole instead of half deleted, like a
+  running `yt-dlp.exe`, and a later call removes it.
 - If the second rename fails (e.g. a virus scanner holds the new file), the old copy is
   renamed back. An `.old` copy still running in another host can't be deleted; a later
   update removes it, and meanwhile a swap uses a unique `.old-<hex>` name.
@@ -843,7 +848,7 @@ sequenceDiagram
     loop every 5 s, up to 3 min
         BG->>NEW: get_version (old version until the switch)
     end
-    NEW->>NEW: remove_installed_downloads()
+    NEW->>NEW: remove_installed_downloads(), remove_unused_yt_dlp()
     NEW-->>BG: version 2.0.1
 ```
 
@@ -942,6 +947,7 @@ flowchart TB
 | Offline during a check                                        | `latest`/`outdated` are `null`, nothing is repaired, no notice.                                              |
 | Host killed mid-download of an update                         | Only a temp file is left (`yt-dlp.download.exe`, `yt-dlp\<tag>.download\` and `.zip`, `*.download`); the next update removes it. |
 | yt-dlp's onedir build can't be installed (e.g. antivirus)     | `yt-dlp\onedir-failed` names the release, and the single-file `yt-dlp.exe` runs until the next release.     |
+| An old yt-dlp build or `yt-dlp.exe` still runs in another host | It can't be deleted (a build can't be renamed), so it stays whole; a later `get_version` removes it.        |
 | Host killed between the two yt-dlp renames                    | `yt-dlp.exe` missing, `.old` copy there: the next update (or repair) puts it back, offline too.              |
 | Two hosts update at once                                      | The second waits for the lock, then finds yt-dlp current and downloads nothing.                              |
 | Download truncated or damaged, or the release lacks checksums | Checksum or size check fails, nothing is installed, the user is told why.                                    |

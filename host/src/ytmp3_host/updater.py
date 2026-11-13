@@ -310,7 +310,8 @@ def _remove_tree(folder: Path) -> None:
 
 
 def _remove_onedir_leftovers() -> None:
-    """Remove what a onedir install killed midway leaves: <tag>.download\\ and <tag>.download.zip."""
+    """Remove what a onedir install killed midway leaves (<tag>.download\\ and <tag>.download.zip),
+    and what _remove_build could not delete."""
     for leftover in config.YT_DLP_DIR.glob("*.download*"):
         if leftover.is_dir():
             _remove_tree(leftover)
@@ -484,6 +485,66 @@ def update_yt_dlp() -> str:
         version = _install_single_exe(tag, sums)
     logger.info("Installed the single-file yt-dlp %s (was %s)", version, current)
     return version
+
+
+def _has_unused_yt_dlp() -> bool:
+    """Whether remove_unused_yt_dlp may have something to delete (a few file checks, no lock)."""
+    exe = config.YT_DLP_PATH
+    return (
+        len(config.onedir_builds()) > 1
+        or any(p.exists() for p in (exe, _new_path(exe), config.ONEDIR_FAILED_PATH))
+        or bool(_old_paths(exe))
+        or any(config.YT_DLP_DIR.glob("*.download*"))
+    )
+
+
+def _remove_build(folder: Path) -> None:
+    """Delete a onedir build no host runs.
+
+    It is renamed to <tag>.download\\ first. A build another host still runs can't be
+    renamed, so it is left whole for a later call: deleting only the files Windows allows
+    would break that host's download. Whatever rmtree can't delete after the rename is a
+    leftover the lookup ignores and the next cleanup or update removes.
+    """
+    unused = folder.with_name(f"{folder.name}.download")
+    try:
+        folder.rename(unused)
+    except OSError as e:
+        logger.info("Could not remove %s yet, it may still run: %s", folder.name, e)
+        return
+    _remove_tree(unused)
+
+
+def remove_unused_yt_dlp() -> None:
+    """Delete the yt-dlp files the host no longer runs, once the lookup finds a working onedir build.
+
+    That is the single-file yt-dlp.exe (with its update leftovers), older onedir builds,
+    the onedir-failed marker and the leftovers of a killed onedir install. Run on every
+    get_version: its answer comes from the host version Firefox uses, so an installer's
+    switch to it has happened. Never in update_yt_dlp, which the installer runs while
+    Firefox still uses the previous host, perhaps with that yt-dlp.exe.
+
+    Does not wait for the update lock: while an update runs, nothing is deleted and the
+    next call does it. With nothing to delete it takes a few file checks; the build's
+    --version runs only when there is. A file or build another host still runs can't be
+    deleted and is retried by a later call. Never raises: get_version must answer.
+    """
+    try:
+        if not _has_unused_yt_dlp():
+            return
+        with update_lock(timeout=0):
+            exe = yt_dlp_path()
+            if exe == config.YT_DLP_PATH or _yt_dlp_version(exe) is None:
+                return  # the single-file exe is in use, or the build is broken: the update needs what is there
+            _remove_onedir_leftovers()
+            for build in config.onedir_builds()[1:]:
+                _remove_build(build)
+            single = config.YT_DLP_PATH
+            _remove_leftovers([_new_path(single), *_old_paths(single), single, config.ONEDIR_FAILED_PATH])
+    except UpdateError:  # update_lock: an update is running
+        logger.info("An update is running, unused yt-dlp files are removed later")
+    except OSError as e:
+        logger.info("Could not remove unused yt-dlp files yet: %s", e)
 
 
 # --- Deno ---------------------------------------------------------------------
