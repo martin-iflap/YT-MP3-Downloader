@@ -22,9 +22,10 @@ TASKKILL_TIMEOUT_S = 10
 def kill_process_tree(process: subprocess.Popen[str]) -> None:
     """Kill a process together with all its children.
 
-    yt-dlp.exe is a PyInstaller onefile build: process.kill() only stops its
-    bootloader, while the real yt-dlp child (and its ffmpeg) keep running and keep
-    the stdout pipe open. taskkill /T stops the whole tree.
+    process.kill() stops only the process itself, while its children keep running and
+    keep the stdout pipe open: the ffmpeg yt-dlp runs to encode, and with the single-file
+    yt-dlp.exe (a PyInstaller onefile build, the fallback) the real yt-dlp, a child of
+    its bootloader. taskkill /T stops the whole tree.
 
     Args:
         process: The process to kill. Does nothing if it already exited.

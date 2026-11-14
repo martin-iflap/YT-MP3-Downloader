@@ -27,6 +27,9 @@ DOWNLOAD_TIMEOUT_S = 900
 EMBED_TIMEOUT_S = 50
 # what yt-dlp prints when YouTube asks for a JavaScript challenge it could not solve without a runtime
 JS_CHALLENGE_FAILURES = ("Signature solving failed", "n challenge solving failed", "Requested format is not available")
+# what Python prints when a file of yt-dlp's onedir build is missing or blocked (e.g. a virus scanner
+# removed a DLL): `--version` does not load every module, so the build can still look
+BROKEN_INSTALL_FAILURES = ("ImportError", "ModuleNotFoundError", "DLL load failed")
 
 
 def embed_thumbnail(
@@ -226,21 +229,25 @@ def _yt_dlp_stamp() -> tuple[Path, int, int] | None:
 def _repair_yt_dlp(url: str, error: Exception, on_info: Callable[[str], object]) -> bool:
     """Update yt-dlp, and install Deno if YouTube asked for JavaScript, after a failed download.
     Deno is only for YouTube URLs: other sites also say "Requested format is not available".
+    When the output shows a damaged install (BROKEN_INSTALL_FAILURES), the update switches
+    a current onedir build to the single-file yt-dlp.exe for this release.
 
     Returns:
         True if anything changed, so trying again can help. Repairs that fail are
         logged; the caller reports the original error.
     """
     before = _yt_dlp_stamp()
-    on_info("The download failed, checking for a yt-dlp update...")
+    output = str(getattr(error, "output", None) or "")
+    damaged = any(sign in output for sign in BROKEN_INSTALL_FAILURES)
+    on_info("yt-dlp is damaged, repairing it..." if damaged
+            else "The download failed, checking for a yt-dlp update...")
     # OSError: e.g. the update lock or a file a virus scanner holds; never hides the download's own error
     try:
-        updater.update_yt_dlp()
+        updater.update_yt_dlp(damaged=damaged)
     except (updater.UpdateError, OSError) as e:
         logger.error("Repair after a failed download: %s", e)
     repaired = _yt_dlp_stamp() not in (None, before)
 
-    output = str(getattr(error, "output", None) or "")
     js_challenge = is_youtube_url(url) and any(sign in output for sign in JS_CHALLENGE_FAILURES)
     if js_challenge and health.find_js_runtime() is None:
         on_info("YouTube needs an extra component for this video (Deno, about 45 MB). "
@@ -268,7 +275,8 @@ def download_with_repair(
 
     YouTube changes break older yt-dlp versions, so when yt-dlp fails (or is
     missing) it is updated, and the download is retried only if a new yt-dlp was
-    installed. If yt-dlp's output says YouTube wants a JavaScript challenge solved
+    installed; a damaged onedir build is replaced by the single-file exe. If
+    yt-dlp's output says YouTube wants a JavaScript challenge solved
     and there is no runtime, Deno is installed too. Other failures (an existing
     file, ffmpeg, timeouts) are raised right away, as is a failure while offline.
 

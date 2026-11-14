@@ -66,10 +66,13 @@ DENO_EXE = "deno.exe"  # the only file in the zip
 INSTALLER_ARGS = ("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-")
 
 SOCKET_TIMEOUT_S = 30  # per connect or read
-YT_DLP_DOWNLOAD_S = 180  # whole download; the extension waits 7 min for update_yt_dlp
+YT_DLP_DOWNLOAD_S = 180  # whole download, up to two per update; the extension waits 11 min for update_yt_dlp
 INSTALLER_DOWNLOAD_S = 360  # and 9 min for update_host (see ACTION_TIMEOUTS_MS for the sums)
 DENO_DOWNLOAD_S = 300  # ~43 MB, during a download the user waits for
 LOCK_TIMEOUT_S = 60  # waiting for another host's update
+# remove_unused_yt_dlp's check: get_version runs health's own version check after it, within the
+# extension's 30 s; a build too slow for it is cleaned up by a later get_version
+CLEANUP_VERSION_TIMEOUT_S = 5
 LOCK_POLL_S = 0.5
 MAX_DOWNLOAD_BYTES = 300 * 1024 * 1024
 MAX_UNPACKED_BYTES = 300 * 1024 * 1024  # yt-dlp's onedir build unpacks to ~41 MB
@@ -417,7 +420,7 @@ def _install_single_exe(tag: str, sums: dict[str, str]) -> str:
     return version
 
 
-def update_yt_dlp() -> str:
+def update_yt_dlp(*, damaged: bool = False) -> str:
     """Install the latest yt-dlp release, or repair a missing or broken yt-dlp.
 
     Installs the release's onedir build. Only when that build can't be installed here
@@ -433,6 +436,14 @@ def update_yt_dlp() -> str:
     exe without that (from a host before onedir, or the dev layout) gets the onedir
     build, and is kept when a network problem stops that.
 
+    Args:
+        damaged: A download showed the yt-dlp which the host runs is damaged, although it
+            runs `--version` (core.download_with_repair), e.g. a virus scanner removed a
+            DLL of the onedir build that `--version` does not load. A current onedir
+            build is then handled like one that can't be installed here: the release
+            gets the single-file fallback. It is not installed again, since the scanner
+            would remove the file again and every download would download it again;
+            the next release tries onedir once more. Offline, the installed one is kept.
     Returns:
         The version of the yt-dlp now installed.
     Raises:
@@ -455,12 +466,15 @@ def update_yt_dlp() -> str:
             raise UpdateError(f"yt-dlp could not be downloaded: {e}") from e
         onedir_failed = onedir_failed_tag() == tag
         up_to_date = current is not None and is_outdated(current, tag) is False
-        if up_to_date and (exe != config.YT_DLP_PATH or onedir_failed):
+        damaged_build = damaged and up_to_date and exe != config.YT_DLP_PATH
+        if up_to_date and (exe != config.YT_DLP_PATH or onedir_failed) and not damaged_build:
             return current
 
         sums: dict[str, str] = {}
         try:
             sums = parse_checksums(fetch_text(asset_url(YT_DLP_REPO, tag, YT_DLP_SUMS)))
+            if damaged_build:
+                raise OnedirUnavailable(f"The yt-dlp {tag} onedir build is damaged")
             if not onedir_failed:
                 version = _install_onedir(tag, sums)
                 logger.info("Installed the yt-dlp %s onedir build (was %s)", version, current)
@@ -519,23 +533,32 @@ def remove_unused_yt_dlp() -> None:
     """Delete the yt-dlp files the host no longer runs, once the lookup finds a working onedir build.
 
     That is the single-file yt-dlp.exe (with its update leftovers), older onedir builds,
-    the onedir-failed marker and the leftovers of a killed onedir install. Run on every
-    get_version: its answer comes from the host version Firefox uses, so an installer's
+    the onedir-failed marker and the leftovers of a killed onedir install. While the lookup
+    takes the single-file fallback instead, it deletes the onedir builds, which the lookup
+    can't take (e.g. a damaged one, see update_yt_dlp), and keeps the exe and the marker.
+    Run on every get_version: its answer comes from the host version Firefox uses, so an installer's
     switch to it has happened. Never in update_yt_dlp, which the installer runs while
     Firefox still uses the previous host, perhaps with that yt-dlp.exe.
 
     Does not wait for the update lock: while an update runs, nothing is deleted and the
     next call does it. With nothing to delete it takes a few file checks; the build's
-    --version runs only when there is. A file or build another host still runs can't be
-    deleted and is retried by a later call. Never raises: get_version must answer.
+    --version runs only when there is, for at most CLEANUP_VERSION_TIMEOUT_S. A file or
+    build another host still runs can't be deleted and is retried by a later call. Never
+    raises: get_version must answer.
     """
     try:
         if not _has_unused_yt_dlp():
             return
         with update_lock(timeout=0):
             exe = yt_dlp_path()
-            if exe == config.YT_DLP_PATH or _yt_dlp_version(exe) is None:
-                return  # the single-file exe is in use, or the build is broken: the update needs what is there
+            if exe == config.YT_DLP_PATH:
+                # the single-file fallback (or no build at all)
+                _remove_onedir_leftovers()
+                for build in config.onedir_builds():
+                    _remove_build(build)
+                return
+            if read_version(yt_dlp_version_command(exe), CLEANUP_VERSION_TIMEOUT_S) is None:
+                return  # the build is broken (or slow): the update needs what is there
             _remove_onedir_leftovers()
             for build in config.onedir_builds()[1:]:
                 _remove_build(build)

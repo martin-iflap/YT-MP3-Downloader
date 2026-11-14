@@ -20,22 +20,23 @@ const LEGACY_HOST_MESSAGE = "This version of the YT MP3 Downloader app can't upd
 
 // Per-action timeouts. The host allows 900s for yt-dlp plus 50s for the ffmpeg cover pass,
 // and select_folder waits on the user, so these must stay above that. get_version waits
-// up to 20s for `yt-dlp --version`. The updates (updater.py) may first wait 60s for another
+// up to 20s for `yt-dlp --version`, after up to 5s for the cleanup's own check. The updates (updater.py) may first wait 60s for another
 // host's update, look up the tag (5s) and fetch the checksums (30s), then download for up
 // to 180s (yt-dlp) or 360s (the installer), plus up to 30s for the last read, and test-run a
-// new exe (20s): about 345s for yt-dlp (with its 20s version check first) and 485s for the
-// installer. A download that fails in yt-dlp is retried once after a repair
-// (core.download_with_repair): 950s, a yt-dlp update (345s), Deno (about 455s), 950s
-// again, so the worst case is about 45 min (test_versions.py checks the sum).
+// new exe (20s): 485s for the installer. yt-dlp starts with its 20s version check, and its
+// onedir build may fail its test-run, so the single-file exe is checked (20s) and downloaded
+// too: about 595s. A download that fails in yt-dlp is retried once after a repair
+// (core.download_with_repair): 950s, a yt-dlp update (595s), Deno (about 465s), 950s
+// again, so the worst case is about 50 min (test_versions.py checks the sums).
 const ACTION_TIMEOUTS_MS = {
-  download: 47 * 60 * 1000,
+  download: 51 * 60 * 1000,
   download_gui: 30 * 1000,
   select_folder: 10 * 60 * 1000,
   get_current_folder: 15 * 1000,
   show_in_folder: 15 * 1000,
   play: 15 * 1000,
   get_version: 30 * 1000,
-  update_yt_dlp: 7 * 60 * 1000,
+  update_yt_dlp: 11 * 60 * 1000,
   update_host: 9 * 60 * 1000
 };
 

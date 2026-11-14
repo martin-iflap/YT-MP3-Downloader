@@ -289,6 +289,49 @@ def test_a_broken_onedir_build_of_the_release_is_replaced(
     assert updater.read_version(updater.yt_dlp_version_command(build / "yt-dlp.exe")) == NEW
 
 
+# --- a damaged yt-dlp (core.download_with_repair saw an ImportError) ---------------------------
+
+
+def test_a_damaged_onedir_build_falls_back_to_the_single_exe_once(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server)
+    updater.update_yt_dlp()
+    assert updater.update_yt_dlp() == NEW, "--version works, so an update sees nothing to do"
+    assert updater.update_yt_dlp(damaged=True) == NEW
+    assert install.onedir_failed == NEW
+    assert config.yt_dlp_path() == install.exe and install.exe.read_bytes() == script(NEW)
+    # never reinstalled: a virus scanner would remove the file again, and every download would download it
+    server.requests.clear()
+    assert updater.update_yt_dlp(damaged=True) == NEW
+    assert server.requests == []
+    assert server.gets(updater.YT_DLP_ZIP) == 0
+    updater.remove_unused_yt_dlp()  # the next get_version
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"], "the damaged build is deleted"
+    latest(monkeypatch, yt_dlp="2026.10.01")
+    publish_release(server, "2026.10.01")
+    assert updater.update_yt_dlp() == "2026.10.01"
+    assert config.yt_dlp_path() == install.build("2026.10.01") / "yt-dlp.exe", "the next release tries onedir again"
+
+
+def test_a_damaged_outdated_onedir_build_gets_the_new_release(
+    install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unpack_build(install, OLD)
+    latest(monkeypatch, yt_dlp=NEW)
+    publish_release(server)
+    assert updater.update_yt_dlp(damaged=True) == NEW
+    assert config.yt_dlp_path() == install.build(NEW) / "yt-dlp.exe"
+    assert install.onedir_failed is None
+
+
+def test_a_damaged_yt_dlp_offline_is_kept(install: Install) -> None:
+    unpack_build(install, NEW)
+    assert updater.update_yt_dlp(damaged=True) == NEW  # no_github
+    assert install.onedir_failed is None
+
+
 @pytest.mark.parametrize(
     ("archive", "limit"),
     [
@@ -426,20 +469,51 @@ def test_unused_yt_dlp_files_are_removed_once_an_onedir_build_works(install: Ins
     assert config.yt_dlp_path() == install.build(NEW) / "yt-dlp.exe"
 
 
-@pytest.mark.parametrize("state", ["no-build", "broken-build", "fallback"])
+def test_an_older_build_alone_is_removed(install: Install) -> None:
+    # the usual state after a second onedir release: no single-file exe or marker left
+    install.exe.unlink()
+    unpack_build(install, OLD)
+    unpack_build(install, NEW)
+    updater.remove_unused_yt_dlp()
+    assert install.files == build_files(NEW)
+
+
+@pytest.mark.parametrize("state", ["no-build", "broken-build"])
 def test_nothing_is_removed_without_a_working_onedir_build(install: Install, state: str) -> None:
     install.exe.with_name("yt-dlp.old.exe").write_bytes(script("2026.01.01"))
-    if state != "no-build":
-        unpack_build(install, OLD)
     if state == "broken-build":  # the newest build, e.g. after a power cut: the update replaces it
+        unpack_build(install, OLD)
         install.build(NEW).mkdir()
         (install.build(NEW) / "yt-dlp.exe").write_bytes(script(None))
-    elif state == "fallback":  # the onedir build of NEW failed, the single-file NEW is used
-        install.exe.write_bytes(script(NEW))
-        (install.build(OLD).parent / "onedir-failed").write_text(NEW)
     before = install.files
     updater.remove_unused_yt_dlp()
     assert install.files == before
+
+
+def test_a_build_that_hangs_is_checked_only_briefly(install: Install, monkeypatch: pytest.MonkeyPatch) -> None:
+    # get_version checks the build again afterward, and must answer within the extension's timeout
+    monkeypatch.setattr(updater, "CLEANUP_VERSION_TIMEOUT_S", 1)
+    unpack_build(install, NEW)
+    (install.build(NEW) / "yt-dlp.exe").write_bytes(b"import time; time.sleep(30)")
+    before = install.files
+    start = time.monotonic()
+    updater.remove_unused_yt_dlp()
+    assert time.monotonic() - start < 10
+    assert install.files == before
+
+
+def test_with_the_single_exe_fallback_only_the_onedir_builds_are_removed(install: Install) -> None:
+    # the onedir build of NEW was damaged (or failed): the single-file NEW is used, no build ever again
+    unpack_build(install, OLD)
+    unpack_build(install, NEW)
+    install.exe.write_bytes(script(NEW))
+    (install.build(NEW).parent / "onedir-failed").write_text(NEW)
+    with (install.build(OLD) / "yt-dlp.exe").open("rb"):  # another host still runs it
+        updater.remove_unused_yt_dlp()
+        assert install.files == ["yt-dlp.exe", *build_files(OLD), "yt-dlp/onedir-failed"]
+    updater.remove_unused_yt_dlp()
+    assert install.files == ["yt-dlp.exe", "yt-dlp/onedir-failed"]
+    assert config.yt_dlp_path() == install.exe
 
 
 def test_nothing_is_removed_while_an_update_runs(install: Install) -> None:
@@ -447,7 +521,8 @@ def test_nothing_is_removed_while_an_update_runs(install: Install) -> None:
     with updater.update_lock():
         start = time.monotonic()
         updater.remove_unused_yt_dlp()
-        assert time.monotonic() - start < updater.LOCK_TIMEOUT_S / 2, "it does not wait for the update"
+        # any wait for the lock sleeps at least one poll
+        assert time.monotonic() - start < updater.LOCK_POLL_S, "it does not wait for the update"
         assert install.files == ["yt-dlp.exe", *build_files(NEW)]
     updater.remove_unused_yt_dlp()
     assert install.files == build_files(NEW)

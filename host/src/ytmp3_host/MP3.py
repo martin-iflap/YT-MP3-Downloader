@@ -141,8 +141,8 @@ def install_yt_dlp_for_setup() -> int:
     """
     try:
         version = install_yt_dlp()
-    except Exception as e:  # an exit code is the only answer the installer reads
-        logger.exception("Could not install yt-dlp %s", e)
+    except Exception:  # an exit code is the only answer the installer reads
+        logger.exception("Could not install yt-dlp")
         return 1
     logger.info("yt-dlp %s is installed", version)
     return 0

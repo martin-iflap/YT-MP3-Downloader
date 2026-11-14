@@ -32,11 +32,11 @@ class Repairs:
     calls: list[str] = field(default_factory=list)
     infos: list[str] = field(default_factory=list)
 
-    def update_yt_dlp(self) -> str:
-        self.calls.append("update_yt_dlp")
+    def update_yt_dlp(self, *, damaged: bool = False) -> str:
+        self.calls.append("update_yt_dlp(damaged)" if damaged else "update_yt_dlp")
         if self.update_error:
             raise self.update_error("GitHub could not be reached")
-        if self.new_yt_dlp:
+        if self.new_yt_dlp or damaged:  # the single-file fallback replaces a damaged build of the same release
             (self.bin_dir / "yt-dlp.exe").write_bytes(b"a newer yt-dlp")
             if self.new_yt_dlp_works:
                 self.fake_yt_dlp.set("success")
@@ -124,6 +124,14 @@ def test_a_corrupt_yt_dlp_is_replaced_and_the_download_retried(
     repairs.new_yt_dlp = True
     assert repairs.download(out_dir).exists()
     assert repairs.calls == ["update_yt_dlp"]
+
+
+def test_a_damaged_yt_dlp_is_repaired_and_the_download_retried(repairs: Repairs, out_dir: Path) -> None:
+    # --version works, so only the download's output tells the installation is damaged
+    repairs.fake_yt_dlp.set("missing_dll")
+    assert repairs.download(out_dir).exists()
+    assert repairs.calls == ["update_yt_dlp(damaged)"]
+    assert repairs.infos == ["yt-dlp is damaged, repairing it...", RETRYING]
 
 
 def test_a_missing_ffmpeg_is_not_a_yt_dlp_repair(

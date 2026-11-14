@@ -112,14 +112,36 @@ def test_every_action_the_extension_sends_exists_in_the_host() -> None:
     assert actions and set(actions) <= set(MP3.ACTIONS)
 
 
+def timeout_s(action: str) -> int:
+    minutes = re.search(rf"^\s*{action}: (\d+) \* 60 \* 1000", action_timeouts(), flags=re.MULTILINE)
+    assert minutes, f"the {action} timeout not found in ACTION_TIMEOUTS_MS"
+    return int(minutes.group(1)) * 60
+
+
+# an update waits for another host's update, checks the installed tool, looks up the tag and
+# fetches the checksums; each download may take its deadline plus a last read, then a test-run
+UPDATE_START_S = updater.LOCK_TIMEOUT_S + VERSION_TIMEOUT_S + LOOKUP_TIMEOUT_S + updater.SOCKET_TIMEOUT_S
+YT_DLP_DOWNLOAD_S = updater.YT_DLP_DOWNLOAD_S + updater.SOCKET_TIMEOUT_S + VERSION_TIMEOUT_S
+# the onedir build fails its test-run, so the single-file exe is checked, then downloaded too
+YT_DLP_UPDATE_S = UPDATE_START_S + YT_DLP_DOWNLOAD_S + VERSION_TIMEOUT_S + YT_DLP_DOWNLOAD_S
+DENO_INSTALL_S = UPDATE_START_S + updater.DENO_DOWNLOAD_S + updater.SOCKET_TIMEOUT_S + VERSION_TIMEOUT_S
+
+
 def test_the_extension_waits_longer_than_the_slowest_download() -> None:
-    minutes = re.search(r"^\s*download: (\d+) \* 60 \* 1000", action_timeouts(), flags=re.MULTILINE)
-    assert minutes, "the download timeout not found in ACTION_TIMEOUTS_MS"
-    start = updater.LOCK_TIMEOUT_S + VERSION_TIMEOUT_S + LOOKUP_TIMEOUT_S + updater.SOCKET_TIMEOUT_S
-    finish = updater.SOCKET_TIMEOUT_S + VERSION_TIMEOUT_S
-    yt_dlp_update, deno = start + updater.YT_DLP_DOWNLOAD_S + finish, start + updater.DENO_DOWNLOAD_S + finish
-    worst_case = 2 * (core.DOWNLOAD_TIMEOUT_S + core.EMBED_TIMEOUT_S) + yt_dlp_update + deno
-    assert int(minutes.group(1)) * 60 > worst_case
+    worst_case = 2 * (core.DOWNLOAD_TIMEOUT_S + core.EMBED_TIMEOUT_S) + YT_DLP_UPDATE_S + DENO_INSTALL_S
+    assert timeout_s("download") > worst_case
+
+
+def test_the_extension_waits_longer_than_the_slowest_yt_dlp_update() -> None:
+    assert timeout_s("update_yt_dlp") > YT_DLP_UPDATE_S
+
+
+def test_the_extension_waits_longer_than_the_slowest_get_version() -> None:
+    seconds = re.search(r"^\s*get_version: (\d+) \* 1000", action_timeouts(), flags=re.MULTILINE)
+    assert seconds, "the get_version timeout not found in ACTION_TIMEOUTS_MS"
+    # the cleanup's version check, then host_status's, with the GitHub lookups running alongside
+    worst_case = updater.CLEANUP_VERSION_TIMEOUT_S + max(VERSION_TIMEOUT_S, LOOKUP_TIMEOUT_S)
+    assert int(seconds.group(1)) > worst_case
 
 
 def test_the_sidebar_limits_the_filename_like_the_host() -> None:

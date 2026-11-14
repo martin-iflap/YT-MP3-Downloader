@@ -20,8 +20,8 @@ from ytmp3_host.ytdlp import kill_process_tree
 
 logger = logging.getLogger(__name__)
 
-# yt-dlp.exe is a onefile build that unpacks itself before it can print anything,
-# and the first run after an update is often held up by the virus scanner
+# the single-file yt-dlp.exe unpacks itself before it can print anything, and the first
+# run after an update is often held up by the virus scanner (143 files in a onedir build)
 VERSION_TIMEOUT_S = 20
 JS_RUNTIME = "deno"
 VERSION_RE = re.compile(r"v?(\d+(?:\.\d+)*)")

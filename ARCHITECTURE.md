@@ -240,14 +240,14 @@ Exceptions:
 
 | `action`             | Fields                         | Host behaviour                                                                                      | Timeout (`background.js`)   |
 |----------------------|--------------------------------|-----------------------------------------------------------------------------------------------------|-----------------------------|
-| `download`           | `url`, `folder?`, `filename?`  | Headless download, `run_native()` (with one repair and retry, §7.6)                                 | 47 min                      |
+| `download`           | `url`, `folder?`, `filename?`  | Headless download, `run_native()` (with one repair and retry, §7.6)                                 | 51 min                      |
 | `download_gui`       | `url?`, `folder?`, `filename?` | Opens the pre-filled Tk window, `gui.open_gui()`                                                    | 30 s (until `"GUI opened"`) |
 | `select_folder`      | `folder?`                      | Folder picker starting at `folder`; returns the selection, or `folder` (else the default) on cancel | 10 min (user interaction)   |
 | `get_current_folder` | —                              | Returns the default folder, creating it if missing                                                  | 15 s                        |
 | `show_in_folder`     | `path`                         | Opens the MP3's folder in Explorer with it selected (`files.show_in_folder`)                         | 15 s                        |
 | `play`               | `path`                         | Opens the MP3 in its default app, through Explorer (`files.open_file`)                               | 15 s                        |
 | `get_version`        | —                              | The host version and the state of its tools (`health.host_status`, §7.1)                            | 30 s                        |
-| `update_yt_dlp`      | —                              | Installs the latest yt-dlp, or repairs a missing/broken one (`updater.update_yt_dlp`)               | 7 min                       |
+| `update_yt_dlp`      | —                              | Installs the latest yt-dlp, or repairs a missing/broken one (`updater.update_yt_dlp`)               | 11 min                      |
 | `update_host`        | —                              | Starts the installer of a newer host release (`updater.update_host`)                                | 9 min                       |
 | `ping`               | —                              | Answers with `version` only; sent by the self-check (§7.5), not by the extension                    | —                           |
 
@@ -633,7 +633,7 @@ The rest of this table lives in `naming.py` (URL checks, `safe_filename`,
 | `download_with_repair(...)`                                                         | `download_audio`, retried once after a yt-dlp failure that a repair may fix (§7.6). Used by both the headless and the GUI path.                                                                                                                                                                                                                                                                                                    |
 | `describe_error(error)`                                                             | One-line user message for a `download_audio` exception (headless and GUI).                                                                                                                                                                                                                                                                                                                                                         |
 | `embed_thumbnail(temp_mp3, thumb, artist, title, output, tags)`                     | One ffmpeg pass (50 s timeout): audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3, artist, title and `tags`. Writes `output` directly, removes it on failure. Raises `FileExistsError` itself if `output` exists: ffmpeg 7 exits 0 when `-n` refuses to overwrite.                                                                                                                                              |
-| `kill_process_tree(process)`                                                        | `taskkill /F /T`; yt-dlp.exe is a onefile build, `Popen.kill()` only stops its bootloader.                                                                                                                                                                                                                                                                                                                                         |
+| `kill_process_tree(process)`                                                        | `taskkill /F /T`; `Popen.kill()` misses yt-dlp's ffmpeg child (and the onefile fallback's real process).                                                                                                                                                                                                                                                                                                                           |
 | `remove_temp_files(temp_stem)`, `remove_stale_temp_files(folder)`                   | Delete `<temp_stem>.*`, retrying files Windows still locks after a kill; before each download, delete `_ytmp3_*` files older than 1 h that a killed host left behind.                                                                                                                                                                                                                                                              |
 | `downloaded_mp3(path)`, `show_in_folder(file)`, `open_file(file)`                   | File actions. Show uses `SHOpenFolderAndSelectItems` (`explorer /select,` splits the path at commas). Play runs `explorer.exe "<path>"` via `processes.launch_detached`, so the player is not ended with the host.                                                                                                                                                                                                                 |
 
@@ -815,15 +815,27 @@ flowchart TB
   works and is atomic. It is not fsynced (146 files); a power cut can leave a `<tag>`
   folder that does not run, and the next update replaces it. Member paths outside the
   folder and more than `MAX_UNPACKED_BYTES` unpacked are refused.
+- `update_yt_dlp(damaged=True)` (§7.6): `--version` does not load every file of a onedir
+  build, so a build with a file a virus scanner removed looks fine. A current onedir
+  build is then handled like one that can't be installed: `onedir-failed` names the
+  release and the single-file exe is used. It is never reinstalled (the scanner would
+  remove the file again, and every download would download the build again); the next
+  release tries onedir once more. An outdated build just gets the new release, and
+  offline the installed one is kept.
 - `onedir-failed` applies only to the tag it names: the next release tries onedir first
   again, and only a new failure brings the single-file exe back, updated.
 - The update leaves older builds, the single-file exe and the marker: run by the installer,
   it would take `yt-dlp.exe` from the previous host Firefox still uses. `get_version`
   removes them (`remove_unused_yt_dlp()`), only once the lookup finds a working onedir
-  build, and never while an update holds the lock (it does not wait; the next call does
+  build (its `--version` gets 5 s, `CLEANUP_VERSION_TIMEOUT_S`, so `get_version` still
+  answers within 30 s after `host_status`'s own check; a slower build is cleaned up
+  later), and never while an update holds the lock (it does not wait; the next call does
   it). An older build is renamed to `<tag>.download\` before it is deleted: one another
   host still runs can't be renamed, so it is left whole instead of half deleted, like a
-  running `yt-dlp.exe`, and a later call removes it.
+  running `yt-dlp.exe`, and a later call removes it. While the lookup takes the
+  single-file fallback, every onedir build is deleted the same way (`onedir-failed` names
+  a release at least as new, so the lookup can't take one, e.g. a damaged build); the
+  exe and the marker stay.
 - If the second rename fails (e.g. a virus scanner holds the new file), the old copy is
   renamed back. An `.old` copy still running in another host can't be deleted; a later
   update removes it, and meanwhile a swap uses a unique `.old-<hex>` name.
@@ -931,8 +943,11 @@ flowchart TB
 flowchart TB
     A["download_audio()"] -- success --> OK["MP3"]
     A -- "FileExistsError, ffmpeg failure, timeout,<br/>canceled GUI download" --> RAISE["raise the error"]
-    A -- "yt-dlp failed or missing" --> U["info: checking for a yt-dlp update...<br/>updater.update_yt_dlp()"]
-    U --> J{"YouTube URL, output shows a failed<br/>JS challenge, and no JS runtime?"}
+    A -- "yt-dlp failed or missing" --> B{"output shows a damaged install?<br/>(ImportError, ModuleNotFoundError,<br/>DLL load failed)"}
+    B -- no --> U["info: checking for a yt-dlp update...<br/>updater.update_yt_dlp()"]
+    B -- yes --> R["info: yt-dlp is damaged, repairing it...<br/>updater.update_yt_dlp(damaged=True)<br/>(a current onedir build → single-file exe)"]
+    U --> J
+    R --> J{"YouTube URL, output shows a failed<br/>JS challenge, and no JS runtime?"}
     J -- yes --> DN["info: downloading Deno once...<br/>updater.install_deno()"]
     J -- no --> C
     DN --> C{"new yt-dlp.exe installed<br/>or Deno installed?"}
@@ -942,6 +957,11 @@ flowchart TB
 
 - Runs in the host, so sidebar, context-menu and GUI downloads all get it, and the
   updater only loads on this failure path.
+- A damaged onedir build (`BROKEN_INSTALL_FAILURES`, e.g. a virus scanner quarantined a
+  DLL) still answers `--version`, so `get_version` and a plain update see a working,
+  current yt-dlp. Only the download's output shows it; then the release switches to the
+  single-file exe, which a scanner can't break this way. The build is not reinstalled:
+  the scanner would remove the file again, so every download would download it again.
 - Deno (`updater.install_deno`): the latest `denoland/deno` release's
   `deno-x86_64-pc-windows-msvc.zip`, checked against its `.sha256sum` (PowerShell
   `Get-FileHash` format, so the hash is found by regex), unpacked to `deno.download.exe`,
@@ -957,6 +977,7 @@ flowchart TB
 | Host killed mid-download of an update                         | Only a temp file is left (`yt-dlp.download.exe`, `yt-dlp\<tag>.download\` and `.zip`, `*.download`); the next update removes it. |
 | yt-dlp's onedir build can't be installed (e.g. antivirus)     | `yt-dlp\onedir-failed` names the release, and the single-file `yt-dlp.exe` runs until the next release.     |
 | An old yt-dlp build or `yt-dlp.exe` still runs in another host | It can't be deleted (a build can't be renamed), so it stays whole; a later `get_version` removes it.        |
+| A file of the yt-dlp build removed (e.g. antivirus quarantine) | `--version` still works; the download fails with an `ImportError`, the single-file exe is used for this release and the download retried. |
 | Host killed between the two yt-dlp renames                    | `yt-dlp.exe` missing, `.old` copy there: the next update (or repair) puts it back, offline too.              |
 | Two hosts update at once                                      | The second waits for the lock, then finds yt-dlp current and downloads nothing.                              |
 | Download truncated or damaged, or the release lacks checksums | Checksum or size check fails, nothing is installed, the user is told why.                                    |
@@ -985,7 +1006,7 @@ sequenceDiagram
     SB->>SB: isWebUrl(url)
     SB->>BG: native_action download, requestId
     BG->>BG: whitelist check, runNativeAction(origin sidebar)
-    BG->>H: connectNative + postMessage, start 47 min timer
+    BG->>H: connectNative + postMessage, start 51 min timer
     H->>H: main() then run_native()
     opt folder doesn't exist
         H-->>BG: error, final true (the folder is named, nothing is downloaded)
@@ -1170,7 +1191,7 @@ folders or a real video; everything else runs for real. Real `Popen` and pipes, 
 | `test_core_helpers.py`    | Filenames, artist and tags, folders, URL check, error messages.                                                         |
 | `test_download_audio.py`  | `download_audio` with the fake yt-dlp: naming, warnings, errors, timeout and cleanup.                                   |
 | `test_embed_thumbnail.py` | `embed_thumbnail` and the whole pipeline with the real ffmpeg (skipped without one).                                    |
-| `test_repair.py`          | `download_with_repair` with fake repairs (yt-dlp update, Deno).                                                         |
+| `test_repair.py`          | `download_with_repair` with fake repairs (yt-dlp update or damaged build, Deno).                                            |
 | `test_native_host.py`     | The native-messaging contract through `MP3.main()` with real framed bytes, including the update actions.                |
 | `test_health.py`          | The `get_version` facts.                                                                                                |
 | `test_github.py`          | `latest_release_tag` against a local HTTP server that answers like github.com.                                          |
@@ -1223,10 +1244,11 @@ internet or the real binaries gets `@pytest.mark.network`.
 - No stdout output in host code other than `send_message`.
 - Exactly one `final: true` response per request. Intermediate responses must set
   `final: false` explicitly.
-- `ACTION_TIMEOUTS_MS` must stay above the host's worst case: `download` (47 min) above
+- `ACTION_TIMEOUTS_MS` must stay above the host's worst case: `download` (51 min) above
   the yt-dlp call (900 s) + ffmpeg (50 s) + a yt-dlp update + Deno + one retry (about
-  45 min); `update_yt_dlp` (7 min) above ~345 s; `update_host` (9 min) above ~485 s. The
-  sums are in the comment above `ACTION_TIMEOUTS_MS`.
+  50 min); `update_yt_dlp` (11 min) above ~595 s (a onedir build that fails its test-run,
+  then the single-file exe: two downloads); `update_host` (9 min) above ~485 s. The
+  sums are in the comment above `ACTION_TIMEOUTS_MS`; `test_versions.py` checks the first two.
 - `app_manifest`, `yt.downloader@converter.org`, `mp3.exe`, the installer's `AppName` and
   its output name are fixed (§3.1).
 - No update ever leaves a broken tool or host (§7): download to a temp name, check the

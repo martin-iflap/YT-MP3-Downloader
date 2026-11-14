@@ -238,7 +238,7 @@ test('an update that times out does not hang the check', async () => {
   const { final, calls } = await checkHost({
     get_version: report(OLD_YT_DLP),
     update_yt_dlp: () => {} // never answers
-  }, { clockMs: 8 * 60 * 1000 });
+  }, { clockMs: 12 * 60 * 1000 });
   assert.deepStrictEqual(calls, ['get_version', 'update_yt_dlp']);
   assert.match(final.message, /Automatic repair failed: Native host did not respond in time/);
 });

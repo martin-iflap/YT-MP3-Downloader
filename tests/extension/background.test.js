@@ -183,7 +183,7 @@ test('long downloads are not cut off early; a real timeout ends the request once
   sidebarAction(browser, 'download', { url: VIDEO_URL });
   const [port] = state.ports;
 
-  mock.timers.tick(46 * 60 * 1000);
+  mock.timers.tick(50 * 60 * 1000);
   await flush();
   assert.equal(finals(state).length, 0, 'still within the host\'s budget for a download, a repair and a retry');
 
