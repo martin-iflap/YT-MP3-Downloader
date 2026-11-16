@@ -106,7 +106,7 @@ host/
     config.py               Install layout and paths, DEFAULT_FOLDER, setup_logging()
     health.py               get_version facts: versions, tool state; version parsing and comparison
     github.py               latest_release_tag() (one HEAD request per lookup)
-    updater.py              update_yt_dlp(), install_deno(), update_host(), the update lock
+    updater.py              update_yt_dlp(), install_and_update_deno(), update_host(), the update lock
     processes.py            launch_detached(): processes that outlive the host (installer, player)
     selfcheck.py            mp3.exe --self-check, run by the installer
     gui.py                  customtkinter window and folder picker (imported only by GUI actions)
@@ -790,7 +790,7 @@ a build, `yt-dlp.exe`.
 
 ```mermaid
 flowchart TB
-    L["update_lock()"] --> R["recover_yt_dlp() (single-file exe, see below);<br/>remove &lt;tag&gt;.download\ and .download.zip leftovers"]
+    L["update_lock()"] --> R["recover_exe() (single-file exe, see below);<br/>remove &lt;tag&gt;.download\ and .download.zip leftovers"]
     R --> V["current = --version of yt_dlp_path()"]
     V --> T{"latest tag?"}
     T -- "unknown (offline)" --> K1{"current works?"}
@@ -947,10 +947,10 @@ flowchart TB
     B -- no --> U["info: checking for a yt-dlp update...<br/>updater.update_yt_dlp()"]
     B -- yes --> R["info: yt-dlp is damaged, repairing it...<br/>updater.update_yt_dlp(damaged=True)<br/>(a current onedir build → single-file exe)"]
     U --> J
-    R --> J{"YouTube URL, output shows a failed<br/>JS challenge, and no JS runtime?"}
-    J -- yes --> DN["info: downloading Deno once...<br/>updater.install_deno()"]
+    R --> J{"YouTube URL, output shows a failed<br/>JS challenge, and no JS runtime<br/>or the host's own deno.exe?"}
+    J -- yes --> DN["info: downloading Deno / checking for a Deno update...<br/>updater.install_and_update_deno()"]
     J -- no --> C
-    DN --> C{"new yt-dlp.exe installed<br/>or Deno installed?"}
+    DN --> C{"new yt-dlp.exe installed<br/>or deno.exe installed or replaced?"}
     C -- no --> RAISE
     C -- yes --> RETRY["info: trying again...<br/>download_audio() once more"]
 ```
@@ -962,12 +962,15 @@ flowchart TB
   current yt-dlp. Only the download's output shows it; then the release switches to the
   single-file exe, which a scanner can't break this way. The build is not reinstalled:
   the scanner would remove the file again, so every download would download it again.
-- Deno (`updater.install_deno`): the latest `denoland/deno` release's
+- Deno (`updater.install_and_update_deno`): the latest `denoland/deno` release's
   `deno-x86_64-pc-windows-msvc.zip`, checked against its `.sha256sum` (PowerShell
   `Get-FileHash` format, so the hash is found by regex), unpacked to `deno.download.exe`,
-  test-run with `deno eval`, renamed to `deno.exe`. It is passed to yt-dlp as
-  `--js-runtimes deno:<path>` (yt-dlp only searches PATH). It costs ~5.5 s per download,
-  so it is never installed up front, and it is never updated afterwards (like ffmpeg).
+  test-run with `deno eval`, swapped in as `deno.exe` by two renames like the single-file
+  yt-dlp (§7.3), since another host's download may still run the old one. It is passed to
+  yt-dlp as `--js-runtimes deno:<path>` (yt-dlp only searches PATH). It costs ~5.5 s per
+  download, so it is never installed up front. When YouTube's challenge still fails with
+  the host's own Deno, it is updated if a newer release exists (a current one is kept, and
+  the download is not retried); a Deno on PATH is the user's and is left alone.
 
 ### 7.7 What happens when something goes wrong
 
@@ -1286,13 +1289,13 @@ speed silently.
 | Issue                                                           | Details                                                                                                                                                                                                                                         |
 |-----------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Cancel right after the download starts can leave yt-dlp running | If `kill_process_tree` runs before yt-dlp.exe's bootloader has started its real child, only the bootloader dies. The orphan keeps the pipe open and the cancel waits until it finishes. Possible fix: kill the tree again after a short delay.  |
-| Deno is never updated                                           | If a future yt-dlp needs a newer Deno, the failure path only installs a missing one (PLAN).                                                                                                                                                     |
 | The installer is not code-signed                                | Firefox and SmartScreen warn on the manual download; the sidebar explains how to proceed. The silent self-update is not affected.                                                                                                               |
 
 Resolved:
 
 | Former issue                                                                                                                     | Resolution                                                                                                                                                                  |
 |----------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Deno was never updated: a newer yt-dlp needing a newer Deno kept failing                                                         | `install_and_update_deno` updates the host's `deno.exe` when YouTube's challenge still fails with it.                                                                       |
 | Updates ran only from the sidebar (2.0.0)                                                                                        | `checkHostInBackground` checks at most once a day, after startup and after a context-menu download (2.1.0).                                                                 |
 | A broken release was started again on every sidebar open after the 10 min grace, with 3 min of "Updating..." (2.0.0)             | The same installer is retried only once a day (`INSTALL_RETRY_S`); meanwhile `update_host` fails at once (2.1.0).                                                           |
 | A second sidebar during an update showed nothing until the end (2.0.0)                                                           | A sidebar that joins a running check gets its progress messages (2.1.0).                                                                                                    |

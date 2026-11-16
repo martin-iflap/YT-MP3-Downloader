@@ -1,6 +1,6 @@
 """core.download_with_repair: a download that fails in yt-dlp is retried once after a repair.
 
-The repairs themselves (updater.update_yt_dlp, updater.install_deno) are replaced by
+The repairs themselves (updater.update_yt_dlp, updater.install_and_update_deno) are replaced by
 recorders that change the fake install the way the real ones would; test_updater.py
 tests them against a local release server.
 """
@@ -13,11 +13,13 @@ from pathlib import Path
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
+from fake_yt_dlp import OUTDATED_DENO
 from ytmp3_host import core, health, updater, ytdlp
 from ytmp3_host.updater import UpdateError
 
 URL = "https://www.youtube.com/watch?v=abc123"
 CHECKING = "The download failed, checking for a yt-dlp update..."
+DENO_UPDATE = "YouTube still needs an extra component for this video (Deno), checking for an update..."
 RETRYING = "Trying the download again..."
 
 
@@ -29,6 +31,7 @@ class Repairs:
     new_yt_dlp: bool = False  # update_yt_dlp installs a new exe
     new_yt_dlp_works: bool = True  # and it downloads fine
     update_error: type[Exception] | None = None  # update_yt_dlp raises this
+    new_deno: bool = True  # install_and_update_deno writes a new deno.exe; False: the installed one is current
     calls: list[str] = field(default_factory=list)
     infos: list[str] = field(default_factory=list)
 
@@ -42,9 +45,10 @@ class Repairs:
                 self.fake_yt_dlp.set("success")
         return "2026.10.21"
 
-    def install_deno(self) -> str:
-        self.calls.append("install_deno")
-        (self.bin_dir / "deno.exe").write_bytes(b"deno")
+    def install_and_update_deno(self) -> str:
+        self.calls.append("install_and_update_deno")
+        if self.new_deno:
+            (self.bin_dir / "deno.exe").write_bytes(b"deno 2.9.8")
         return "2.9.8"
 
     def download(self, out_dir: Path, is_cancelled: Callable[[], bool] = lambda: False, url: str = URL) -> Path:
@@ -56,7 +60,7 @@ def repairs(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], monkeypatch: py
     """Fake repairs on the fake_yt_dlp install, with no Deno on PATH."""
     state = Repairs(tmp_path / "bin", fake_yt_dlp)
     monkeypatch.setattr(updater, "update_yt_dlp", state.update_yt_dlp)
-    monkeypatch.setattr(updater, "install_deno", state.install_deno)
+    monkeypatch.setattr(updater, "install_and_update_deno", state.install_and_update_deno)
     monkeypatch.setattr(health.shutil, "which", lambda name: None)
     return state
 
@@ -146,8 +150,26 @@ def test_a_missing_ffmpeg_is_not_a_yt_dlp_repair(
 def test_deno_is_installed_when_youtube_wants_javascript(repairs: Repairs, out_dir: Path) -> None:
     repairs.fake_yt_dlp.set("needs_js")  # works once it gets --js-runtimes
     assert repairs.download(out_dir).exists()
-    assert repairs.calls == ["update_yt_dlp", "install_deno"]
-    assert repairs.infos[0] == CHECKING and "Deno" in repairs.infos[1] and repairs.infos[2] == RETRYING
+    assert repairs.calls == ["update_yt_dlp", "install_and_update_deno"]
+    assert repairs.infos[0] == CHECKING and "Deno, about 45 MB" in repairs.infos[1] and repairs.infos[2] == RETRYING
+
+
+def test_an_outdated_deno_is_updated_and_the_download_retried(repairs: Repairs, out_dir: Path) -> None:
+    (repairs.bin_dir / "deno.exe").write_bytes(OUTDATED_DENO)
+    repairs.fake_yt_dlp.set("needs_js")  # fails with the outdated Deno, works with the new one
+    assert repairs.download(out_dir).exists()
+    assert repairs.calls == ["update_yt_dlp", "install_and_update_deno"]
+    assert repairs.infos == [CHECKING, DENO_UPDATE, RETRYING]
+
+
+def test_a_current_deno_is_not_retried(repairs: Repairs, out_dir: Path) -> None:
+    (repairs.bin_dir / "deno.exe").write_bytes(OUTDATED_DENO)
+    repairs.fake_yt_dlp.set("needs_js")
+    repairs.new_deno = False  # there is no newer Deno, so trying again can't help
+    with pytest.raises(subprocess.CalledProcessError, match="non-zero exit status"):
+        repairs.download(out_dir)
+    assert repairs.calls == ["update_yt_dlp", "install_and_update_deno"]
+    assert repairs.infos == [CHECKING, DENO_UPDATE]
 
 
 def test_no_deno_download_when_a_runtime_is_there(repairs: Repairs, out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:

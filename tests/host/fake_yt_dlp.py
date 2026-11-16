@@ -8,7 +8,8 @@ version; fail, hang and bad_version apply there too.
 Behavior comes from environment variables:
 
     FAKE_YTDLP_MODE     success (default) | fail | hang | no_title | no_thumb | no_mp3 | bad_version |
-                        needs_js (fails like the real one when YouTube wants JavaScript, unless given --js-runtimes) |
+                        needs_js (fails like the real one when YouTube wants JavaScript, unless given --js-runtimes
+                        with a Deno that is not outdated, i.e. does not hold OUTDATED_DENO) |
                         missing_dll (a onedir build with a DLL a virus scanner removed: --version works, a
                         download fails at an import)
     FAKE_YTDLP_TITLE    the video title to print
@@ -27,6 +28,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+OUTDATED_DENO = b"a Deno too old for YouTube's challenges"
 
 
 def emit(line: str) -> None:
@@ -51,6 +54,14 @@ def print_version(mode: str) -> None:
     emit("[debug] not a version" if mode == "bad_version" else os.environ.get("FAKE_YTDLP_VERSION", "2026.08.19"))
 
 
+def solves_js(args: list[str]) -> bool:
+    """Whether yt-dlp was given a JavaScript runtime (--js-runtimes deno:<path>) that is not outdated."""
+    if "--js-runtimes" not in args:
+        return False
+    deno = Path(args[args.index("--js-runtimes") + 1].removeprefix("deno:"))
+    return deno.read_bytes() != OUTDATED_DENO
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")  # yt-dlp runs with --encoding utf-8
     args = sys.argv[1:]
@@ -72,8 +83,9 @@ def main() -> None:
         emit("[PYI-1234:ERROR] Failed to execute script '__main__' due to unhandled exception!")
         sys.exit(1)
     emit(f"[youtube] Extracting URL: {args[-1]}")
-    if mode == "needs_js" and "--js-runtimes" not in args:
-        emit("WARNING: [youtube] No supported JavaScript runtime could be found.")
+    if mode == "needs_js" and not solves_js(args):
+        if "--js-runtimes" not in args:
+            emit("WARNING: [youtube] No supported JavaScript runtime could be found.")
         emit("WARNING: [youtube] abc123: n challenge solving failed: Some formats may be missing.")
         emit("ERROR: [youtube] abc123: Requested format is not available. Use --list-formats for a list of available formats")
         sys.exit(1)

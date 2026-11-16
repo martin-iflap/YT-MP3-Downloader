@@ -228,7 +228,7 @@ class DownloaderApp(ctk.CTk):
                 ctypes.windll.dwmapi.DwmSetWindowAttribute(
                     hwnd, attribute, ctypes.byref(colorref), ctypes.sizeof(colorref)
                 )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - cosmetic, must never keep the window from opening
             logger.debug("Could not color the title bar: %s", e)
 
     def _set_main_button(self, text: str, command: Callable[[], None], primary: bool = False) -> None:

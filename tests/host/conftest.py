@@ -129,7 +129,7 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     point_yt_dlp_at(monkeypatch, bin_dir / "yt-dlp.exe")
     for module in (core, ytdlp, health):
         monkeypatch.setattr(module, "FFMPEG_PATH", bin_dir / "ffmpeg.exe")
-    for module in (ytdlp, health, updater):
+    for module in (core, ytdlp, health, updater):
         monkeypatch.setattr(module, "DENO_PATH", bin_dir / "deno.exe")
 
     real_build = ytdlp.build_download_command

@@ -1,6 +1,6 @@
 """Updates and repairs: yt-dlp's onedir build is installed per release (the single-file
 yt-dlp.exe only as a fallback), the host runs its installer, and deno.exe is installed
-once a download needs it.
+or updated when a download needs it.
 
 A lost connection or a killed process must never leave a broken tool behind, so
 both updates follow the same rules:
@@ -12,10 +12,10 @@ both updates follow the same rules:
 
 yt-dlp's onedir build goes into a new folder per release, so nothing that runs is
 touched: it is unpacked to <tag>.download\\, test-run and renamed to <tag>\\, the name
-config.yt_dlp_path() looks for. The single-file yt-dlp.exe is swapped by two renames
-(current -> .old, new -> current): a running exe can be renamed but not overwritten,
-so this also works while another host downloads with it. A host killed between the
-renames leaves only the .old file, which recover_yt_dlp() puts back, offline too.
+config.yt_dlp_path() looks for. The single-file yt-dlp.exe and deno.exe are swapped by
+two renames (current -> .old, new -> current): a running exe can be renamed but not
+overwritten, so this also works while another host downloads with it. A host killed
+between the renames leaves only the .old file, which recover_exe() puts back, offline too.
 
 The host cannot replace its own files while it runs, so it downloads its installer
 and starts it silently, outside Firefox's job object (Firefox kills the job's
@@ -253,7 +253,7 @@ def _old_paths(exe: Path) -> list[Path]:
     return sorted(exe.parent.glob(f"{exe.stem}.old*{exe.suffix}"), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
-def recover_yt_dlp(exe: Path) -> None:
+def recover_exe(exe: Path) -> None:
     """Clean up after an interrupted update. Call with the update lock held.
 
     - exe missing but an old copy there (killed between the two renames): the
@@ -282,14 +282,14 @@ def _remove_leftovers(paths: list[Path]) -> None:
 def _swap_in(new: Path, exe: Path) -> None:
     """Make new the installed exe by two renames, then delete the replaced one.
 
-    The old copy is only needed between the renames (recover_yt_dlp puts it back
+    The old copy is only needed between the renames (recover_exe puts it back
     after a kill there). If another host still runs it, Windows can't delete it,
     and a later update removes it.
     """
     old = None
     if exe.exists():
         old = exe.with_name(f"{exe.stem}.old{exe.suffix}")
-        if old.exists():  # recover_yt_dlp could not remove it: it still runs
+        if old.exists():  # recover_exe could not remove it: it still runs
             old = exe.with_name(f"{exe.stem}.old-{uuid.uuid4().hex[:8]}{exe.suffix}")
         exe.rename(old)
     try:
@@ -451,9 +451,9 @@ def update_yt_dlp(*, damaged: bool = False) -> str:
             installed one is left as it was.
     """
     with update_lock():
-        recover_yt_dlp(config.YT_DLP_PATH)
+        recover_exe(config.YT_DLP_PATH)
         _remove_onedir_leftovers()
-        # Deno is installed once, so a killed install would otherwise keep its ~140 MB until the uninstallation
+        # Deno is only touched when a download needs it, so a killed install could keep its ~140 MB for a long time
         _remove_leftovers(list(_deno_leftovers(DENO_PATH)))
         exe = yt_dlp_path()
         current = _yt_dlp_version(exe)
@@ -574,7 +574,7 @@ def remove_unused_yt_dlp() -> None:
 
 
 def _deno_leftovers(exe: Path) -> tuple[Path, Path]:
-    """The zip and the unpacked exe install_deno works on; a killed installation leaves them behind."""
+    """The zip and the unpacked exe install_and_update_deno works on; a killed installation leaves them behind."""
     return exe.with_name(f"{exe.stem}.download.zip"), _new_path(exe)
 
 
@@ -593,25 +593,39 @@ def _extract(archive: Path, member: str, dest: Path) -> None:
         raise UpdateError(f"Could not unpack {member} from {archive.name}: {e}") from e
 
 
-def install_deno() -> str:
-    """Install Deno, the JavaScript runtime yt-dlp needs once YouTube makes it solve its challenges.
-    Only called when a download failed for that reason, and never updated afterward
-    (like ffmpeg). Nothing is downloaded when a working deno.exe is already there
-    (e.g. another host installed it while this one waited for the lock).
+def install_and_update_deno() -> str:
+    """Install or update Deno, the JavaScript runtime yt-dlp needs once YouTube makes it solve its challenges.
+
+    Only called when a download failed for that reason (core.download_with_repair), never
+    up front: Deno costs ~5.5 s per download. Nothing is downloaded when the installed
+    deno.exe works and is current; offline, a working one is kept. A new deno.exe is test-run
+    before it replaces the installed one, which is renamed aside first (_swap_in), since another
+    host's download may still run it. recover_exe puts it back after a kill between the
+    renames, and removes it once no host runs it.
 
     Returns:
         The version of the deno.exe now installed.
     Raises:
-        UpdateError: If no working Deno could be installed.
+        UpdateError: If no working, current Deno could be installed. The installed
+            one is left as it was.
     """
     exe = DENO_PATH
     archive, new = _deno_leftovers(exe)
     with update_lock():
-        _remove_leftovers([archive, new])  # from an installation that was killed
-        if exe.exists() and (version := read_version(deno_version_command(exe))):
-            return version
         try:
-            tag = _checked_tag(DENO_REPO)
+            recover_exe(exe)
+            current = read_version(deno_version_command(exe)) if exe.exists() else None
+            try:
+                tag = _checked_tag(DENO_REPO)
+            except UpdateError as e:
+                if current:  # offline, but the installed one works
+                    logger.warning("Keeping Deno %s: %s", current, e)
+                    return current
+                raise
+
+            if current and is_outdated(current, tag) is False:
+                return current  # already up to date
+
             sums = SHA256_RE.search(fetch_text(asset_url(DENO_REPO, tag, DENO_SUMS)))
             if not sums:
                 raise UpdateError(f"The Deno {tag} release has no checksum for {DENO_ASSET}")
@@ -623,12 +637,12 @@ def install_deno() -> str:
             version = read_version(deno_version_command(new))
             if version is None:
                 raise UpdateError(f"The downloaded Deno {tag} does not run")
-            new.replace(exe)  # a deno.exe that is there does not run, nothing uses it
+            _swap_in(new, exe)
         except UpdateError as e:
             raise UpdateError(f"Deno could not be installed: {e}") from e
         finally:
             _remove_leftovers([archive, new])
-    logger.info("Installed Deno %s", version)
+    logger.info("Installed Deno %s (was %s)", version, current)
     return version
 
 

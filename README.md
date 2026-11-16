@@ -81,7 +81,8 @@ of its tools, and fixes what it can:
   checksum-verified and test-run before it is swapped in.
 - **A download that fails in yt-dlp** (from the sidebar, the right-click menu or the app
   window) updates yt-dlp and tries once more. If YouTube asks for a JavaScript challenge,
-  the app downloads Deno (about 45 MB) once and uses it from then on.
+  the app downloads Deno (about 45 MB) and uses it from then on, and updates it when YouTube
+  needs a newer one.
 
 Anything it can't fix is shown in the sidebar with a link to the installer, which
 repairs every problem with the app. Offline, nothing is checked or changed.

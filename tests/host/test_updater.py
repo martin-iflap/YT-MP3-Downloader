@@ -825,34 +825,34 @@ def publish_deno(server: ReleaseServer, exe: bytes = script("2.9.8"), checksum_o
 
 def test_deno_is_installed_from_the_checked_zip(deno: Path, install: Install, server: ReleaseServer) -> None:
     publish_deno(server)
-    assert updater.install_deno() == "2.9.8"
+    assert updater.install_and_update_deno() == "2.9.8"
     assert deno.read_bytes() == script("2.9.8")
     assert install.files == ["deno.exe", "yt-dlp.exe"]  # no zip or download left
 
 
-def test_a_working_deno_is_not_downloaded_again(deno: Path, server: ReleaseServer) -> None:
+def test_a_current_deno_is_not_downloaded_again(deno: Path, server: ReleaseServer) -> None:
     deno.write_bytes(script("2.9.8"))
-    assert updater.install_deno() == "2.9.8"
+    assert updater.install_and_update_deno() == "2.9.8"
     assert server.requests == []
 
 
 def test_a_broken_deno_is_replaced(deno: Path, server: ReleaseServer) -> None:
     deno.write_bytes(script(None))
     publish_deno(server)
-    assert updater.install_deno() == "2.9.8"
+    assert updater.install_and_update_deno() == "2.9.8"
 
 
 def test_a_damaged_deno_is_never_installed(deno: Path, install: Install, server: ReleaseServer) -> None:
     publish_deno(server, checksum_of=b"the real zip")
     with pytest.raises(UpdateError, match="Deno could not be installed: .* damaged"):
-        updater.install_deno()
+        updater.install_and_update_deno()
     assert install.files == ["yt-dlp.exe"]
 
 
 def test_a_deno_that_does_not_run_is_never_installed(deno: Path, install: Install, server: ReleaseServer) -> None:
     publish_deno(server, exe=script(None))
     with pytest.raises(UpdateError, match="does not run"):
-        updater.install_deno()
+        updater.install_and_update_deno()
     assert install.files == ["yt-dlp.exe"]
 
 
@@ -867,7 +867,7 @@ def kill_leftovers(deno: Path) -> list[Path]:
 def test_a_killed_deno_install_is_cleaned_up_by_the_next_one(deno: Path, install: Install, server: ReleaseServer) -> None:
     deno.write_bytes(script("2.9.8"))  # e.g. another host finished it
     kill_leftovers(deno)
-    updater.install_deno()
+    updater.install_and_update_deno()
     assert install.files == ["deno.exe", "yt-dlp.exe"]
 
 
@@ -880,7 +880,73 @@ def test_a_killed_deno_install_is_cleaned_up_by_a_yt_dlp_update(deno: Path, inst
 def test_deno_offline_is_an_error(deno: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     latest(monkeypatch)
     with pytest.raises(UpdateError, match="Deno could not be installed: GitHub could not be reached"):
-        updater.install_deno()
+        updater.install_and_update_deno()
+
+
+def test_an_outdated_deno_is_replaced(deno: Path, install: Install, server: ReleaseServer) -> None:
+    deno.write_bytes(script("2.9.7"))
+    publish_deno(server)
+    assert updater.install_and_update_deno() == "2.9.8"
+    assert deno.read_bytes() == script("2.9.8")
+    assert install.files == ["deno.exe", "yt-dlp.exe"]
+
+
+def test_offline_an_outdated_working_deno_is_kept(deno: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    deno.write_bytes(script("2.9.7"))
+    latest(monkeypatch)
+    assert updater.install_and_update_deno() == "2.9.7"
+    assert deno.read_bytes() == script("2.9.7")
+
+
+def test_new_exe_doesnt_run_so_the_old_one_stays(deno: Path, install: Install, server: ReleaseServer) -> None:
+    deno.write_bytes(script("2.9.7"))
+    publish_deno(server, exe=script(None))  # the new one fails to run
+    with pytest.raises(UpdateError, match="does not run"):
+        updater.install_and_update_deno()
+    assert deno.read_bytes() == script("2.9.7")
+    assert install.files == ["deno.exe", "yt-dlp.exe"]
+
+
+def test_a_deno_killed_between_the_renames_is_restored(deno: Path, install: Install, server: ReleaseServer) -> None:
+    deno.with_name("deno.old.exe").write_bytes(script("2.9.8"))
+    assert updater.install_and_update_deno() == "2.9.8"
+    assert server.requests == [], "the old exe is restored, not downloaded"
+    assert install.files == ["deno.exe", "yt-dlp.exe"]
+
+
+def test_a_replaced_deno_still_running_is_removed_by_the_next_call(
+    deno: Path, install: Install, server: ReleaseServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deno.write_bytes(script("2.9.7"))
+    publish_deno(server)
+    real_unlink = Path.unlink
+
+    def running(path: Path, missing_ok: bool = False) -> None:
+        if path.name.startswith("deno.old"):
+            raise PermissionError(13, "Access is denied")  # like a running exe
+        real_unlink(path, missing_ok=missing_ok)
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "unlink", running)
+        assert updater.install_and_update_deno() == "2.9.8"
+    assert deno.read_bytes() == script("2.9.8")
+    assert deno.with_name("deno.old.exe").read_bytes() == script("2.9.7"), "renamed aside, not deleted"
+    assert updater.install_and_update_deno() == "2.9.8"  # that host has finished
+    assert install.files == ["deno.exe", "yt-dlp.exe"]
+    assert server.gets(updater.DENO_ASSET) == 1
+
+
+def test_two_deno_updates_at_once_download_once(deno: Path, server: ReleaseServer) -> None:
+    deno.write_bytes(script("2.9.7"))
+    publish_deno(server)
+    results: list[str] = []
+    threads = [threading.Thread(target=lambda: results.append(updater.install_and_update_deno())) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+    assert results == ["2.9.8", "2.9.8"]
+    assert server.gets(updater.DENO_ASSET) == 1, "the second saw the first's update and did not download"
 
 
 # --- host self-update ---------------------------------------------------------

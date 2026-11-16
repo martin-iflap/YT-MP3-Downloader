@@ -44,7 +44,7 @@ extend-exclude = ["legacy"]
 # `from x import a, b as c` stays one statement instead of one per alias
 combine-as-imports = true
 # the tests import the installed package; without this ruff sorts it with the third-party imports
-known-first-party = ["ytmp3_host", "conftest"]
+known-first-party = ["ytmp3_host", "conftest", "fake_yt_dlp"]
 
 [tool.ruff.lint.per-file-ignores]
 # the module name is part of `python -m ytmp3_host.MP3`, the PyInstaller entry point and the logger name
