@@ -12,6 +12,7 @@ from typing import Any
 
 from ytmp3_host.core import describe_error, download_with_repair
 from ytmp3_host.files import downloaded_mp3, folder_is_writable, open_file, resolve_folder, show_in_folder
+from ytmp3_host.media_format import MediaFormat
 from ytmp3_host.naming import filename_too_long, filename_too_long_message, is_web_url, requested_filename
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ def run_open_file(path: str, select: bool) -> None:
     send_message({"status": "success", "final": True})
 
 
-def run_native(url: str, folder: str, filename: str) -> None:
+def run_native(url: str, folder: str, filename: str, media_format: MediaFormat) -> None: # todo: make the explicit arguments mandatory?
     """Handle a headless download request and send its responses.
     Sends intermediate warnings (no title; no thumbnail) and infos (a repair after a
     yt-dlp failure, see download_with_repair), then exactly one final success or
@@ -142,6 +143,7 @@ def run_native(url: str, folder: str, filename: str) -> None:
         url: The video or track URL.
         folder: The target folder; empty means the default folder.
         filename: The requested filename; empty means name it after the video title.
+        media_format: The requested media format (MP3 or MP4) and its options.
     """
     if not is_web_url(url):
         send_message({"status": "error", "message": "Invalid URL", "final": True})
@@ -167,10 +169,11 @@ def run_native(url: str, folder: str, filename: str) -> None:
         send_message({"status": "warning", "message": message, "final": False})
 
     try:
-        mp3_path = download_with_repair(
+        file_path = download_with_repair(
             url,
             folder_path,
             safe_name,
+            media_format=media_format,
             on_warning=_send_warning,
             on_info=lambda message: send_message({"status": "info", "message": message, "final": False}),
         )
@@ -191,8 +194,8 @@ def run_native(url: str, folder: str, filename: str) -> None:
         send_message({"status": "error", "message": f"Download failed: {describe_error(e)}", "final": True})
         return
 
-    response: Message = {"status": "success", "filename": mp3_path.stem, "path": str(mp3_path), "final": True}
+    response: Message = {"status": "success", "filename": file_path.stem, "path": str(file_path), "final": True}
     if warnings:
         # the final message replaces the warnings in the sidebar, so repeat them there
-        response["message"] = f"Downloaded: {mp3_path.stem}. {'. '.join(warnings)}."
+        response["message"] = f"Downloaded: {file_path.stem}. {'. '.join(warnings)}."
     send_message(response)

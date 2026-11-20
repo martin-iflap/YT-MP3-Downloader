@@ -25,6 +25,7 @@ from ytmp3_host.files import (
     resolve_folder,
     show_in_folder,
 )
+from ytmp3_host.media_format import Mp3Format
 from ytmp3_host.naming import (
     filename_too_long,
     filename_too_long_message,
@@ -354,6 +355,7 @@ class DownloaderApp(ctk.CTk):
                 url,
                 folder_path,
                 filename,
+                media_format=Mp3Format(),
                 on_progress=lambda p: _show(self.progress_bar.set, p),
                 on_start=_on_start,
                 on_warning=warnings.append,

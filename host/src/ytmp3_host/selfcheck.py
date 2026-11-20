@@ -35,6 +35,7 @@ MODULES = (
     "ytmp3_host.core",
     "ytmp3_host.native_messaging",
     "ytmp3_host.health",
+    "ytmp3_host.media_format",
     "ytmp3_host.github",
     "ytmp3_host.updater",
     "ytmp3_host.gui",

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ytmp3_host import config, core
+from ytmp3_host.media_format import Mp3Format
 
 pytestmark = pytest.mark.network
 
@@ -19,7 +20,7 @@ def test_real_download(out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
             pytest.skip(f"{binary} missing")
     warnings: list[str] = []
 
-    result = core.download_audio(SHORT_VIDEO, out_dir, on_warning=warnings.append)
+    result = core.download_audio(SHORT_VIDEO, out_dir, media_format=Mp3Format(), on_warning=warnings.append)
 
     assert result.exists() and result.stat().st_size > 50_000
     header = result.read_bytes()[:4096]

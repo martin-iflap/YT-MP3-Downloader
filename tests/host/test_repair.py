@@ -15,6 +15,7 @@ import pytest
 from conftest import EmbedCall, FakeYtDlp
 from fake_yt_dlp import OUTDATED_DENO
 from ytmp3_host import core, health, updater, ytdlp
+from ytmp3_host.media_format import Mp3Format
 from ytmp3_host.updater import UpdateError
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -52,7 +53,9 @@ class Repairs:
         return "2.9.8"
 
     def download(self, out_dir: Path, is_cancelled: Callable[[], bool] = lambda: False, url: str = URL) -> Path:
-        return core.download_with_repair(url, out_dir, on_info=self.infos.append, is_cancelled=is_cancelled)
+        return core.download_with_repair(
+            url, out_dir, media_format=Mp3Format(), on_info=self.infos.append, is_cancelled=is_cancelled
+        )
 
 
 @pytest.fixture
@@ -217,6 +220,6 @@ def test_an_ffmpeg_failure_is_not_a_yt_dlp_repair(repairs: Repairs, out_dir: Pat
 def test_progress_lines_do_not_crowd_warnings_out_of_the_error(repairs: Repairs, out_dir: Path) -> None:
     repairs.fake_yt_dlp.set("fail")
     with pytest.raises(subprocess.CalledProcessError) as error:
-        core.download_audio(URL, out_dir)
+        core.download_audio(URL, out_dir, media_format=Mp3Format())
     assert "some harmless warning" in error.value.output
     assert "[download]" not in error.value.output

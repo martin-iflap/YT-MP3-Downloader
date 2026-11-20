@@ -1,5 +1,6 @@
 """core.download_audio with the fake yt-dlp: naming, warnings, errors, timeout and cleanup."""
 
+import functools
 import os
 import subprocess
 import time
@@ -9,9 +10,12 @@ import pytest
 
 from conftest import EmbedCall, FakeYtDlp
 from ytmp3_host import config, core, files, ytdlp
-from ytmp3_host.core import download_audio
+from ytmp3_host.media_format import Mp3Format
 
 URL = "https://www.youtube.com/watch?v=abc123"
+
+# these tests are about the MP3 download; an MP4 test passes its own media_format
+download_audio = functools.partial(core.download_audio, media_format=Mp3Format())
 
 
 def leftovers(folder: Path) -> list[str]:

@@ -10,6 +10,7 @@ from collections.abc import Callable
 
 from ytmp3_host import __version__
 from ytmp3_host.config import setup_logging
+from ytmp3_host.media_format import media_format_from_request
 from ytmp3_host.native_messaging import (
     Message,
     read_message,
@@ -42,7 +43,12 @@ INSTALL_YT_DLP_ARG = "--install-yt-dlp"
 
 def download(request: Message) -> None:
     """Handle the `download` action: a headless download."""
-    run_native(request.get("url", ""), request.get("folder", ""), request.get("filename", ""))
+    try:
+        media_format = media_format_from_request(request)
+    except ValueError as e:
+        send_message({"status": "error", "message": str(e), "final": True})
+        return
+    run_native(request.get("url", ""), request.get("folder", ""), request.get("filename", ""), media_format)
 
 
 def download_gui(request: Message) -> None:

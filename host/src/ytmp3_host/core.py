@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, yt_dlp_path
 from ytmp3_host.files import remove_stale_temp_files, remove_temp_files
+from ytmp3_host.media_format import MediaFormat
 from ytmp3_host.metadata import VideoInfo, artist_for, extra_tags, info_text, named_title, title_filename
 from ytmp3_host.naming import DEFAULT_FILENAME, is_youtube_url, title_from_filename
 from ytmp3_host.ytdlp import find_thumbnail, run_yt_dlp
@@ -107,6 +108,7 @@ def download_audio(
     folder: Path,
     filename: str = "",
     *,
+    media_format: MediaFormat,
     on_progress: Callable[[float], object] | None = None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None = None,
     on_warning: Callable[[str], object] | None = None,
@@ -123,6 +125,7 @@ def download_audio(
         folder: An existing folder to save the MP3 in.
         filename: The filename without extension, already sanitized. An empty
             filename means: name the file after the video title (title_filename).
+        media_format: The requested media format (MP3 or MP4) and its options.
         on_progress: Optional callback receiving the download progress as 0.0-1.0.
             Called from the calling thread.
         on_start: Optional callback receiving the yt-dlp process and the temp stem
@@ -278,6 +281,7 @@ def download_with_repair(
     folder: Path,
     filename: str = "",
     *,
+    media_format: MediaFormat,
     on_progress: Callable[[float], object] | None = None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None = None,
     on_warning: Callable[[str], object] | None = None,
@@ -298,6 +302,7 @@ def download_with_repair(
         url: The URL of the video to download.
         folder: The folder to save the downloaded file in.
         filename: The name of the file to save the download as.
+        media_format: The requested media format (MP3 or MP4) and its options.
         on_progress: Optional callback receiving the download progress, for the user.
         on_start: Optional callback receiving the process and the file path when the download starts.
         on_warning: Optional callback receiving a warning message, for the user.
@@ -314,7 +319,7 @@ def download_with_repair(
             on_info(message)
 
     def _download() -> Path:
-        return download_audio(url, folder, filename, on_progress=on_progress, on_start=on_start, on_warning=on_warning)
+        return download_audio(url, folder, filename, media_format=media_format, on_progress=on_progress, on_start=on_start, on_warning=on_warning)
 
     try:
         return _download()

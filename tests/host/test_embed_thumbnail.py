@@ -9,6 +9,7 @@ import pytest
 from conftest import FakeYtDlp, Media
 from ytmp3_host import core
 from ytmp3_host.core import download_audio, embed_thumbnail
+from ytmp3_host.media_format import Mp3Format
 from ytmp3_host.naming import filename_limit
 
 
@@ -121,7 +122,7 @@ def test_full_pipeline(fake_yt_dlp: FakeYtDlp, ffmpeg: Path, media: Media, out_d
     monkeypatch.setenv("FAKE_YTDLP_THUMB", str(media.cover))
     fake_yt_dlp.set(title="Jay-Z - Empire State of Mind (Official Video)")
 
-    result = download_audio("https://youtu.be/abc", out_dir)
+    result = download_audio("https://youtu.be/abc", out_dir, media_format=Mp3Format())
 
     assert [p.name for p in out_dir.iterdir()] == ["Jay-Z - Empire State of Mind.mp3"]
     info = probe(ffmpeg, result)
