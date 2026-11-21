@@ -4,7 +4,6 @@ The extension relies on: exactly one `final: true` response per request, warning
 with `final: false`, and nothing but valid frames on stdout.
 """
 
-import functools
 import io
 import json
 import subprocess
@@ -15,7 +14,8 @@ from typing import Any
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp, point_yt_dlp_at
-from ytmp3_host import MP3, __version__, config, core, files, health, native_messaging, processes, updater
+from ytmp3_host import MP3, __version__, config, files, health, native_messaging, processes, updater, ytdlp
+from ytmp3_host.media_format import Mp3Format
 from ytmp3_host.naming import MAX_FILENAME_CHARS, filename_too_long_message
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
@@ -437,10 +437,22 @@ def test_timeout_is_one_error(
     monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
     fake_yt_dlp.set("hang")
-    monkeypatch.setattr(core, "download_audio", functools.partial(core.download_audio, timeout=1))
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_S", 1)
     [response] = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
     assert response["status"] == "error" and response["final"] is True
     assert response["message"].startswith("Download timed out after 1 s")
+
+
+def test_a_longer_timeout_is_sent_as_a_deadline_without_a_message(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # the extension extends its own timeout with it; with no message, no sidebar shows it
+    fake_yt_dlp.set(info={"filesize_approx": 2_000_000_000})
+    deadline, response = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
+    expected = ytdlp.download_timeout({"filesize_approx": 2_000_000_000}, Mp3Format(), ytdlp.DOWNLOAD_TIMEOUT_S)
+    assert expected > ytdlp.DOWNLOAD_TIMEOUT_S
+    assert deadline == {"status": "info", "deadline_s": expected, "final": False}
+    assert response["status"] == "success" and response["final"] is True
 
 
 def test_several_requests_in_one_session(

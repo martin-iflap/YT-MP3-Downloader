@@ -25,13 +25,34 @@ lazy from ytmp3_host import health, updater
 
 logger = logging.getLogger(__name__)
 
-DOWNLOAD_TIMEOUT_S = 900
-EMBED_TIMEOUT_S = 50
 # what yt-dlp prints when YouTube asks for a JavaScript challenge it could not solve without a runtime
 JS_CHALLENGE_FAILURES = ("Signature solving failed", "n challenge solving failed", "Requested format is not available")
 # what Python prints when a file of yt-dlp's onedir build is missing or blocked (e.g. a virus scanner
 # removed a DLL): `--version` does not load every module, so the build can still look
 BROKEN_INSTALL_FAILURES = ("ImportError", "ModuleNotFoundError", "DLL load failed")
+
+EMBED_TIMEOUT_S = 50
+EMBED_MIN_SPEED_BPS = 20_000_000  # for slow disks
+EMBED_TIMEOUT_CAP_S = 10 * 60  # 11 GB at EMBED_MIN_SPEED_BPS; bigger files need a faster disk
+
+
+def embed_thumb_timeout(file: Path) -> float:
+    """The timeout for ffmpeg to embed a thumbnail in file, scaled with its size.
+
+    EMBED_TIMEOUT_S plus the time the file takes to copy at EMBED_MIN_SPEED_BPS, never
+    longer than EMBED_TIMEOUT_CAP_S: the cleanup of stale temp files relies on it.
+
+    Args:
+        file: The MP3 or MP4 to embed the thumbnail in.
+    Returns:
+        The timeout in seconds; EMBED_TIMEOUT_S if the file's size can't be read.
+    """
+    try:
+        size = file.stat().st_size
+        return min(EMBED_TIMEOUT_S + size / EMBED_MIN_SPEED_BPS, EMBED_TIMEOUT_CAP_S)
+    except OSError:
+        logger.warning("Could not stat %s for embed timeout, using %.0f s", file, EMBED_TIMEOUT_S)
+        return EMBED_TIMEOUT_S
 
 
 def embed_thumbnail(
@@ -62,7 +83,7 @@ def embed_thumbnail(
         ValueError: If output is neither .mp3 nor .mp4.
         FileExistsError: If output already exists; it is left untouched.
         subprocess.CalledProcessError: If ffmpeg fails. A partial output is removed.
-        subprocess.TimeoutExpired: If ffmpeg takes longer than EMBED_TIMEOUT_S.
+        subprocess.TimeoutExpired: If ffmpeg takes longer than embed_thumb_timeout.
     """
     match output.suffix:
         case ".mp3":
@@ -107,7 +128,7 @@ def embed_thumbnail(
             stderr=subprocess.PIPE,
             text=True,
             check=True,
-            timeout=EMBED_TIMEOUT_S,
+            timeout=embed_thumb_timeout(temp_file),
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         logger.error("Error with thumbnail embedding: %s\n%s", e, e.stderr or "")
@@ -130,7 +151,7 @@ def download_audio(
     on_progress: Callable[[float], object] | None = None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None = None,
     on_warning: Callable[[str], object] | None = None,
-    timeout: float = DOWNLOAD_TIMEOUT_S,
+    on_timeout: Callable[[float], None] | None = None,
 ) -> Path:
     """Download a video or track as media_format (an MP3 or MP4) with cover art and tags.
     yt-dlp writes to a unique temp name in folder and prints the title before it
@@ -150,7 +171,8 @@ def download_audio(
             once the download started, e.g. to cancel it with kill_process_tree.
         on_warning: Optional callback receiving a user-facing message about a
             problem that did not stop the download (no title, no thumbnail).
-        timeout: Seconds the yt-dlp call may take in total.
+        on_timeout: Optional callback receiving yt-dlp's timeout in seconds (counted from its
+            start) when the video info makes it longer (see ytdlp.download_timeout).
 
     Returns:
         The path of the final file (.mp3 or .mp4, see get_suffix).
@@ -186,7 +208,8 @@ def download_audio(
     start = time.perf_counter()
     try:
         info = run_yt_dlp(
-            url, temp_stem, media_format, on_progress=on_progress, on_start=on_start, on_video_info=_check_title, timeout=timeout
+            url, temp_stem, media_format, on_progress=on_progress, on_start=on_start,
+            on_video_info=_check_title, on_timeout=on_timeout,
         )
         downloaded = time.perf_counter()
         logger.debug("yt-dlp took %.2f s, info: %r", downloaded - start, info)
@@ -308,6 +331,7 @@ def download_with_repair(
     on_warning: Callable[[str], object] | None = None,
     on_info: Callable[[str], object] | None = None,
     is_cancelled: Callable[[], bool] = lambda: False,
+    on_timeout: Callable[[float], None] | None = None,
 ) -> Path:
     """download_audio, tried once more after a yt-dlp failure that a repair may fix.
 
@@ -329,6 +353,7 @@ def download_with_repair(
         on_warning: Optional callback receiving a warning message, for the user.
         on_info: Optional callback receiving what the repair is doing, for the user.
         is_cancelled: Tells whether the user canceled; a canceled download is not repaired.
+        on_timeout: Optional callback receiving yt-dlp's longer timeout (see download_audio).
     Returns:
         The path of the final file.
     Raises:
@@ -340,7 +365,10 @@ def download_with_repair(
             on_info(message)
 
     def _download() -> Path:
-        return download_audio(url, folder, filename, media_format=media_format, on_progress=on_progress, on_start=on_start, on_warning=on_warning)
+        return download_audio(
+            url, folder, filename, media_format=media_format, on_progress=on_progress,
+            on_start=on_start, on_warning=on_warning, on_timeout=on_timeout
+        )
 
     try:
         return _download()

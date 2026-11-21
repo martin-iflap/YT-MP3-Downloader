@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from conftest import point_yt_dlp_at
-from ytmp3_host import files, ytdlp
-from ytmp3_host.core import describe_error
+from ytmp3_host import core, files, ytdlp
+from ytmp3_host.core import EMBED_TIMEOUT_CAP_S, describe_error
 from ytmp3_host.files import downloaded_file, resolve_folder
 from ytmp3_host.media_format import Mp3Format, Mp4Format
 from ytmp3_host.metadata import artist_for, extra_tags, parse_info, title_filename
@@ -478,3 +478,49 @@ class TestDownloadTimeout:
         expected = ytdlp.DOWNLOAD_TIMEOUT_BASE_S + 60 * 3_000_000 / ytdlp.MIN_SPEED_BPS
         assert ytdlp.download_timeout(info, Mp4Format(), 10) == expected
         assert ytdlp.download_timeout({"duration": junk}, Mp4Format(), 10) == 10
+
+
+def test_stale_temp_age_is_longer_than_download_plus_embed() -> None:
+    assert files.STALE_TEMP_AGE_S > ytdlp.DOWNLOAD_TIMEOUT_CAP_S + EMBED_TIMEOUT_CAP_S
+
+
+def test_the_fallback_download_timeout_is_below_the_cap() -> None:
+    # download_timeout caps it anyway, but a fallback above the cap would be silently shortened
+    assert ytdlp.DOWNLOAD_TIMEOUT_S <= ytdlp.DOWNLOAD_TIMEOUT_CAP_S
+
+
+def file_of_size(path: Path, size: int) -> Path:
+    """A file of size bytes, without writing them (NTFS extends it sparsely)."""
+    with path.open("wb") as f:
+        f.truncate(size)
+    return path
+
+
+class TestEmbedThumbTimeout:
+    def test_an_empty_file_gets_the_base(self, tmp_path: Path) -> None:
+        assert core.embed_thumb_timeout(file_of_size(tmp_path / "a.mp3", 0)) == core.EMBED_TIMEOUT_S
+
+    def test_scales_with_the_size(self, tmp_path: Path) -> None:
+        file = file_of_size(tmp_path / "a.mp4", 200_000_000)
+        assert core.embed_thumb_timeout(file) == core.EMBED_TIMEOUT_S + 200_000_000 / core.EMBED_MIN_SPEED_BPS
+
+    def test_is_capped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # a slow speed instead of a file of tens of GB
+        monkeypatch.setattr(core, "EMBED_MIN_SPEED_BPS", 1)
+        file = file_of_size(tmp_path / "a.mp4", core.EMBED_TIMEOUT_CAP_S + 1)
+        assert core.embed_thumb_timeout(file) == core.EMBED_TIMEOUT_CAP_S
+
+    def test_a_missing_file_gets_the_base(self, tmp_path: Path) -> None:
+        assert core.embed_thumb_timeout(tmp_path / "gone.mp4") == core.EMBED_TIMEOUT_S
+
+    def test_embed_thumbnail_runs_ffmpeg_with_it(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        temp_file = file_of_size(tmp_path / "_ytmp3_x.mp4", 200_000_000)
+        timeouts: list[float] = []
+
+        def _run(*_args: object, timeout: float, **_kwargs: object) -> None:
+            timeouts.append(timeout)
+
+        monkeypatch.setattr(core.subprocess, "run", _run)
+        core.embed_thumbnail(temp_file, None, "Artist", "Song", tmp_path / "Artist - Song.mp4")
+        assert timeouts == [core.embed_thumb_timeout(temp_file)]
+        assert timeouts[0] > core.EMBED_TIMEOUT_S

@@ -177,6 +177,7 @@ def run_native(*, url: str, folder: str, filename: str, media_format: MediaForma
             media_format=media_format,
             on_warning=_send_warning,
             on_info=lambda message: send_message({"status": "info", "message": message, "final": False}),
+            on_timeout=lambda new: send_message({"status": "info", "deadline_s": new, "final": False}),
         )
     except FileExistsError as e:
         send_message({

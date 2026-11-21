@@ -21,6 +21,7 @@ THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 PROGRESS_RE = re.compile(r"(\d+\.?\d*)%")
 TASKKILL_TIMEOUT_S = 10
 
+DOWNLOAD_TIMEOUT_S = 900
 MIN_SPEED_BPS = 500_000  # bytes per sec
 DOWNLOAD_TIMEOUT_BASE_S = 120   # time needed for other steps
 DOWNLOAD_TIMEOUT_CAP_S = 4 * 3600  # 4h
@@ -186,7 +187,7 @@ def run_yt_dlp(
     on_progress: Callable[[float], object] | None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None,
     on_video_info: Callable[[VideoInfo], None],
-    timeout: float,
+    on_timeout: Callable[[float], None] | None,
 ) -> VideoInfo:
     """Run the yt-dlp download and return the video info.
 
@@ -198,8 +199,7 @@ def run_yt_dlp(
         on_start: Optional callback receiving the process and temp stem once started.
         on_video_info: Callback receiving the video info (see INFO_FIELDS) before the
             download starts; raising from it stops yt-dlp and propagates.
-        timeout: Seconds after which the whole process tree is killed. Once the video
-            info arrives, it is extended to download_timeout (counted from the start).
+        on_timeout: Optional callback receiving the timeout in seconds once it is known.
 
     Returns:
         The video info yt-dlp printed (see INFO_FIELDS), or {} if it printed none.
@@ -230,6 +230,7 @@ def run_yt_dlp(
             timed_out.set()
             kill_process_tree(process)
 
+        timeout = DOWNLOAD_TIMEOUT_S
         watchdog = threading.Timer(timeout, _kill_on_timeout)
         started = time.monotonic()
         watchdog.start()
@@ -249,6 +250,8 @@ def run_yt_dlp(
                         watchdog.cancel()
                         watchdog = threading.Timer(new - (time.monotonic() - started), _kill_on_timeout)
                         watchdog.start()
+                        if on_timeout:
+                            on_timeout(new)
                         timeout = new
                     continue
                 match = PROGRESS_RE.search(line)

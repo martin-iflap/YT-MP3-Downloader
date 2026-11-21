@@ -71,6 +71,18 @@ async function checkHost(answers, { clockMs = 0 } = {}) {
   };
 }
 
+test('the formats a healthy host lists reach the sidebar', async () => {
+  const { final } = await checkHost({ get_version: report({ formats: ['mp3', 'mp4'] }) });
+  assert.equal(final.status, 'success');
+  assert.deepStrictEqual(final.formats, ['mp3', 'mp4']);
+});
+
+test('the formats also reach the sidebar with a host problem', async () => {
+  const { final } = await checkHost({ get_version: report({ formats: ['mp3', 'mp4'], ffmpeg: { installed: false } }) });
+  assert.notEqual(final.status, 'success');
+  assert.deepStrictEqual(final.formats, ['mp3', 'mp4']);
+});
+
 // --- versions -----------------------------------------------------------------------
 
 test('parseVersion accepts plain and v-prefixed dotted versions only', () => {

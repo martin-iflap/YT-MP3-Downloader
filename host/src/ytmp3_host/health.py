@@ -145,6 +145,7 @@ def host_status() -> dict[str, object]:
 
     return {
         "version": __version__,
+        "formats": ["mp3", "mp4"],
         "latest": host_latest,
         "outdated": is_outdated(__version__, host_latest),
         "self_update": INSTALLED,

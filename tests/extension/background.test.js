@@ -183,7 +183,7 @@ test('long downloads are not cut off early; a real timeout ends the request once
   sidebarAction(browser, 'download', { url: VIDEO_URL });
   const [port] = state.ports;
 
-  mock.timers.tick(50 * 60 * 1000);
+  mock.timers.tick(69 * 60 * 1000);
   await flush();
   assert.equal(finals(state).length, 0, 'still within the host\'s budget for a download, a repair and a retry');
 
@@ -195,6 +195,74 @@ test('long downloads are not cut off early; a real timeout ends the request once
   assert.equal(finals(state)[0].status, 'error');
   assert.equal(port.disconnected, true);
 });
+
+const DOWNLOAD_TIMEOUT_MS = 70 * 60 * 1000;
+
+test('a longer yt-dlp timeout from the host moves the timeout, without being relayed', withClock(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+
+  mock.timers.tick(60 * 1000);
+  port.reply({ status: 'info', deadline_s: 3600, final: false });
+  mock.timers.tick(3600 * 1000 + DOWNLOAD_TIMEOUT_MS - 1000);
+  await flush();
+  assert.deepStrictEqual(state.sent, [], 'the deadline is not shown, and the request still runs');
+
+  port.reply({ status: 'success', filename: 'long', final: true });
+  await flush();
+  assert.deepStrictEqual(finals(state).map(m => [m.status, m.filename]), [['success', 'long']]);
+}));
+
+test('the moved timeout still ends a host that never answers, exactly once', withClock(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+
+  port.reply({ status: 'info', deadline_s: 3600, final: false });
+  mock.timers.tick(3600 * 1000 + DOWNLOAD_TIMEOUT_MS);
+  await flush();
+
+  assert.equal(finals(state).length, 1);
+  assert.equal(finals(state)[0].message, 'Native host did not respond in time');
+  assert.equal(port.disconnected, true);
+  mock.timers.tick(DOWNLOAD_TIMEOUT_MS);
+  await flush();
+  assert.equal(finals(state).length, 1);
+}));
+
+test('a deadline never shortens the timeout', withClock(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+
+  port.reply({ status: 'info', deadline_s: 3600, final: false });
+  mock.timers.tick(30 * 60 * 1000);
+  // the retry after a repair starts yt-dlp again with a shorter timeout
+  port.reply({ status: 'info', deadline_s: 600, final: false });
+  mock.timers.tick(3600 * 1000 + DOWNLOAD_TIMEOUT_MS - 30 * 60 * 1000 - 1000);
+  await flush();
+  assert.equal(finals(state).length, 0);
+
+  mock.timers.tick(1000);
+  await flush();
+  assert.equal(finals(state).length, 1);
+  assert.equal(finals(state)[0].status, 'error');
+}));
+
+test('a deadline that is not a positive number is ignored and not relayed', withClock(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+
+  for (const deadline of [-5, 0, 'soon', null, Infinity]) {
+    port.reply({ status: 'info', deadline_s: deadline, final: false });
+  }
+  mock.timers.tick(DOWNLOAD_TIMEOUT_MS);
+  await flush();
+
+  assert.deepStrictEqual(state.sent.map(m => [m.final, m.message]), [[true, 'Native host did not respond in time']]);
+}));
 
 test('sidebar download notifies when the sidebar was closed by the time it finished', async () => {
   const { browser, state } = loadBackground({ sidebarOpen: true });

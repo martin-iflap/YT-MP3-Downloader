@@ -11,9 +11,10 @@ import sys
 import tomllib
 from pathlib import Path
 
-from ytmp3_host import MP3, __version__, config, core, github, updater
+from ytmp3_host import MP3, __version__, config, core, github, updater, ytdlp
 from ytmp3_host.github import HOST_REPO, LOOKUP_TIMEOUT_S
 from ytmp3_host.health import VERSION_TIMEOUT_S, is_outdated, parse_version
+from ytmp3_host.media_format import MP4_CODECS, MP4_QUALITIES, media_format_from_request
 from ytmp3_host.naming import MAX_FILENAME_CHARS, MAX_PATH_CHARS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -128,7 +129,9 @@ DENO_INSTALL_S = UPDATE_START_S + updater.DENO_DOWNLOAD_S + updater.SOCKET_TIMEO
 
 
 def test_the_extension_waits_longer_than_the_slowest_download() -> None:
-    worst_case = 2 * (core.DOWNLOAD_TIMEOUT_S + core.EMBED_TIMEOUT_S) + YT_DLP_UPDATE_S + DENO_INSTALL_S
+    # without a deadline_s the extension waits this long from the start, with one this long after
+    # the deadline: both must cover the embed, a repair and a retry that sends no deadline_s
+    worst_case = 2 * (ytdlp.DOWNLOAD_TIMEOUT_S + core.EMBED_TIMEOUT_CAP_S) + YT_DLP_UPDATE_S + DENO_INSTALL_S
     assert timeout_s("download") > worst_case
 
 
@@ -148,6 +151,22 @@ def test_the_sidebar_limits_the_filename_like_the_host() -> None:
     naming = (REPO_ROOT / "extension" / "naming.js").read_text(encoding="utf-8")
     limits = dict(re.findall(r"^const (MAX_FILENAME_CHARS|MAX_PATH_CHARS) = (\d+);", naming, flags=re.MULTILINE))
     assert limits == {"MAX_FILENAME_CHARS": str(MAX_FILENAME_CHARS), "MAX_PATH_CHARS": str(MAX_PATH_CHARS)}
+
+
+def test_the_sidebar_offers_only_formats_and_choices_the_host_accepts() -> None:
+    formats_js = (REPO_ROOT / "extension" / "formats.js").read_text(encoding="utf-8")
+    block = re.search(r"^const FORMATS = \{(.*?)^};", formats_js, flags=re.MULTILINE | re.DOTALL)
+    assert block, "FORMATS not found in formats.js"
+    formats = re.split(r"^ {2}(\w+): \{", block.group(1), flags=re.MULTILINE)[1:]
+    offered = dict(zip(formats[::2], formats[1::2], strict=True))
+    assert set(offered) == {"mp3", "mp4"}
+    options = {
+        name: re.findall(r"\['([^']+)', '", values)
+        for name, values in re.findall(r"^\s+(\w+): (\[\[.*]]),?$", offered["mp4"], flags=re.MULTILINE)
+    }
+    # the same choices, the same default first
+    assert options == {"quality": list(MP4_QUALITIES), "codec": list(MP4_CODECS)}
+    assert media_format_from_request({}) == media_format_from_request({"format": "mp3"})
 
 
 # The permissions of the extension 1.x users have. Firefox holds back an update that asks

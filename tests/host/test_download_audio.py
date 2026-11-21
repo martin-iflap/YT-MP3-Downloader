@@ -284,10 +284,11 @@ def test_timeout_kills_the_whole_process_tree(
     fake_yt_dlp.set("hang")
     pid_file = tmp_path / "child.pid"
     monkeypatch.setenv("FAKE_YTDLP_CHILD_PID_FILE", str(pid_file))
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_S", 3)
     start = time.monotonic()
 
     with pytest.raises(subprocess.TimeoutExpired) as info:
-        download_audio(URL, out_dir, timeout=3)
+        download_audio(URL, out_dir)
 
     assert time.monotonic() - start < 15
     assert info.value.timeout == 3
@@ -301,27 +302,50 @@ def test_timeout_kills_the_whole_process_tree(
 def test_a_known_size_extends_the_timeout(
     fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # the download takes longer than the timeout passed in, but its size asks for more
+    # the download takes longer than the fallback timeout, but its size asks for more
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_S", 2)
     fake_yt_dlp.set(info={"filesize_approx": 50_000_000})
     monkeypatch.setenv("FAKE_YTDLP_DELAY_S", "3")
-    assert download_audio(URL, out_dir, timeout=2) == out_dir / "Artist - Song.mp3"
+    timeouts: list[float] = []
+
+    assert download_audio(URL, out_dir, on_timeout=timeouts.append) == out_dir / "Artist - Song.mp3"
+    assert timeouts == [ytdlp.download_timeout({"filesize_approx": 50_000_000}, Mp3Format(), 2)]
 
 
 def test_the_extended_timeout_still_stops_a_hanging_download(
     fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # 4 MB at 1 MB/s without a base: 4 s, counted from the start, not from the info
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_S", 2)
     monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_BASE_S", 0)
     monkeypatch.setattr(ytdlp, "MIN_SPEED_BPS", 1_000_000)
     fake_yt_dlp.set("hang", info={"filesize_approx": 4_000_000})
+    timeouts: list[float] = []
     start = time.monotonic()
 
     with pytest.raises(subprocess.TimeoutExpired) as info:
-        download_audio(URL, out_dir, timeout=2)
+        download_audio(URL, out_dir, on_timeout=timeouts.append)
 
+    assert timeouts == [4]
     assert info.value.timeout == 4  # the timeout it ran with, for describe_error
     assert 4 <= time.monotonic() - start < 15
     assert leftovers(out_dir) == []
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        {},  # no size or duration: the fallback stays
+        {"filesize_approx": 5_000_000, "duration": 240},  # an MP3 of a few MB: below the fallback
+    ],
+)
+def test_on_timeout_is_not_called_when_the_timeout_stays(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path, info: dict[str, int]
+) -> None:
+    fake_yt_dlp.set(info=info)
+    timeouts: list[float] = []
+    download_audio(URL, out_dir, on_timeout=timeouts.append)
+    assert timeouts == []
 
 
 def test_cancel_through_on_start_stops_the_download(

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 REMOVE_ATTEMPTS = 6
 REMOVE_RETRY_DELAY_S = 0.5
 # temp files older than this belong to a host that was killed (e.g. Firefox closed mid-download)
-STALE_TEMP_AGE_S = 3600
+STALE_TEMP_AGE_S = 4 * 3600 + 1800  # above ytdlp.DOWNLOAD_TIMEOUT_CAP_S + core.EMBED_TIMEOUT_CAP_S
 
 # what show_in_folder and play may open: never a program
 MEDIA_SUFFIXES = frozenset({".mp3", ".mp4"})

@@ -330,7 +330,7 @@ function fileActions(path) {
     button.className = 'secondary-btn secondary-narrow';
     button.textContent = label;
     button.addEventListener('click', () => sendNativeAction({ action, path }, (resp) => {
-      if (resp.final && resp.status === 'error') showResult(resp.message || 'Could not open the MP3', 'error', resp.helpUrl);
+      if (resp.final && resp.status === 'error') showResult(resp.message || 'Could not open the file', 'error', resp.helpUrl);
     }));
     row.append(button);
   }
