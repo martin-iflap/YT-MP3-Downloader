@@ -9,7 +9,7 @@ import pytest
 from conftest import point_yt_dlp_at
 from ytmp3_host import files, ytdlp
 from ytmp3_host.core import describe_error
-from ytmp3_host.files import downloaded_mp3, resolve_folder
+from ytmp3_host.files import downloaded_file, resolve_folder
 from ytmp3_host.media_format import Mp3Format, Mp4Format
 from ytmp3_host.metadata import artist_for, extra_tags, parse_info, title_filename
 from ytmp3_host.naming import (
@@ -196,18 +196,23 @@ def test_parse_info_ignores_anything_but_a_json_object(text: str) -> None:
     assert parse_info(text) == {}
 
 
-def test_downloaded_mp3_accepts_only_existing_absolute_mp3s(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_downloaded_file_accepts_only_existing_absolute_media(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mp3 = tmp_path / "Song.MP3"
     mp3.write_bytes(b"x")
+    mp4 = tmp_path / "Video.Mp4"
+    mp4.write_bytes(b"x")
     exe = tmp_path / "evil.exe"
     exe.write_bytes(b"x")
+    (tmp_path / "Video.mov").write_bytes(b"x")
     monkeypatch.chdir(tmp_path)
-    assert downloaded_mp3(str(mp3)) == mp3
-    assert downloaded_mp3(str(exe)) is None  # play must never run a program
-    assert downloaded_mp3(str(tmp_path / "gone.mp3")) is None
-    assert downloaded_mp3(str(tmp_path)) is None
-    assert downloaded_mp3("Song.MP3") is None  # relative
-    assert downloaded_mp3("") is None
+    assert downloaded_file(str(mp3)) == mp3
+    assert downloaded_file(str(mp4)) == mp4
+    assert downloaded_file(str(tmp_path / "Video.mov")) is None  # only what the host downloads
+    assert downloaded_file(str(exe)) is None  # play must never run a program
+    assert downloaded_file(str(tmp_path / "gone.mp3")) is None
+    assert downloaded_file(str(tmp_path)) is None
+    assert downloaded_file("Song.MP3") is None  # relative
+    assert downloaded_file("") is None
 
 
 def test_resolve_folder_empty_creates_default(default_folder: Path) -> None:
@@ -329,7 +334,8 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path, monke
     assert value("--playlist-items") == "1"  # a playlist URL still gives one file
     assert value("-o") == f"{stem}.%(ext)s"
     assert value("--print") == (
-        f"before_dl:{ytdlp.INFO_MARKER}%(.{{title,artists,album,release_year,track_number,channel,uploader,webpage_url,extractor_key}})j"
+        f"before_dl:{ytdlp.INFO_MARKER}%(.{{title,artists,album,release_year,track_number,channel,"
+        "uploader,webpage_url,extractor_key,filesize_approx,duration})j"
     )
     assert "--no-simulate" in cmd  # --print must never turn the call into a dry run
     assert value("--ffmpeg-location") == str(ytdlp.FFMPEG_PATH)
@@ -423,3 +429,52 @@ def test_describe_error_os_errors() -> None:
 def test_describe_error_unexpected() -> None:
     assert describe_error(RuntimeError("boom")) == "Unexpected error: boom"
     assert describe_error(OSError("no strerror")) == "Unexpected error: no strerror"
+
+
+class TestDownloadTimeout:
+    def test_nofilesize_noduration_is_fallback(self) -> None:
+        info = {"title": "Song"}
+        assert ytdlp.download_timeout(info, Mp3Format(), 10) == 10
+
+    def test_filesize_uses_min_speed_bps(self) -> None:
+        info = {"title": "Song", "filesize_approx": 10_000_000}
+        expected = ytdlp.DOWNLOAD_TIMEOUT_BASE_S + 10_000_000 / ytdlp.MIN_SPEED_BPS
+        assert ytdlp.download_timeout(info, Mp3Format(), 10) == expected
+        assert ytdlp.download_timeout(info, Mp4Format(), 10) == expected
+
+    def test_duration_uses_the_most_data_the_format_can_need(self) -> None:
+        info = {"duration": 600}
+        base, speed = ytdlp.DOWNLOAD_TIMEOUT_BASE_S, ytdlp.MIN_SPEED_BPS
+        assert ytdlp.download_timeout(info, Mp4Format(), 10) == base + 600 * 3_000_000 / speed  # 4K60 HDR
+        assert ytdlp.download_timeout(info, Mp3Format(), 10) == base + 600 * 40_000 / speed  # 320 kbit/s
+        assert ytdlp.download_timeout(info, Mp4Format(quality="480"), 10) == base + 600 * 3_000_000 / speed
+
+    def test_the_size_wins_over_the_duration(self) -> None:
+        info = {"filesize_approx": 10_000_000, "duration": 36_000}
+        expected = ytdlp.DOWNLOAD_TIMEOUT_BASE_S + 10_000_000 / ytdlp.MIN_SPEED_BPS
+        assert ytdlp.download_timeout(info, Mp4Format(), 10) == expected
+
+    def test_a_small_download_keeps_the_fallback(self) -> None:
+        # what every MP3 is: a few MB of audio must not shorten the 900 s it had before
+        info = {"filesize_approx": 5_000_000, "duration": 240}
+        assert ytdlp.download_timeout(info, Mp3Format(), 900) == 900
+
+    def test_is_capped(self) -> None:
+        info = {"filesize_approx": 100_000_000_000}
+        assert ytdlp.download_timeout(info, Mp4Format(), 10) == ytdlp.DOWNLOAD_TIMEOUT_CAP_S
+
+    def test_the_cap_wins_over_the_fallback(self) -> None:
+        # the stale temp file cleanup relies on no download running longer than the cap
+        above = ytdlp.DOWNLOAD_TIMEOUT_CAP_S + 1
+        cap = ytdlp.DOWNLOAD_TIMEOUT_CAP_S
+        assert ytdlp.download_timeout({"filesize_approx": 5_000_000}, Mp4Format(), above) == cap
+        assert ytdlp.download_timeout({}, Mp4Format(), above) == cap
+
+    @pytest.mark.parametrize("junk", ["NA", "123", 0, -5, None, [1], {"a": 1}])
+    def test_junk_values_count_as_missing(self, junk: object) -> None:
+        assert ytdlp.download_timeout({"filesize_approx": junk}, Mp4Format(), 10) == 10
+        # junk size falls through to the duration
+        info = {"filesize_approx": junk, "duration": 60}
+        expected = ytdlp.DOWNLOAD_TIMEOUT_BASE_S + 60 * 3_000_000 / ytdlp.MIN_SPEED_BPS
+        assert ytdlp.download_timeout(info, Mp4Format(), 10) == expected
+        assert ytdlp.download_timeout({"duration": junk}, Mp4Format(), 10) == 10

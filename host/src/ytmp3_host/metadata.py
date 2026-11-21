@@ -22,7 +22,8 @@ type VideoInfo = dict[str, object]
 # become tags. artists/album/release_year/track_number exist only for YouTube Music uploads
 # and music sites (SoundCloud, Bandcamp, ...); other sites have an uploader instead of a channel.
 INFO_FIELDS = (
-    "title", "artists", "album", "release_year", "track_number", "channel", "uploader", "webpage_url", "extractor_key"
+    "title", "artists", "album", "release_year", "track_number", "channel",
+    "uploader", "webpage_url", "extractor_key", "filesize_approx", "duration",
 )
 # sites whose `artists` list the tracks of a mix, not who made it
 TRACKLIST_EXTRACTORS = frozenset({"Mixcloud"})

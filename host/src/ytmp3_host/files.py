@@ -20,6 +20,9 @@ REMOVE_RETRY_DELAY_S = 0.5
 # temp files older than this belong to a host that was killed (e.g. Firefox closed mid-download)
 STALE_TEMP_AGE_S = 3600
 
+# what show_in_folder and play may open: never a program
+MEDIA_SUFFIXES = frozenset({".mp3", ".mp4"})
+
 
 def ensure_default_folder() -> Path:
     """Create the default download folder if needed.
@@ -122,16 +125,18 @@ def remove_stale_temp_files(folder: Path) -> None:
             logger.warning("Could not remove stale temp file %s: %s", f, e)
 
 
-def downloaded_mp3(path: str) -> Path | None:
-    """The file a `show_in_folder` or `play` request names, if it is an existing MP3.
-    Only MP3s: play opens the file in its default app, which must never run a program.
+def downloaded_file(path: str) -> Path | None:
+    """The file a `show_in_folder` or `play` request names, if it is an existing MP3 or MP4.
+
+    Only MEDIA_SUFFIXES: play opens the file in its default app, which must never run a program.
+
     Args:
         path: The absolute path the extension got from the download's success response.
     Returns:
-        The file, or None if it is not an absolute path to an existing .mp3 file.
+        The file, or None if it is not an absolute path to an existing .mp3 or .mp4 file.
     """
     file = Path(path)
-    return file if file.is_absolute() and file.suffix.lower() == ".mp3" and file.is_file() else None
+    return file if file.is_absolute() and file.suffix.lower() in MEDIA_SUFFIXES and file.is_file() else None
 
 
 def show_in_folder(file: Path) -> None:
@@ -160,7 +165,7 @@ def show_in_folder(file: Path) -> None:
 
 
 def open_file(file: Path) -> None:
-    """Open file in its default app (play an MP3).
+    """Open file in its default app (play an MP3 or MP4).
     Through explorer.exe, which hands it to the running shell: an app this host
     started itself would belong to Firefox's native-messaging job and be ended with
     the host. The path is quoted (Windows paths can't contain quotes).

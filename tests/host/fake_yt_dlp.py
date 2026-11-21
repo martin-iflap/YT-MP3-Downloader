@@ -22,6 +22,7 @@ command without the right format arguments fails like the real one; no_mp3 write
 media file in either format.
     FAKE_YTDLP_THUMB    an image to copy as the .png thumbnail (default: junk .webp)
     FAKE_YTDLP_CHILD_PID_FILE  where hang mode writes the PID of the process it leaves behind
+    FAKE_YTDLP_DELAY_S  seconds the download takes after the info is printed (default 0), for the watchdog
 """
 
 import json
@@ -106,6 +107,7 @@ def main() -> None:
         emit(marker + json.dumps({field: info[field] for field in fields.split(",") if field in info}))
     partial = Path(f"{stem}.webm.part")
     partial.write_bytes(b"partial download")
+    time.sleep(float(os.environ.get("FAKE_YTDLP_DELAY_S", "0")))
     for percent in ("0.0", "42.5", "100.0"):
         emit(f"[download] {percent:>5}% of 3.00MiB at 1.00MiB/s ETA 00:01")
 

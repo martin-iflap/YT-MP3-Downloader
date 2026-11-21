@@ -5,6 +5,7 @@ import logging
 import re
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import assert_never
@@ -19,6 +20,51 @@ INFO_MARKER = "YTMP3_INFO:"
 THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
 PROGRESS_RE = re.compile(r"(\d+\.?\d*)%")
 TASKKILL_TIMEOUT_S = 10
+
+MIN_SPEED_BPS = 500_000  # bytes per sec
+DOWNLOAD_TIMEOUT_BASE_S = 120   # time needed for other steps
+DOWNLOAD_TIMEOUT_CAP_S = 4 * 3600  # 4h
+
+
+def _worst_bytes_per_s(media_format: MediaFormat) -> float:
+    """The most data one second of media can need, for a video without a size."""
+    match media_format:
+        case Mp3Format():
+            return 40_000  # 320 kbit/s source audio
+        case Mp4Format():
+            return 3_000_000  # 4K60 HDR, ~180 MB/min
+        case _:
+            assert_never(media_format)
+
+
+def _positive_number(info: VideoInfo, key: str) -> float | None:
+    """A video info field as a positive number, or None if it is missing or not a positive number."""
+    value = info.get(key)
+    return float(value) if isinstance(value, int | float) and value > 0 else None
+
+
+def download_timeout(info: VideoInfo, media_format: MediaFormat, fallback: float) -> float:
+    """The timeout for a download, from its size in the video info.
+
+    The size is yt-dlp's `filesize_approx`; without it, the duration times the most data one
+    second of the format can need. The timeout is the time that size takes at MIN_SPEED_BPS
+    plus DOWNLOAD_TIMEOUT_BASE_S, never shorter than fallback, so a small download (any MP3)
+    keeps fallback. It is never longer than DOWNLOAD_TIMEOUT_CAP_S, whatever fallback is: the
+    cleanup of stale temp files relies on no download running longer.
+
+    Args:
+        info: The video info (from metadata.parse_info).
+        media_format: The requested media format (MP3 or MP4).
+        fallback: The timeout without a size or duration, and the minimum below the cap.
+
+    Returns:
+        The timeout in seconds.
+    """
+    size = _positive_number(info, "filesize_approx")
+    if size is None and (duration := _positive_number(info, "duration")) is not None:
+        size = duration * _worst_bytes_per_s(media_format)
+    timeout = fallback if size is None else max(fallback, DOWNLOAD_TIMEOUT_BASE_S + size / MIN_SPEED_BPS)
+    return min(timeout, DOWNLOAD_TIMEOUT_CAP_S)
 
 
 def kill_process_tree(process: subprocess.Popen[str]) -> None:
@@ -152,13 +198,14 @@ def run_yt_dlp(
         on_start: Optional callback receiving the process and temp stem once started.
         on_video_info: Callback receiving the video info (see INFO_FIELDS) before the
             download starts; raising from it stops yt-dlp and propagates.
-        timeout: Seconds after which the whole process tree is killed.
+        timeout: Seconds after which the whole process tree is killed. Once the video
+            info arrives, it is extended to download_timeout (counted from the start).
 
     Returns:
         The video info yt-dlp printed (see INFO_FIELDS), or {} if it printed none.
 
     Raises:
-        subprocess.TimeoutExpired: If the download exceeded timeout.
+        subprocess.TimeoutExpired: If the download exceeded its timeout (the extended one, if any).
         subprocess.CalledProcessError: If yt-dlp exited with an error. `output`
             holds the last lines of its output, without progress lines.
         FileNotFoundError: If yt-dlp.exe can't be started (e.g. a corrupt file), for the
@@ -184,6 +231,7 @@ def run_yt_dlp(
             kill_process_tree(process)
 
         watchdog = threading.Timer(timeout, _kill_on_timeout)
+        started = time.monotonic()
         watchdog.start()
 
         info: VideoInfo = {}
@@ -196,6 +244,12 @@ def run_yt_dlp(
                 if line.startswith(INFO_MARKER):
                     info = parse_info(line[len(INFO_MARKER):])
                     on_video_info(info)
+                    new = download_timeout(info, media_format, timeout)
+                    if timeout < new:
+                        watchdog.cancel()
+                        watchdog = threading.Timer(new - (time.monotonic() - started), _kill_on_timeout)
+                        watchdog.start()
+                        timeout = new
                     continue
                 match = PROGRESS_RE.search(line)
                 if match and on_progress:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from ytmp3_host.core import describe_error, download_with_repair
-from ytmp3_host.files import downloaded_mp3, folder_is_writable, open_file, resolve_folder, show_in_folder
+from ytmp3_host.files import downloaded_file, folder_is_writable, open_file, resolve_folder, show_in_folder
 from ytmp3_host.media_format import MediaFormat
 from ytmp3_host.naming import filename_too_long, filename_too_long_message, is_web_url, requested_filename
 
@@ -111,15 +111,15 @@ def send_current_folder(folder: str) -> None:
 
 
 def run_open_file(path: str, select: bool) -> None:
-    """Handle `show_in_folder` (select is True) and `play` for a downloaded MP3.
+    """Handle `show_in_folder` (select is True) and `play` for a downloaded MP3 or MP4.
 
     Args:
-        path: The MP3's path from the download's success response.
+        path: The file's path from the download's success response.
         select: Show the file in Explorer instead of opening it in its default app.
     """
-    file = downloaded_mp3(path)
+    file = downloaded_file(path)
     if file is None:
-        send_message({"status": "error", "message": "The MP3 was moved or deleted", "final": True})
+        send_message({"status": "error", "message": "The file was moved or deleted", "final": True})
         return
     try:
         if select:
@@ -128,7 +128,8 @@ def run_open_file(path: str, select: bool) -> None:
             open_file(file)
     except OSError as e:
         logger.error("Could not open %s: %s", file, e)
-        send_message({"status": "error", "message": f"Could not open the MP3: {describe_error(e)}", "final": True})
+        message = f"Could not open the {file.suffix[1:].upper()}: {describe_error(e)}"
+        send_message({"status": "error", "message": message, "final": True})
         return
     send_message({"status": "success", "final": True})
 

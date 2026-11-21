@@ -180,8 +180,20 @@ def test_show_in_folder_and_play_open_the_downloaded_mp3(
     assert opened == [("show", mp3), ("play", mp3)]
 
 
-@pytest.mark.parametrize("name", ["gone.mp3", "program.exe", None])
-def test_play_refuses_anything_but_an_existing_mp3(
+def test_show_in_folder_and_play_open_a_downloaded_mp4(
+    monkeypatch: pytest.MonkeyPatch, opened: list[tuple[str, Path]], tmp_path: Path
+) -> None:
+    mp4 = tmp_path / "Artist - Video.mp4"
+    mp4.write_bytes(b"x")
+    responses = run_host(monkeypatch, requests(
+        {"action": "show_in_folder", "path": str(mp4)}, {"action": "play", "path": str(mp4)}
+    ))
+    assert responses == [{"status": "success", "final": True}] * 2
+    assert opened == [("show", mp4), ("play", mp4)]
+
+
+@pytest.mark.parametrize("name", ["gone.mp3", "gone.mp4", "program.exe", None])
+def test_play_refuses_anything_but_an_existing_media_file(
     monkeypatch: pytest.MonkeyPatch, opened: list[tuple[str, Path]], tmp_path: Path, name: str | None
 ) -> None:
     (tmp_path / "program.exe").write_bytes(b"x")
@@ -189,7 +201,7 @@ def test_play_refuses_anything_but_an_existing_mp3(
     if name:
         request["path"] = str(tmp_path / name)
     [response] = run_host(monkeypatch, frame(request))
-    assert response == {"status": "error", "message": "The MP3 was moved or deleted", "final": True}
+    assert response == {"status": "error", "message": "The file was moved or deleted", "final": True}
     assert opened == []
 
 
@@ -203,6 +215,7 @@ def test_open_failure_is_one_final_error(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(native_messaging, "show_in_folder", _fail)
     [response] = run_host(monkeypatch, frame({"action": "show_in_folder", "path": str(mp3)}))
     assert response["status"] == "error" and response["final"] is True
+    assert response["message"].startswith("Could not open the MP3: ")
     assert "Explorer could not open the folder" in response["message"]
 
 
@@ -227,6 +240,7 @@ def test_get_version_is_one_final_with_the_host_and_tool_state(
     assert responses[0] == {
         "status": "success",
         "version": __version__,
+        "formats": ["mp3", "mp4"],
         # the latest releases are unknown: no_github (conftest) keeps tests off the network
         "latest": None,
         "outdated": None,
