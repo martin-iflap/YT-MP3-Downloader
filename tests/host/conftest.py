@@ -136,7 +136,9 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     monkeypatch.setattr(
         ytdlp,
         "build_download_command",
-        lambda url, temp_stem: [sys.executable, str(FAKE_YT_DLP), *real_build(url, temp_stem)[1:]],
+        lambda url, temp_stem, media_format: [
+            sys.executable, str(FAKE_YT_DLP), *real_build(url, temp_stem, media_format)[1:]
+        ],
     )
     real_version = health.yt_dlp_version_command
     monkeypatch.setattr(
@@ -145,7 +147,7 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
         lambda exe=None: [sys.executable, str(FAKE_YT_DLP), *real_version(exe)[1:]],
     )
     for var in ("FAKE_YTDLP_MODE", "FAKE_YTDLP_TITLE", "FAKE_YTDLP_VERSION", "FAKE_YTDLP_INFO", "FAKE_YTDLP_MP3",
-                "FAKE_YTDLP_THUMB", "FAKE_YTDLP_CHILD_PID_FILE"):
+                "FAKE_YTDLP_MP4", "FAKE_YTDLP_THUMB", "FAKE_YTDLP_CHILD_PID_FILE"):
         monkeypatch.delenv(var, raising=False)
     return FakeYtDlp(monkeypatch)
 
@@ -210,23 +212,32 @@ def ffmpeg() -> Path:
 
 @dataclass(frozen=True)
 class Media:
-    """Object containing paths to the test MP3 and cover image, created in a temp folder."""
+    """Paths to the test media and cover image, created in a temp folder."""
     mp3: Path  # 1 s sine, LAME V0
+    mp4: Path  # 1 s 320x240 test picture (MPEG-4) with a 1 s sine (AAC)
     cover: Path  # 320x180 PNG, not square on purpose
 
 
 @pytest.fixture(scope="session")
 def media(ffmpeg: Path, tmp_path_factory: pytest.TempPathFactory) -> Media:
-    """Create a 1 s sine MP3 and a 320x180 PNG cover with the real ffmpeg, and return their paths.
+    """Create a 1 s MP3, a 1 s MP4 and a 320x180 PNG cover with the real ffmpeg, and return their paths.
 
-    The cover is not square on purpose, to test the center-cropping in embed_thumbnail.
+    The cover is not square on purpose: embed_thumbnail center-crops it for an MP3 and
+    keeps its shape for an MP4. The MP4 uses ffmpeg's built-in encoders (mpeg4, aac),
+    which every ffmpeg build has, unlike libx264.
     Session scope: generated once per run in a shared temp folder (tmp_path_factory)
     and reused by every test, so tests must only read these files, never change them.
     pytest deletes the folder at the end of a fully passing run.
     """
     folder = tmp_path_factory.mktemp("media")
-    mp3, cover = folder / "sample.mp3", folder / "cover.png"
-    base = [str(ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i"]
-    subprocess.run([*base, "sine=frequency=440:duration=1", "-c:a", "libmp3lame", "-q:a", "0", str(mp3)], check=True)
-    subprocess.run([*base, "color=c=red:s=320x180", "-frames:v", "1", str(cover)], check=True)
-    return Media(mp3, cover)
+    mp3, mp4, cover = folder / "sample.mp3", folder / "sample.mp4", folder / "cover.png"
+    lavfi = [str(ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i"]
+    sine = "sine=frequency=440:duration=1"
+    subprocess.run([*lavfi, sine, "-c:a", "libmp3lame", "-q:a", "0", str(mp3)], check=True)
+    subprocess.run(
+        [*lavfi, "testsrc=size=320x240:rate=15:duration=1", "-f", "lavfi", "-i", sine,
+         "-c:v", "mpeg4", "-c:a", "aac", str(mp4)],
+        check=True,
+    )
+    subprocess.run([*lavfi, "color=c=red:s=320x180", "-frames:v", "1", str(cover)], check=True)
+    return Media(mp3, mp4, cover)

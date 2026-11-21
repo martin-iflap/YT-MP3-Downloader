@@ -133,7 +133,7 @@ def run_open_file(path: str, select: bool) -> None:
     send_message({"status": "success", "final": True})
 
 
-def run_native(url: str, folder: str, filename: str, media_format: MediaFormat) -> None: # todo: make the explicit arguments mandatory?
+def run_native(*, url: str, folder: str, filename: str, media_format: MediaFormat) -> None:
     """Handle a headless download request and send its responses.
     Sends intermediate warnings (no title; no thumbnail) and infos (a repair after a
     yt-dlp failure, see download_with_repair), then exactly one final success or
@@ -151,7 +151,7 @@ def run_native(url: str, folder: str, filename: str, media_format: MediaFormat) 
 
     folder_path = resolve_folder(folder)
     if folder_path is None:
-        # the user's mistake: say so rather than saving the MP3 somewhere they did not ask for
+        # the user's mistake: say so rather than saving the file somewhere they did not ask for
         send_message({"status": "error", "message": missing_folder_message(folder), "final": True})
         return
     if not folder_is_writable(folder_path):

@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, get_args
+from typing import Literal, assert_never, get_args
 
 type Mp4Quality = Literal["best", "1080", "720", "480"]
 type Mp4Codec = Literal["best", "compatible"]
@@ -55,3 +55,14 @@ def media_format_from_request(request: Mapping[str, object]) -> MediaFormat:
             )
         case other:
             raise ValueError(f"Unknown format: {other!r}")
+
+
+def get_suffix(media_format: MediaFormat) -> str:
+    """Get the file extension for a given media format."""
+    match media_format:
+        case Mp3Format():
+            return ".mp3"
+        case Mp4Format():
+            return ".mp4"
+        case _ as unreachable:
+            assert_never(unreachable)

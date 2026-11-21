@@ -48,7 +48,12 @@ def download(request: Message) -> None:
     except ValueError as e:
         send_message({"status": "error", "message": str(e), "final": True})
         return
-    run_native(request.get("url", ""), request.get("folder", ""), request.get("filename", ""), media_format)
+    run_native(
+        url=request.get("url", ""),
+        folder=request.get("folder", ""),
+        filename=request.get("filename", ""),
+        media_format=media_format,
+    )
 
 
 def download_gui(request: Message) -> None:

@@ -10,6 +10,7 @@ from conftest import point_yt_dlp_at
 from ytmp3_host import files, ytdlp
 from ytmp3_host.core import describe_error
 from ytmp3_host.files import downloaded_mp3, resolve_folder
+from ytmp3_host.media_format import Mp3Format, Mp4Format
 from ytmp3_host.metadata import artist_for, extra_tags, parse_info, title_filename
 from ytmp3_host.naming import (
     DEFAULT_FILENAME,
@@ -316,7 +317,7 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path, monke
     build = tmp_path / "yt-dlp" / "2026.10.26"
     build.mkdir(parents=True)
     stem = tmp_path / "_ytmp3_x"
-    cmd = build_download_command("https://youtu.be/abc", stem)
+    cmd = build_download_command("https://youtu.be/abc", stem, Mp3Format())
 
     def value(flag: str) -> str:
         return cmd[cmd.index(flag) + 1]
@@ -335,8 +336,33 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path, monke
     assert {"--no-playlist", "--write-thumbnail", "-x", "--newline", "--progress"} <= set(cmd)
 
 
+@pytest.mark.parametrize(
+    ("media_format", "sort"),
+    [
+        (Mp4Format(), "hdr:sdr"),  # best: no codec or height preference, the source's best
+        (Mp4Format(quality="720"), "res:720,hdr:sdr"),
+        (Mp4Format(codec="compatible"), "vcodec:h264,acodec:aac,hdr:sdr"),
+        # the codec comes first: an earlier -S key wins, so a lower H.264 beats a higher AV1
+        (Mp4Format(quality="480", codec="compatible"), "vcodec:h264,acodec:aac,res:480,hdr:sdr"),
+    ],
+)
+def test_build_download_command_mp4_presets(media_format: Mp4Format, sort: str, tmp_path: Path) -> None:
+    cmd = build_download_command("https://youtu.be/abc", tmp_path / "_ytmp3_x", media_format)
+
+    assert cmd[cmd.index("-S") + 1] == sort
+    assert cmd[cmd.index("--merge-output-format") + 1] == "mp4"
+    assert not {"-x", "--audio-format", "--audio-quality"} & set(cmd)  # those would make it an MP3
+    assert {"--write-thumbnail", "--no-simulate", "--newline"} <= set(cmd)  # the rest of the contract is shared
+    assert cmd[-1] == "https://youtu.be/abc"
+
+
+def test_mp3_command_has_no_video_sort(tmp_path: Path) -> None:
+    cmd = build_download_command("https://youtu.be/abc", tmp_path / "_ytmp3_x", Mp3Format())
+    assert not {"-S", "--merge-output-format"} & set(cmd)
+
+
 def test_a_percent_sign_in_the_folder_is_not_part_of_the_output_template(tmp_path: Path) -> None:
-    cmd = build_download_command("https://youtu.be/abc", tmp_path / "%(title)s" / "_ytmp3_x")
+    cmd = build_download_command("https://youtu.be/abc", tmp_path / "%(title)s" / "_ytmp3_x", Mp3Format())
     assert cmd[cmd.index("-o") + 1] == f"{tmp_path}\\%%(title)s\\_ytmp3_x.%(ext)s"
 
 

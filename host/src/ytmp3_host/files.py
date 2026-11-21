@@ -81,7 +81,7 @@ def folder_is_writable(folder: Path) -> bool:
 
 
 def remove_temp_files(temp_stem: Path) -> None:
-    """Remove every file belonging to one download (temp MP3, thumbnail, partials).
+    """Remove every file belonging to one download (temp media file, thumbnail, partials).
     After a kill, Windows keeps the files locked until the yt-dlp child has fully
     exited, so locked files are retried a few times. Failures are logged, not raised.
 

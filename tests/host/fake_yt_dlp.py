@@ -16,6 +16,10 @@ Behavior comes from environment variables:
     FAKE_YTDLP_INFO     more video info as a JSON object, e.g. {"album": "..."} (default: {"channel": "Some Channel"})
     FAKE_YTDLP_VERSION  the version to print (default 2026.08.19)
     FAKE_YTDLP_MP3      an MP3 to copy as the download (default: junk bytes)
+    FAKE_YTDLP_MP4      the same for an MP4 download
+The download gets the extension the real yt-dlp would give it (output_ext), so a
+command without the right format arguments fails like the real one; no_mp3 writes no
+media file in either format.
     FAKE_YTDLP_THUMB    an image to copy as the .png thumbnail (default: junk .webp)
     FAKE_YTDLP_CHILD_PID_FILE  where hang mode writes the PID of the process it leaves behind
 """
@@ -62,6 +66,15 @@ def solves_js(args: list[str]) -> bool:
     return deno.read_bytes() != OUTDATED_DENO
 
 
+def output_ext(args: list[str]) -> str:
+    """The extension the real yt-dlp gives the finished file, decided by the same arguments."""
+    if "-x" in args:
+        return args[args.index("--audio-format") + 1]
+    if "--merge-output-format" in args:
+        return args[args.index("--merge-output-format") + 1]
+    return "webm"  # what YouTube's best streams merge to without it
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")  # yt-dlp runs with --encoding utf-8
     args = sys.argv[1:]
@@ -105,10 +118,11 @@ def main() -> None:
 
     partial.unlink()
     if mode != "no_mp3":
-        if source := os.environ.get("FAKE_YTDLP_MP3"):
-            shutil.copyfile(source, f"{stem}.mp3")
+        ext = output_ext(args)
+        if source := os.environ.get(f"FAKE_YTDLP_{ext.upper()}"):
+            shutil.copyfile(source, f"{stem}.{ext}")
         else:
-            Path(f"{stem}.mp3").write_bytes(b"fake mp3")
+            Path(f"{stem}.{ext}").write_bytes(f"fake {ext}".encode())
     if mode != "no_thumb":
         if source := os.environ.get("FAKE_YTDLP_THUMB"):
             shutil.copyfile(source, f"{stem}.png")

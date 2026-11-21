@@ -15,7 +15,7 @@ import pytest
 from conftest import EmbedCall, FakeYtDlp
 from fake_yt_dlp import OUTDATED_DENO
 from ytmp3_host import core, health, updater, ytdlp
-from ytmp3_host.media_format import Mp3Format
+from ytmp3_host.media_format import MediaFormat, Mp3Format
 from ytmp3_host.updater import UpdateError
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -123,8 +123,8 @@ def test_a_corrupt_yt_dlp_is_replaced_and_the_download_retried(
     exe.write_bytes(b"MZ half a download")  # Windows refuses to start it
     runs_python = ytdlp.build_download_command
 
-    def _real_exe_until_updated(url: str, stem: Path) -> list[str]:
-        command = runs_python(url, stem)
+    def _real_exe_until_updated(url: str, stem: Path, media_format: MediaFormat) -> list[str]:
+        command = runs_python(url, stem, media_format)
         return command if exe.read_bytes() == b"a newer yt-dlp" else [str(exe), *command[2:]]
 
     monkeypatch.setattr(ytdlp, "build_download_command", _real_exe_until_updated)
@@ -192,10 +192,10 @@ def test_no_deno_download_for_other_sites(repairs: Repairs, out_dir: Path) -> No
 
 
 def test_an_installed_deno_is_passed_to_yt_dlp(repairs: Repairs, tmp_path: Path) -> None:
-    command = ytdlp.build_download_command(URL, tmp_path / "stem")
+    command = ytdlp.build_download_command(URL, tmp_path / "stem", Mp3Format())
     assert "--js-runtimes" not in command
     (repairs.bin_dir / "deno.exe").write_bytes(b"deno")
-    command = ytdlp.build_download_command(URL, tmp_path / "stem")
+    command = ytdlp.build_download_command(URL, tmp_path / "stem", Mp3Format())
     assert command[command.index("--js-runtimes") + 1] == f"deno:{repairs.bin_dir / 'deno.exe'}"
 
 

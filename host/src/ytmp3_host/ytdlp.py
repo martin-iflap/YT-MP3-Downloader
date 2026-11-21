@@ -7,8 +7,10 @@ import subprocess
 import threading
 from collections.abc import Callable
 from pathlib import Path
+from typing import assert_never
 
 from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, yt_dlp_path
+from ytmp3_host.media_format import MediaFormat, Mp3Format, Mp4Format
 from ytmp3_host.metadata import INFO_FIELDS, VideoInfo, parse_info
 
 logger = logging.getLogger(__name__)
@@ -47,13 +49,41 @@ def kill_process_tree(process: subprocess.Popen[str]) -> None:
         process.kill()
 
 
-def build_download_command(url: str, temp_stem: Path) -> list[str]:
+def _format_args(media_format: MediaFormat) -> list[str]:
+    """The yt-dlp arguments that choose and convert the streams for one format.
+
+    MP3: `-x` extracts the audio, `--audio-quality 0` is LAME V0, the best VBR preset,
+    which encodes as fast as the default V5.
+    MP4: yt-dlp's default choice (best video + best audio) stays; `-S` only sets what
+    it prefers, earlier keys first. `compatible` prefers H.264 video and AAC audio
+    (plays everywhere) over resolution; a quality is the best resolution at or below it;
+    SDR is preferred, since HDR looks washed out on most screens and players.
+    `--merge-output-format mp4` puts the two streams into one MP4 without re-encoding.
+
+    Args:
+        media_format: The requested media format.
+    Returns:
+        The arguments for build_download_command.
+    """
+    match media_format:
+        case Mp3Format():
+            return ["-x", "--audio-format", "mp3", "--audio-quality", "0"]
+        case Mp4Format(quality=quality, codec=codec):
+            sort = ["vcodec:h264", "acodec:aac"] if codec == "compatible" else []
+            if quality != "best":
+                sort.append(f"res:{quality}")
+            sort.append("hdr:sdr")
+            return ["-S", ",".join(sort), "--merge-output-format", "mp4"]
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+def build_download_command(url: str, temp_stem: Path, media_format: MediaFormat) -> list[str]:
     """Build the yt-dlp command for one download.
 
-    A single call fetches the video info, the audio and the raw thumbnail. The info
-    (INFO_FIELDS) is printed as JSON after INFO_MARKER before the download starts
-    (`before_dl`), so an existing title-named file can stop it early. `--audio-quality 0`
-    is LAME V0, the best VBR preset, which encodes as fast as the default V5.
+    A single call fetches the video info, the media (see _format_args) and the raw
+    thumbnail. The info (INFO_FIELDS) is printed as JSON after INFO_MARKER before the
+    download starts (`before_dl`), so an existing title-named file can stop it early.
     `--print` implies `--quiet`, so `--progress` keeps the progress lines the GUI parses;
     `--no-simulate` makes sure printing never turns the call into a dry run.
     `--playlist-items 1` and `--no-playlist` ensure that only the first item in a
@@ -64,6 +94,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
     Args:
         url: The video or track URL.
         temp_stem: Output path without extension; yt-dlp appends the extensions.
+        media_format: The requested media format (MP3 or MP4).
     Returns:
         The command as an argument list for subprocess.
     """
@@ -73,7 +104,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
         "--no-playlist",
         "--playlist-items", "1",
         "--concurrent-fragments", "3",
-        "-x", "--audio-format", "mp3", "--audio-quality", "0",
+        *_format_args(media_format),
         "--write-thumbnail",
         "--ffmpeg-location", str(FFMPEG_PATH),
         "--print", f"before_dl:{INFO_MARKER}%(.{{{','.join(INFO_FIELDS)}}})j",
@@ -87,7 +118,7 @@ def build_download_command(url: str, temp_stem: Path) -> list[str]:
 
 
 def find_thumbnail(temp_stem: Path) -> Path | None:
-    """Find the thumbnail yt-dlp wrote next to the temp MP3.
+    """Find the thumbnail yt-dlp wrote next to the temp media file.
 
     Args:
         temp_stem: The temp output path without extension.
@@ -104,6 +135,7 @@ def find_thumbnail(temp_stem: Path) -> Path | None:
 def run_yt_dlp(
     url: str,
     temp_stem: Path,
+    media_format: MediaFormat,
     *,
     on_progress: Callable[[float], object] | None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None,
@@ -115,6 +147,7 @@ def run_yt_dlp(
     Args:
         url: The video or track URL.
         temp_stem: Output path without extension.
+        media_format: The requested media format (MP3 or MP4).
         on_progress: Optional callback receiving the progress as 0.0-1.0.
         on_start: Optional callback receiving the process and temp stem once started.
         on_video_info: Callback receiving the video info (see INFO_FIELDS) before the
@@ -133,7 +166,7 @@ def run_yt_dlp(
     """
     try:
         process = subprocess.Popen(
-            build_download_command(url, temp_stem),
+            build_download_command(url, temp_stem, media_format),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

@@ -10,7 +10,7 @@ import pytest
 
 from conftest import EmbedCall, FakeYtDlp
 from ytmp3_host import config, core, files, ytdlp
-from ytmp3_host.media_format import Mp3Format
+from ytmp3_host.media_format import Mp3Format, Mp4Format
 
 URL = "https://www.youtube.com/watch?v=abc123"
 
@@ -187,6 +187,53 @@ def test_yt_dlp_without_mp3_raises(fake_yt_dlp: FakeYtDlp, fake_embed: list[Embe
         download_audio(URL, out_dir)
     assert leftovers(out_dir) == []
     assert list(out_dir.glob("*.mp3")) == []
+
+
+def test_mp4_download_is_named_and_embedded_as_mp4(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    fake_yt_dlp.set(title="Jay-Z - Empire State of Mind (Official Music Video)")
+
+    result = core.download_audio(URL, out_dir, media_format=Mp4Format(quality="720"))
+
+    assert result == out_dir / "Jay-Z - Empire State of Mind.mp4"
+    assert result.read_bytes() == b"fake mp4"  # the fake only writes .mp4 when the command merges to MP4
+    [call] = fake_embed
+    assert call.temp_mp3.suffix == ".mp4" and call.temp_mp3.name.startswith("_ytmp3_")
+    assert call.output == result
+    assert leftovers(out_dir) == []
+
+
+def test_an_existing_mp4_stops_an_mp4_download(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    existing = out_dir / "Taken.mp4"
+    existing.write_bytes(b"user's file")
+
+    with pytest.raises(FileExistsError) as info:
+        core.download_audio(URL, out_dir, "Taken", media_format=Mp4Format())
+
+    assert info.value.filename == str(existing)
+    assert existing.read_bytes() == b"user's file"
+    assert fake_embed == []
+
+
+def test_an_mp3_with_the_same_name_does_not_stop_an_mp4_download(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    fake_yt_dlp.set(title="Artist - Song")
+    (out_dir / "Artist - Song.mp3").write_bytes(b"user's mp3")
+
+    result = core.download_audio(URL, out_dir, media_format=Mp4Format())
+
+    assert result == out_dir / "Artist - Song.mp4"
+    assert (out_dir / "Artist - Song.mp3").read_bytes() == b"user's mp3"
+
+
+def test_yt_dlp_without_mp4_raises(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    fake_yt_dlp.set("no_mp3")  # writes no media file in either format
+    with pytest.raises(FileNotFoundError, match="did not create the MP4"):
+        core.download_audio(URL, out_dir, media_format=Mp4Format())
+    assert leftovers(out_dir) == []
+    assert list(out_dir.iterdir()) == []
 
 
 def test_ffmpeg_failure_cleans_up(fake_yt_dlp: FakeYtDlp, out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:

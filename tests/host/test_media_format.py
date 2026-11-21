@@ -40,3 +40,13 @@ class TestMediaFormat:
         request = {"format": "avi"}
         with pytest.raises(ValueError):
             mf.media_format_from_request(request)
+
+    # ----------------- Tests for get_suffix -----------------
+
+    def test_get_suffix_mp3(self):
+        assert mf.get_suffix(mf.Mp3Format()) == ".mp3"
+
+    def test_get_suffix_mp4_for_every_preset(self):
+        for quality in mf.MP4_QUALITIES:
+            for codec in mf.MP4_CODECS:
+                assert mf.get_suffix(mf.Mp4Format(quality=quality, codec=codec)) == ".mp4"

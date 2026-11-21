@@ -1,7 +1,8 @@
 """Download pipeline shared by the headless and GUI download paths.
 
-One download is one yt-dlp call (audio as MP3 V0 plus the raw thumbnail) followed by
-one ffmpeg pass that adds the cover art and tags and writes the final MP3.
+One download is one yt-dlp call (the audio as MP3 V0, or video and audio merged into an
+MP4, plus the raw thumbnail) followed by one ffmpeg pass that adds the cover art and tags
+and writes the final file.
 """
 
 import errno
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, yt_dlp_path
 from ytmp3_host.files import remove_stale_temp_files, remove_temp_files
-from ytmp3_host.media_format import MediaFormat
+from ytmp3_host.media_format import MediaFormat, get_suffix
 from ytmp3_host.metadata import VideoInfo, artist_for, extra_tags, info_text, named_title, title_filename
 from ytmp3_host.naming import DEFAULT_FILENAME, is_youtube_url, title_from_filename
 from ytmp3_host.ytdlp import find_thumbnail, run_yt_dlp
@@ -34,45 +35,62 @@ BROKEN_INSTALL_FAILURES = ("ImportError", "ModuleNotFoundError", "DLL load faile
 
 
 def embed_thumbnail(
-    temp_mp3: Path,
+    temp_file: Path,
     thumb_file: Path | None,
     artist: str,
     title: str,
     output: Path,
     tags: dict[str, str] | None = None,
 ) -> None:
-    """Write the final MP3 with cover art and tags in a single ffmpeg pass.
+    """Write the final MP3 or MP4 with cover art and tags in a single ffmpeg pass.
 
-    The audio stream is copied, never re-encoded. The thumbnail is center-cropped
-    to 1:1 and encoded as high-quality JPEG ID3v2.3 cover art. Without a thumbnail
-    only the tags are added.
+    The output's suffix decides the format, as it decides ffmpeg's container. The
+    media streams are copied, never re-encoded; only the thumbnail is encoded, as a
+    high-quality JPEG. MP3: the audio, with the thumbnail center-cropped to 1:1 as
+    ID3v2.3 cover art. MP4: the video and audio, with the thumbnail uncropped (it
+    has the video's shape) as an `attached_pic` stream, which players show as the
+    cover instead of as a second video. Without a thumbnail only the tags are added.
 
     Args:
-        temp_mp3: The MP3 yt-dlp produced.
+        temp_file: The MP3 or MP4 yt-dlp produced.
         thumb_file: The thumbnail to embed, or None.
         artist: The artist metadata value.
         title: The title metadata value.
-        output: The final MP3 path. Must not exist yet (ffmpeg runs with -n).
+        output: The final .mp3 or .mp4 path. Must not exist yet (ffmpeg runs with -n).
         tags: More metadata as ffmpeg keys (see extra_tags), e.g. {"album": "..."}.
     Raises:
+        ValueError: If output is neither .mp3 nor .mp4.
         FileExistsError: If output already exists; it is left untouched.
         subprocess.CalledProcessError: If ffmpeg fails. A partial output is removed.
         subprocess.TimeoutExpired: If ffmpeg takes longer than EMBED_TIMEOUT_S.
     """
-    cmd = [str(FFMPEG_PATH), "-hide_banner", "-nostdin", "-loglevel", "error", "-n", "-i", str(temp_mp3)]
+    match output.suffix:
+        case ".mp3":
+            is_mp3 = True
+        case ".mp4":
+            is_mp3 = False
+        case _:
+            raise ValueError(f"embed_thumbnail: output must be .mp3 or .mp4, not {output.suffix!r}")
+
+    cmd = [str(FFMPEG_PATH), "-hide_banner", "-nostdin", "-loglevel", "error", "-n", "-i", str(temp_file)]
     if thumb_file:
-        cmd += [
-            "-i", str(thumb_file),
-            "-map", "0:a",
-            "-map", "1:0",
-            "-c:v", "mjpeg", "-q:v", "2",
-            "-vf", "crop='min(iw,ih)':'min(iw,ih)'",
-            "-metadata:s:v", "title=Album cover",
-            "-metadata:s:v", "comment=Cover (front)",
-        ]
+        cmd += ["-i", str(thumb_file)]  # every input comes before the output options
+    if is_mp3:
+        if thumb_file:
+            cmd += [
+                "-map", "0:a",
+                "-map", "1:0",
+                "-c:v", "mjpeg", "-q:v", "2",
+                "-vf", "crop='min(iw,ih)':'min(iw,ih)'",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)",
+            ]
+        cmd += ["-c:a", "copy", "-id3v2_version", "3"]
+    else:
+        cmd += ["-map", "0", "-c", "copy"]
+        if thumb_file:  # the cover is the second video stream (v:1); these override -c copy for it
+            cmd += ["-map", "1:0", "-c:v:1", "mjpeg", "-q:v:1", "2", "-disposition:v:1", "attached_pic"]
     cmd += [
-        "-c:a", "copy",
-        "-id3v2_version", "3",
         "-metadata", f"artist={artist}",
         "-metadata", f"title={title}",
     ]
@@ -114,7 +132,7 @@ def download_audio(
     on_warning: Callable[[str], object] | None = None,
     timeout: float = DOWNLOAD_TIMEOUT_S,
 ) -> Path:
-    """Download a video's or track's audio as an MP3 with cover art.
+    """Download a video or track as media_format (an MP3 or MP4) with cover art and tags.
     yt-dlp writes to a unique temp name in folder and prints the title before it
     downloads, so a title-named file that already exists stops the download early.
     Temp files are always removed, also on failure; stale ones that killed hosts
@@ -122,7 +140,7 @@ def download_audio(
 
     Args:
         url: The video or track URL.
-        folder: An existing folder to save the MP3 in.
+        folder: An existing folder to save the file in.
         filename: The filename without extension, already sanitized. An empty
             filename means: name the file after the video title (title_filename).
         media_format: The requested media format (MP3 or MP4) and its options.
@@ -135,15 +153,18 @@ def download_audio(
         timeout: Seconds the yt-dlp call may take in total.
 
     Returns:
-        The path of the final MP3.
+        The path of the final file (.mp3 or .mp4, see get_suffix).
 
     Raises:
-        FileExistsError: If the target MP3 already exists (`filename` holds its path).
+        FileExistsError: If the target file already exists (`filename` holds its path).
         FileNotFoundError: If ffmpeg.exe or yt-dlp.exe is missing, or yt-dlp or
-            ffmpeg did not produce its MP3.
+            ffmpeg did not produce its file.
         subprocess.TimeoutExpired: If yt-dlp or ffmpeg timed out.
         subprocess.CalledProcessError: If yt-dlp or ffmpeg failed.
     """
+    suffix = get_suffix(media_format)
+    file_type = suffix.removeprefix(".").upper()  # MP3 or MP4, for the messages
+
     def _warn(message: str) -> None:
         logger.warning(message)
         if on_warning:
@@ -151,10 +172,10 @@ def download_audio(
 
     def _check_title(video_info: VideoInfo) -> None:
         if not filename:
-            _ensure_not_exists(folder / f"{title_filename(video_info, folder)}.mp3")
+            _ensure_not_exists(folder / f"{title_filename(video_info, folder)}{suffix}")
 
     if filename:
-        _ensure_not_exists(folder / f"{filename}.mp3")
+        _ensure_not_exists(folder / f"{filename}{suffix}")
     if not FFMPEG_PATH.exists():
         raise FileNotFoundError(errno.ENOENT, "ffmpeg.exe not found, please reinstall the app", str(FFMPEG_PATH))
     if not (yt_dlp := yt_dlp_path()).exists():
@@ -165,7 +186,7 @@ def download_audio(
     start = time.perf_counter()
     try:
         info = run_yt_dlp(
-            url, temp_stem, on_progress=on_progress, on_start=on_start, on_video_info=_check_title, timeout=timeout
+            url, temp_stem, media_format, on_progress=on_progress, on_start=on_start, on_video_info=_check_title, timeout=timeout
         )
         downloaded = time.perf_counter()
         logger.debug("yt-dlp took %.2f s, info: %r", downloaded - start, info)
@@ -176,21 +197,21 @@ def download_audio(
                 _warn(f"Could not fetch the video title, using '{DEFAULT_FILENAME}'")
             filename = title_filename(info, folder)
             tag_name = named_title(info) or filename
-        output = folder / f"{filename}.mp3"
+        output = folder / f"{filename}{suffix}"
         _ensure_not_exists(output)  # again: it may have appeared during the download
 
-        temp_mp3 = temp_stem.with_name(f"{temp_stem.name}.mp3")
-        if not temp_mp3.exists():
-            raise FileNotFoundError(errno.ENOENT, "yt-dlp did not create the MP3", str(temp_mp3))
+        temp_file = temp_stem.with_name(f"{temp_stem.name}{suffix}")
+        if not temp_file.exists():
+            raise FileNotFoundError(errno.ENOENT, f"yt-dlp did not create the {file_type}", str(temp_file))
 
         thumb_file = find_thumbnail(temp_stem)
         if thumb_file is None:
-            _warn("No thumbnail found, the MP3 is saved without cover art")
+            _warn(f"No thumbnail found, the {file_type} is saved without cover art")
         embed_thumbnail(
-            temp_mp3, thumb_file, artist_for(tag_name, info), title_from_filename(tag_name), output, extra_tags(info)
+            temp_file, thumb_file, artist_for(tag_name, info), title_from_filename(tag_name), output, extra_tags(info)
         )
         if not output.exists():  # cheap guard: never report success for a file that is not there
-            raise FileNotFoundError(errno.ENOENT, "ffmpeg did not create the MP3", str(output))
+            raise FileNotFoundError(errno.ENOENT, f"ffmpeg did not create the {file_type}", str(output))
         end = time.perf_counter()
         logger.debug("ffmpeg took %.2f s, total %.2f s: %s", end - downloaded, end - start, output)
         return output
@@ -309,7 +330,7 @@ def download_with_repair(
         on_info: Optional callback receiving what the repair is doing, for the user.
         is_cancelled: Tells whether the user canceled; a canceled download is not repaired.
     Returns:
-        The path of the final MP3.
+        The path of the final file.
     Raises:
         As download_audio: the error of the first attempt, or of the retry.
     """
