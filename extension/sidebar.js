@@ -1,5 +1,5 @@
 /* global isKnownSiteUrl, isWebUrl, filenameLimit, filenameTooLong, filenameTooLongMessage,
-   FORMATS, DEFAULT_FORMAT, knownFormat, knownOption, formatRequest, hostSupports */
+   FORMATS, DEFAULT_FORMAT, knownFormat, knownOption, formatRequest, hostSupports, progressText */
 
 const downloadBtn = document.getElementById('DownloadBtn');
 const openInAppBtn = document.getElementById('openInAppBtn');
@@ -254,7 +254,7 @@ downloadBtn.addEventListener('click', () => {
   }
 
   setBusy(true);
-  clearResult();
+  showResult('Starting the download...', 'info');
   sendNativeAction({
     action: 'download',
     url,
@@ -263,7 +263,9 @@ downloadBtn.addEventListener('click', () => {
     ...formatRequest(format, selectedOptions(format))
   }, (resp) => {
     if (!resp.final) {
-      if (resp.message) showResult(resp.message, resp.status === 'warning' ? 'warning' : 'info');
+      // progress comes from hosts since 2.2.0, at most every 0.3 s; warnings return in the final message
+      if (resp.progress) showResult(progressText(resp.progress, format), 'info');
+      else if (resp.message) showResult(resp.message, resp.status === 'warning' ? 'warning' : 'info');
       return;
     }
     setBusy(false);

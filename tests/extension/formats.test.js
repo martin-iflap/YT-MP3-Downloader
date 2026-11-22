@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const { loadScripts } = require('./harness');
 
 const context = loadScripts(['formats.js'], {});
-const { knownFormat, knownOption, formatRequest, hostSupports } = context;
+const { knownFormat, knownOption, formatRequest, hostSupports, progressText } = context;
 const FORMATS = vm.runInContext('FORMATS', context);
 
 test('an MP3 request carries no format, so every host version understands it', () => {
@@ -45,9 +45,20 @@ test('a host gets another format than MP3 only when it lists it', () => {
   assert.equal(hostSupports('mp4', 'mp4'), false, 'only a list counts');
 });
 
-test('every format has a label, and every option a default and distinct values', () => {
-  for (const [format, { label, options }] of Object.entries(FORMATS)) {
+test('progress shows the download percentage, then the format\'s processing step', () => {
+  assert.equal(progressText({ stage: 'downloading', fraction: 0 }, 'mp3'), 'Downloading 0%');
+  assert.equal(progressText({ stage: 'downloading', fraction: 0.425 }, 'mp4'), 'Downloading 43%', 'rounded like the app');
+  assert.equal(progressText({ stage: 'downloading', fraction: 1 }, 'mp3'), 'Downloading 100%');
+  assert.equal(progressText({ stage: 'downloading', fraction: null }, 'mp3'), 'Downloading...', 'size unknown');
+  assert.equal(progressText({ stage: 'downloading' }, 'mp3'), 'Downloading...');
+  assert.equal(progressText({ stage: 'processing', fraction: null }, 'mp3'), 'Converting to MP3...');
+  assert.equal(progressText({ stage: 'processing', fraction: null }, 'mp4'), 'Saving the MP4...');
+});
+
+test('every format has a label, a processing text, and every option a default and distinct values', () => {
+  for (const [format, { label, processing, options }] of Object.entries(FORMATS)) {
     assert.equal(label, format.toUpperCase());
+    assert.ok(processing, `${format} has no processing text`);
     for (const [name, choices] of Object.entries(options)) {
       assert.ok(choices.length > 0, `${format}.${name} has no choices`);
       const values = choices.map(([value]) => value);

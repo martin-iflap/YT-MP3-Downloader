@@ -7,6 +7,7 @@ import logging
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,8 +15,11 @@ from ytmp3_host.core import describe_error, download_with_repair
 from ytmp3_host.files import downloaded_file, folder_is_writable, open_file, resolve_folder, show_in_folder
 from ytmp3_host.media_format import MediaFormat
 from ytmp3_host.naming import filename_too_long, filename_too_long_message, is_web_url, requested_filename
+from ytmp3_host.ytdlp import Progress
 
 logger = logging.getLogger(__name__)
+
+PROGRESS_INTERVAL_S = 0.3  # do not flood extension with updates but keep it smooth
 
 LENGTH_PREFIX = struct.Struct("@I")  # 4-byte unsigned int, native byte order
 
@@ -136,9 +140,9 @@ def run_open_file(path: str, select: bool) -> None:
 
 def run_native(*, url: str, folder: str, filename: str, media_format: MediaFormat) -> None:
     """Handle a headless download request and send its responses.
-    Sends intermediate warnings (no title; no thumbnail) and infos (a repair after a
-    yt-dlp failure, see download_with_repair), then exactly one final success or
-    error response.
+    Sends intermediate warnings (no title; no thumbnail), infos (a repair after a
+    yt-dlp failure, see download_with_repair) and progress infos ({"stage", "fraction"},
+    no message), then exactly one final success or error response.
 
     Args:
         url: The video or track URL.
@@ -169,6 +173,26 @@ def run_native(*, url: str, folder: str, filename: str, media_format: MediaForma
         warnings.append(message)
         send_message({"status": "warning", "message": message, "final": False})
 
+    last_sent: Progress | None = None
+    last_sent_at = 0.0
+
+    def _send_progress(progress: Progress) -> None:
+        """Send progress at most every PROGRESS_INTERVAL_S, except a new stage or a finished download.
+        Those two have no later update to replace them.
+        """
+        nonlocal last_sent, last_sent_at
+        now = time.monotonic()
+        new_stage = last_sent is None or progress.stage != last_sent.stage
+        if not new_stage and progress.fraction != 1.0 and now - last_sent_at < PROGRESS_INTERVAL_S:
+            return
+        last_sent, last_sent_at = progress, now
+        # no "message": sidebars before 2.2.0 ignore a non-final response without one
+        send_message({
+            "status": "info",
+            "progress": {"stage": progress.stage, "fraction": progress.fraction},
+            "final": False,
+        })
+
     try:
         file_path = download_with_repair(
             url,
@@ -176,6 +200,7 @@ def run_native(*, url: str, folder: str, filename: str, media_format: MediaForma
             safe_name,
             media_format=media_format,
             on_warning=_send_warning,
+            on_progress=_send_progress,
             on_info=lambda message: send_message({"status": "info", "message": message, "final": False}),
             on_timeout=lambda new: send_message({"status": "info", "deadline_s": new, "final": False}),
         )

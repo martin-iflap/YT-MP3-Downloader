@@ -1,13 +1,15 @@
-/* exported FORMATS, DEFAULT_FORMAT, knownFormat, knownOption, formatRequest, hostSupports */
+/* exported FORMATS, DEFAULT_FORMAT, knownFormat, knownOption, formatRequest, hostSupports, progressText */
 
 // The formats the sidebar downloads. One form serves them all: the URL, folder and filename
 // fields are shared, and a format's own choices (options, each a list of [value, label], the
 // first one the default) show only while it is selected. The sidebar builds its selects
-// from this list, so a new choice is added here only.
+// from this list, so a new choice is added here only. processing is the progress text while
+// yt-dlp encodes or merges the download (see progressText).
 const FORMATS = {
-  mp3: { label: 'MP3', options: {} },
+  mp3: { label: 'MP3', processing: 'Converting to MP3...', options: {} },
   mp4: {
     label: 'MP4',
+    processing: 'Saving the MP4...',
     options: {
       quality: [['best', 'Best available'], ['1080', '1080p'], ['720', '720p'], ['480', '480p']],
       codec: [['best', 'Best (AV1/VP9, smaller files)'], ['compatible', 'Compatible (H.264, plays everywhere)']]
@@ -43,4 +45,12 @@ function formatRequest(format, choices = {}) {
 // format field, so it must not get another format.
 function hostSupports(formats, format) {
   return format === DEFAULT_FORMAT || (Array.isArray(formats) && formats.includes(format));
+}
+
+// The text for a download's progress, the host's { stage, fraction }: the fraction of the
+// whole download (an MP4's video and audio together), null while its size is unknown.
+// Matches the app window's texts (gui.show_progress).
+function progressText(progress, format) {
+  if (progress.stage === 'processing') return FORMATS[format].processing;
+  return Number.isFinite(progress.fraction) ? `Downloading ${Math.round(progress.fraction * 100)}%` : 'Downloading...';
 }

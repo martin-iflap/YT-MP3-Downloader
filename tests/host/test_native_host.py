@@ -40,12 +40,13 @@ def parse_frames(data: bytes) -> list[dict[str, Any]]:
     return messages
 
 
-def run_host(monkeypatch: pytest.MonkeyPatch, stdin: bytes) -> list[dict[str, Any]]:
+def run_host(monkeypatch: pytest.MonkeyPatch, stdin: bytes, *, with_progress: bool = False) -> list[dict[str, Any]]:
     """Run MP3.main() in this process until stdin is exhausted and return the decoded responses.
 
     sys.stdin/sys.stdout are replaced with in-memory text streams over bytes, which is
     what read_message/send_message use (through .buffer). End of stdin is what Firefox
-    does when it closes the port, so main() must exit with code 0.
+    does when it closes the port, so main() must exit with code 0. Every frame is checked,
+    but download progress responses are left out unless with_progress is set.
     """
     stdout = io.BytesIO()
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(stdin)))
@@ -55,7 +56,8 @@ def run_host(monkeypatch: pytest.MonkeyPatch, stdin: bytes) -> list[dict[str, An
         MP3.main()
     fake_stdout.flush()  # catch a stray print() as well
     assert info.value.code == 0
-    return parse_frames(stdout.getvalue())
+    responses = parse_frames(stdout.getvalue())
+    return responses if with_progress else [r for r in responses if "progress" not in r]
 
 
 def requests(*messages: object) -> bytes:
@@ -472,6 +474,32 @@ def test_a_longer_timeout_is_sent_as_a_deadline_without_a_message(
     assert expected > ytdlp.DOWNLOAD_TIMEOUT_S
     assert deadline == {"status": "info", "deadline_s": expected, "final": False}
     assert response["status"] == "success" and response["final"] is True
+
+
+def test_progress_is_sent_without_a_message_and_never_drops_a_stage(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # the fake prints 0 %, 42.5 % and 100 % within milliseconds: inside the interval only the
+    # first one, 100 % and the new stage get through; without a message, older sidebars ignore them
+    monkeypatch.setattr(native_messaging, "PROGRESS_INTERVAL_S", 60)
+    responses = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}), with_progress=True)
+    assert_one_final_per_request(responses, 1)
+    *progress, final = responses
+    assert progress == [
+        {"status": "info", "progress": {"stage": "downloading", "fraction": 0.0}, "final": False},
+        {"status": "info", "progress": {"stage": "downloading", "fraction": 1.0}, "final": False},
+        {"status": "info", "progress": {"stage": "processing", "fraction": None}, "final": False},
+    ]
+    assert final["status"] == "success"
+
+
+def test_progress_after_the_interval_is_sent(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    monkeypatch.setattr(native_messaging, "PROGRESS_INTERVAL_S", 0)
+    responses = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}), with_progress=True)
+    fractions = [r["progress"]["fraction"] for r in responses if "progress" in r]
+    assert fractions == [0.0, 0.425, 1.0, None]
 
 
 def test_several_requests_in_one_session(
