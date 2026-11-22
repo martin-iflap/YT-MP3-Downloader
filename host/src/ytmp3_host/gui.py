@@ -25,7 +25,7 @@ from ytmp3_host.files import (
     resolve_folder,
     show_in_folder,
 )
-from ytmp3_host.media_format import Mp3Format
+from ytmp3_host.media_format import MediaFormat, Mp3Format, Mp4Codec, Mp4Format, Mp4Quality
 from ytmp3_host.naming import (
     filename_too_long,
     filename_too_long_message,
@@ -34,13 +34,17 @@ from ytmp3_host.naming import (
     safe_filename,
 )
 from ytmp3_host.native_messaging import send_current_folder, send_message
-from ytmp3_host.ytdlp import kill_process_tree
+from ytmp3_host.ytdlp import Progress, kill_process_tree
 
 logger = logging.getLogger(__name__)
 
 FONT = "Segoe UI"
 FONT_SEMIBOLD = "Segoe UI Semibold"
 CLEANUP_DELAY_S = 2
+
+# The sidebar's MP4 choices (extension/formats.js), shortened to fit one row
+QUALITY_LABELS: dict[Mp4Quality, str] = {"best": "Best", "1080": "1080p", "720": "720p", "480": "480p"}
+CODEC_LABELS: dict[Mp4Codec, str] = {"best": "Best (AV1/VP9)", "compatible": "Compatible (H.264)"}
 
 # Palette of extension/sidebar.html (its translucent whites blended onto the background)
 BG = "#17181a"
@@ -80,6 +84,7 @@ class DownloaderApp(ctk.CTk):
         url_entry: The URL field.
         folder_var: The folder field, initially the default folder.
         name_entry: The filename field; empty means name the file after the video title.
+        format_switch: The MP3/MP4 switch; quality_menu and codec_menu show while MP4 is selected.
         current_process: The running yt-dlp process, used to cancel it.
         current_stem: The temp output stem of the running download, used for cleanup.
         download_cancelled: Set by cancel_download, read by the download thread.
@@ -95,8 +100,9 @@ class DownloaderApp(ctk.CTk):
         super().__init__(fg_color=BG)
 
         self.title("YouTube MP3 Converter")
-        self.geometry("560x510")
-        self.minsize(420, 510)  # room for a two-line status and the file buttons below it
+        self.geometry("560x580")
+        # room for the MP4 choices in one row, a two-line status and the file buttons below it
+        self.minsize(470, 580)
         self.current_process: subprocess.Popen[str] | None = None
         self.current_stem: Path | None = None
         self.download_cancelled = False
@@ -124,7 +130,33 @@ class DownloaderApp(ctk.CTk):
         fields = ctk.CTkFrame(card, fg_color="transparent")
         fields.pack(fill="x", padx=14, pady=14)
 
-        self._field_label(fields, "URL", top=0)
+        self._field_label(fields, "FORMAT", top=0)
+        format_row = ctk.CTkFrame(fields, fg_color="transparent")
+        format_row.pack(fill="x")
+        self.format_switch = ctk.CTkSegmentedButton(
+            format_row,
+            values=["MP3", "MP4"],
+            command=lambda _value: self._on_format_change(),
+            fg_color=PILL,
+            selected_color=ACCENT,
+            selected_hover_color=ACCENT_HOVER,
+            unselected_color=PILL,
+            unselected_hover_color=PILL_HOVER,
+            text_color=TEXT,
+            corner_radius=8,
+            font=(FONT_SEMIBOLD, 12),
+            width=110,
+            height=32,
+        )
+        self.format_switch.set("MP3")
+        self.format_switch.pack(side="left")
+        self.mp4_options = ctk.CTkFrame(format_row, fg_color="transparent")
+        self.quality_menu = self._option_menu(self.mp4_options, list(QUALITY_LABELS.values()), width=90)
+        self.quality_menu.pack(side="left", padx=(10, 0))
+        self.codec_menu = self._option_menu(self.mp4_options, list(CODEC_LABELS.values()), width=160)
+        self.codec_menu.pack(side="left", padx=(8, 0))
+
+        self._field_label(fields, "URL")
         self.url_entry = self._entry(fields, placeholder="https://www.youtube.com/watch?v=...")
         self.url_entry.pack(fill="x")
 
@@ -154,7 +186,8 @@ class DownloaderApp(ctk.CTk):
         self.main_button = ctk.CTkButton(
             main_frame, corner_radius=999, border_width=1, font=(FONT_SEMIBOLD, 14), width=180, height=42
         )
-        self._set_main_button("Download MP3", self.start_download, primary=True)
+        self._main_command: Callable[[], None] | None = None
+        self._show_download_button()
         self.main_button.pack(pady=(18, 0))
 
         self.progress_bar = ctk.CTkProgressBar(
@@ -169,7 +202,7 @@ class DownloaderApp(ctk.CTk):
         )
         self.status_label.pack(side="left", fill="x", expand=True, padx=(0, 12), pady=10)
 
-        # "Show in folder" and "Play" for the last saved MP3, shown below its status
+        # "Show in folder" and "Play" for the last saved file, shown below its status
         self.saved_file: Path | None = None
         self.file_actions = ctk.CTkFrame(main_frame, fg_color="transparent")
         for text, action in (("Show in folder", show_in_folder), ("Play", open_file)):
@@ -215,6 +248,60 @@ class DownloaderApp(ctk.CTk):
         entry.bind("<FocusOut>", lambda _: entry.configure(border_color=INPUT_BORDER))
         return entry
 
+    @staticmethod
+    def _option_menu(master: ctk.CTkFrame, labels: list[str], width: int) -> ctk.CTkOptionMenu:
+        """Create a sidebar-styled dropdown of labels, the first one selected."""
+        return ctk.CTkOptionMenu(
+            master,
+            values=labels,
+            fg_color=INPUT,
+            button_color=INPUT,
+            button_hover_color=PILL_HOVER,
+            text_color=TEXT,
+            dropdown_fg_color=CARD,
+            dropdown_hover_color=PILL_HOVER,
+            dropdown_text_color=TEXT,
+            corner_radius=8,
+            font=(FONT, 12),
+            dropdown_font=(FONT, 12),
+            dynamic_resizing=False,
+            width=width,
+            height=32,
+        )
+
+    def selected_format(self) -> MediaFormat:
+        """The format and options chosen in the window. Main thread only."""
+        if self.format_switch.get() == "MP4":
+            return Mp4Format(
+                quality=_choice(QUALITY_LABELS, self.quality_menu.get()),
+                codec=_choice(CODEC_LABELS, self.codec_menu.get()),
+            )
+        return Mp3Format()
+
+    def set_format(self, media_format: MediaFormat) -> None:
+        """Select media_format and its options in the window. Main thread only."""
+        match media_format:
+            case Mp4Format(quality=quality, codec=codec):
+                self.format_switch.set("MP4")
+                self.quality_menu.set(QUALITY_LABELS[quality])
+                self.codec_menu.set(CODEC_LABELS[codec])
+            case Mp3Format():
+                self.format_switch.set("MP3")
+        self._on_format_change()
+
+    def _on_format_change(self) -> None:
+        """Show the MP4 choices only for MP4; a Download button follows the format. Main thread only."""
+        if self.format_switch.get() == "MP4":
+            self.mp4_options.pack(side="left")
+        else:
+            self.mp4_options.pack_forget()
+        if self._main_command == self.start_download:  # not while it is Cancel or Next
+            self._show_download_button()
+
+    def _show_download_button(self) -> None:
+        """Make the main button "Download <format>". Main thread only."""
+        self._set_main_button(f"Download {self.format_switch.get()}", self.start_download, primary=True)
+
     def _match_title_bar(self) -> None:
         """Color the Windows 11 title bar and border like the window background.
         Older Windows ignores these attributes and keeps the dark title bar ctk sets.
@@ -234,6 +321,7 @@ class DownloaderApp(ctk.CTk):
 
     def _set_main_button(self, text: str, command: Callable[[], None], primary: bool = False) -> None:
         """Switch the main button's label and action; only the Download state is blue. Main thread only."""
+        self._main_command = command
         self.main_button.configure(
             text=text,
             command=command,
@@ -260,22 +348,58 @@ class DownloaderApp(ctk.CTk):
         self.status_frame.configure(border_color=border)
         self.status_frame.pack(fill="x", pady=(14, 0))
 
-    def show_saved(self, mp3_path: Path, warnings: list[str]) -> None:
+    def show_progress(self, progress: Progress | None, media_format: MediaFormat) -> None:
+        """Show where the download is, as text and in the bar. Main thread only.
+
+        Only the download itself has a known length, so the bar fills only then; before it
+        (preparing, progress None) and after it (yt-dlp's encode or merge, then the cover
+        pass) it runs as a moving bar instead of sitting at 0 or 100 %.
+        """
+        fraction = None
+        if progress is None:
+            text = "Preparing..."
+        elif progress.stage == "processing":
+            text = "Converting to MP3..." if isinstance(media_format, Mp3Format) else "Saving the MP4..."
+        elif (fraction := progress.fraction) is None:
+            text = "Downloading..."
+        else:
+            text = f"Downloading {fraction:.0%}"
+        self.show_status(text, "info")
+
+        bar = self.progress_bar
+        if fraction is None:
+            if bar.cget("mode") != "indeterminate":
+                bar.configure(mode="indeterminate")
+                bar.start()
+        else:
+            if bar.cget("mode") == "indeterminate":
+                bar.stop()
+                bar.configure(mode="determinate")
+            bar.set(fraction)
+        if not bar.winfo_ismapped():
+            bar.pack(fill="x", padx=60, pady=(16, 0), after=self.main_button)
+
+    def _hide_progress(self) -> None:
+        """Hide the progress bar and stop its animation. Main thread only."""
+        self.progress_bar.stop()
+        self.progress_bar.pack_forget()
+
+    def show_saved(self, saved_path: Path, warnings: list[str]) -> None:
         """Show the "Saved" status with the file buttons. Main thread only."""
-        self.show_status("\n".join([f"Saved {mp3_path.name}", *warnings]), "warning" if warnings else "success")
-        self.saved_file = mp3_path
+        self.show_status("\n".join([f"Saved {saved_path.name}", *warnings]), "warning" if warnings else "success")
+        self.saved_file = saved_path
         self.file_actions.pack(pady=(10, 0))
 
     def _open_saved_file(self, action: Callable[[Path], None]) -> None:
-        """Run show_in_folder or open_file on the saved MP3; a failure replaces the status."""
+        """Run show_in_folder or open_file on the saved file; a failure replaces the status."""
         if self.saved_file is None or not self.saved_file.is_file():
-            self.show_status("The MP3 was moved or deleted", "error")
+            self.show_status("The file was moved or deleted", "error")
             return
         try:
             action(self.saved_file)
         except OSError as e:
             logger.error("Could not open %s: %s", self.saved_file, e)
-            self.show_status(f"Could not open the MP3: {describe_error(e)}", "error")
+            self.show_status(f"Could not open the file: {describe_error(e)}", "error")
 
     def choose_folder(self) -> None:
         """Let the user pick a folder, starting at the current one; keep it on cancel."""
@@ -308,26 +432,28 @@ class DownloaderApp(ctk.CTk):
             self.show_status(filename_too_long_message(folder_path), "error")
             return
         self.folder_var.set(str(folder_path))
+        media_format = self.selected_format()
 
         self.download_cancelled = False
         self.download_id += 1
         self.current_process = None
         self.current_stem = None
-        self.progress_bar.set(0)
-        self.progress_bar.pack(fill="x", padx=60, pady=(16, 0), after=self.main_button)
-        self.show_status("Downloading...", "info")
+        self.show_progress(None, media_format)
         self._set_main_button("Cancel", self.cancel_download)
 
-        args = (url, folder_path, filename, self.download_id)
+        args = (url, folder_path, filename, media_format, self.download_id)
         threading.Thread(target=self._download_thread, args=args, daemon=True).start()
 
-    def _download_thread(self, url: str, folder_path: Path, filename: str, download_id: int) -> None:
+    def _download_thread(
+        self, url: str, folder_path: Path, filename: str, media_format: MediaFormat, download_id: int
+    ) -> None:
         """Run core.download_with_repair and report the result in the window.
 
         Args:
             url: The video or track URL.
-            folder_path: An existing folder to save the MP3 in.
+            folder_path: An existing folder to save the file in.
             filename: The sanitized filename; empty means name it after the video title.
+            media_format: The format chosen when the download started.
             download_id: The download_id this download started with.
         """
         def _owns_window() -> bool:
@@ -349,14 +475,18 @@ class DownloaderApp(ctk.CTk):
             if self.download_cancelled:  # canceled before yt-dlp was running
                 kill_process_tree(process)
 
+        def _show_progress(progress: Progress) -> None:
+            # checked when it runs on the main thread: one queued before a Cancel must not replace "canceled"
+            _show(lambda: _cancelled() or self.show_progress(progress, media_format))
+
         warnings: list[str] = []
         try:
-            mp3_path = download_with_repair(
+            saved_path = download_with_repair(
                 url,
                 folder_path,
                 filename,
-                media_format=Mp3Format(),
-                on_progress=lambda p: _show(self.progress_bar.set, p),
+                media_format=media_format,
+                on_progress=_show_progress,
                 on_start=_on_start,
                 on_warning=warnings.append,
                 # not after a Cancel: a running repair must not replace "Download canceled"
@@ -369,15 +499,15 @@ class DownloaderApp(ctk.CTk):
             msg = describe_error(e)
             logger.exception(msg)
             _show(self.show_status, msg, "error")
-            _show(lambda: self._set_main_button("Download MP3", self.start_download, primary=True))
+            _show(self._show_download_button)
         else:
             # also after a late Cancel: the file is saved, say so instead of "canceled"
-            _show(self.show_saved, mp3_path, warnings)
+            _show(self.show_saved, saved_path, warnings)
             _show(lambda: self._set_main_button("Next", self.reset_fields))
         finally:
             if _owns_window():
                 self.current_process = None
-                self.after(0, self.progress_bar.pack_forget)
+                self.after(0, self._hide_progress)
 
     def cancel_download(self) -> None:
         """Cancel the running download, reset the UI and clean up its partial files."""
@@ -388,7 +518,7 @@ class DownloaderApp(ctk.CTk):
 
         self.show_status("Download canceled", "error")
         self._set_main_button("Next", self.reset_fields)
-        self.progress_bar.pack_forget()
+        self._hide_progress()
 
         if self.current_stem:
             threading.Thread(target=cleanup_partial_downloads, args=(self.current_stem,), daemon=True).start()
@@ -409,9 +539,9 @@ class DownloaderApp(ctk.CTk):
         self.url_entry.delete(0, "end")
         self.name_entry.delete(0, "end")
         self.show_status("", "info")
-        self._set_main_button("Download MP3", self.start_download, primary=True)
+        self._show_download_button()
 
-    def run_native_gui(self, url: str, folder: str, filename: str) -> None:
+    def run_native_gui(self, url: str, folder: str, filename: str, media_format: MediaFormat) -> None:
         """Prefill the form from a `download_gui` request and run the window.
         An invalid folder keeps the default folder; the window and the final
         "GUI opened" response both say so. Blocks until the window is closed.
@@ -420,7 +550,9 @@ class DownloaderApp(ctk.CTk):
             url: The URL to prefill, possibly empty.
             folder: The folder to prefill, possibly empty.
             filename: The filename to prefill, possibly empty.
+            media_format: The format to select.
         """
+        self.set_format(media_format)
         opened_message = "GUI opened"
         if url:
             self.url_entry.insert(0, url)
@@ -450,11 +582,16 @@ def cleanup_partial_downloads(temp_stem: Path) -> None:
     remove_temp_files(temp_stem)
 
 
-def open_gui(url: str, folder: str, filename: str) -> None:
+def _choice[T](labels: dict[T, str], label: str) -> T:
+    """The choice a dropdown label stands for (the dropdowns only offer labels from labels)."""
+    return next(choice for choice, known in labels.items() if known == label)
+
+
+def open_gui(url: str, folder: str, filename: str, media_format: MediaFormat) -> None:
     """Handle `download_gui`: open the window prefilled with the request's fields.
     Blocks until the window is closed.
     """
-    DownloaderApp().run_native_gui(url, folder, filename)
+    DownloaderApp().run_native_gui(url, folder, filename, media_format)
 
 
 def select_folder(folder: str) -> None:
@@ -476,4 +613,4 @@ def select_folder(folder: str) -> None:
 
 if __name__ == "__main__":
     # run as a script for testing the GUI without the extension
-    open_gui("https://www.youtube.com/watch?v=9bZkp7q19f0", "", "")
+    open_gui("https://www.youtube.com/watch?v=jCF4dKjIM2c&list=RDjCF4dKjIM2c&start_radio=1", "", "", Mp3Format())

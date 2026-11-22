@@ -1,14 +1,15 @@
 """Running yt-dlp: its command line, the download with its watchdog, and stopping its process tree."""
 
 import errno
+import json
 import logging
-import re
 import subprocess
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import assert_never
+from typing import Literal, assert_never
 
 from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, yt_dlp_path
 from ytmp3_host.media_format import MediaFormat, Mp3Format, Mp4Format
@@ -17,8 +18,8 @@ from ytmp3_host.metadata import INFO_FIELDS, VideoInfo, parse_info
 logger = logging.getLogger(__name__)
 
 INFO_MARKER = "YTMP3_INFO:"
+PROGRESS_MARKER = "YTMP3_PROGRESS:"
 THUMBNAIL_EXTS = ("webp", "jpg", "jpeg", "png")
-PROGRESS_RE = re.compile(r"(\d+\.?\d*)%")
 TASKKILL_TIMEOUT_S = 10
 
 DOWNLOAD_TIMEOUT_S = 900
@@ -42,6 +43,87 @@ def _positive_number(info: VideoInfo, key: str) -> float | None:
     """A video info field as a positive number, or None if it is missing or not a positive number."""
     value = info.get(key)
     return float(value) if isinstance(value, int | float) and value > 0 else None
+
+
+@dataclass(frozen=True, slots=True)
+class Progress:
+    """Where a running download is, for the user.
+
+    Attributes:
+        stage: "downloading" while yt-dlp downloads the streams; "processing" from its
+            first postprocessor on (the MP3 encode or the MP4 merge, then the cover pass),
+            which reports no progress of its own.
+        fraction: The downloaded share of the whole download, 0.0-1.0, or None while
+            unknown (and while processing).
+    """
+
+    stage: Literal["downloading", "processing"]
+    fraction: float | None = None
+
+
+class ProgressTracker:
+    """Turns yt-dlp's progress events into one Progress for the whole download.
+
+    yt-dlp reports every stream on its own (an MP4 is two downloads, video then audio,
+    each counting from 0 to its own size). The fraction counts the bytes of all streams
+    against `filesize_approx`, the size yt-dlp expects for all of them together, or
+    without it against the streams seen so far. It never goes back and is rounded to
+    0.1 %, and an event that would repeat the last Progress gives none, so a large
+    download reports at most ~1000 steps.
+
+    Attributes:
+        expected_bytes: `filesize_approx` from the video info, or None if unknown.
+    """
+
+    def __init__(self) -> None:
+        self.expected_bytes: float | None = None
+        self._finished_bytes = 0.0  # the streams that finished downloading
+        self._fraction = 0.0
+        self._last: Progress | None = None
+
+    def update(self, event: dict[str, object]) -> Progress | None:
+        """Take one event of the progress templates (see build_download_command).
+
+        Args:
+            event: A download event (status, downloaded_bytes, total_bytes or
+                total_bytes_estimate) or a postprocessor event (status, postprocessor).
+        Returns:
+            The new Progress, or None if the event changes nothing for the user.
+        """
+        if "postprocessor" in event:
+            progress = Progress("processing")
+        else:
+            progress = self._download_progress(event)
+        if progress is None or progress == self._last:
+            return None
+        self._last = progress
+        return progress
+
+    def _download_progress(self, event: dict[str, object]) -> Progress | None:
+        """The Progress while yt-dlp downloads the streams, or None if the event is not a download one.
+         - compute the downloaded bytes and the whole size from the event and the finished streams
+         - update the fraction, never going back and rounding to 0.1 %
+
+         Notes: - total bytes is the stream's size
+                - total bytes estimate is the stream's size if known, else the best guess
+                - filesize_approx is the whole download's size, if known, else None
+        """
+        status = event.get("status")
+        if status not in ("downloading", "finished"):  # yt-dlp reports error itself
+            return None
+        downloaded = _positive_number(event, "downloaded_bytes") or 0.0
+        size = _positive_number(event, "total_bytes") or _positive_number(event, "total_bytes_estimate")
+        if status == "finished":
+            self._finished_bytes += downloaded or size or 0.0
+            done = seen = self._finished_bytes
+        else:
+            done = self._finished_bytes + downloaded
+            seen = self._finished_bytes + size if size else None
+        whole = max(self.expected_bytes or 0.0, seen or 0.0)
+        if not whole:
+            return Progress("downloading")
+        self._fraction = max(self._fraction, round(min(done / whole, 1.0), 3))
+        return Progress("downloading", self._fraction)
 
 
 def download_timeout(info: VideoInfo, media_format: MediaFormat, fallback: float) -> float:
@@ -131,9 +213,10 @@ def build_download_command(url: str, temp_stem: Path, media_format: MediaFormat)
     A single call fetches the video info, the media (see _format_args) and the raw
     thumbnail. The info (INFO_FIELDS) is printed as JSON after INFO_MARKER before the
     download starts (`before_dl`), so an existing title-named file can stop it early.
-    `--print` implies `--quiet`, so `--progress` keeps the progress lines the GUI parses;
-    `--no-simulate` makes sure printing never turns the call into a dry run.
-    `--playlist-items 1` and `--no-playlist` ensure that only the first item in a
+    `--print` implies `--quiet`, so `--progress` keeps the progress lines; their templates
+    print each download step and each postprocessor start as JSON after PROGRESS_MARKER
+    (for ProgressTracker). `--no-simulate` makes sure printing never turns the call into
+    a dry run. `--playlist-items 1` and `--no-playlist` ensure that only the first item in a
     playlist is downloaded. A Deno the host installed is passed explicitly
     (yt-dlp only looks on PATH); without one, yt-dlp uses a Deno on PATH or YouTube
     clients that need no JavaScript, which is faster.
@@ -157,6 +240,9 @@ def build_download_command(url: str, temp_stem: Path, media_format: MediaFormat)
         "--print", f"before_dl:{INFO_MARKER}%(.{{{','.join(INFO_FIELDS)}}})j",
         "--no-simulate",
         "--progress", "--newline",
+        "--progress-template",
+        f"download:{PROGRESS_MARKER}%(progress.{{status,downloaded_bytes,total_bytes,total_bytes_estimate}})j",
+        "--progress-template", f"postprocess:{PROGRESS_MARKER}%(progress.{{status,postprocessor}})j",
         "--encoding", "utf-8",
         *js_runtime,
         "-o", f"{str(temp_stem).replace('%', '%%')}.%(ext)s",  # a % in the folder is not part of the template
@@ -179,12 +265,21 @@ def find_thumbnail(temp_stem: Path) -> Path | None:
     return None
 
 
+def _progress_event(line: str) -> dict[str, object]:
+    """The JSON object of a progress line, or {} if it is not one (ProgressTracker ignores that)."""
+    try:
+        event = json.loads(line[len(PROGRESS_MARKER):])
+    except json.JSONDecodeError:
+        return {}
+    return event if isinstance(event, dict) else {}
+
+
 def run_yt_dlp(
     url: str,
     temp_stem: Path,
     media_format: MediaFormat,
     *,
-    on_progress: Callable[[float], object] | None,
+    on_progress: Callable[[Progress], object] | None,
     on_start: Callable[[subprocess.Popen[str], Path], None] | None,
     on_video_info: Callable[[VideoInfo], None],
     on_timeout: Callable[[float], None] | None,
@@ -195,7 +290,7 @@ def run_yt_dlp(
         url: The video or track URL.
         temp_stem: Output path without extension.
         media_format: The requested media format (MP3 or MP4).
-        on_progress: Optional callback receiving the progress as 0.0-1.0.
+        on_progress: Optional callback receiving each new Progress (see ProgressTracker).
         on_start: Optional callback receiving the process and temp stem once started.
         on_video_info: Callback receiving the video info (see INFO_FIELDS) before the
             download starts; raising from it stops yt-dlp and propagates.
@@ -237,13 +332,19 @@ def run_yt_dlp(
 
         info: VideoInfo = {}
         output_lines: list[str] = []
+        tracker = ProgressTracker()
         try:
             if on_start:
                 on_start(process, temp_stem)
             assert process.stdout is not None  # stdout=PIPE
             for line in process.stdout:
+                if line.startswith(PROGRESS_MARKER):
+                    if on_progress and (progress := tracker.update(_progress_event(line))):
+                        on_progress(progress)
+                    continue
                 if line.startswith(INFO_MARKER):
                     info = parse_info(line[len(INFO_MARKER):])
+                    tracker.expected_bytes = _positive_number(info, "filesize_approx")
                     on_video_info(info)
                     new = download_timeout(info, media_format, timeout)
                     if timeout < new:
@@ -254,12 +355,7 @@ def run_yt_dlp(
                             on_timeout(new)
                         timeout = new
                     continue
-                match = PROGRESS_RE.search(line)
-                if match and on_progress:
-                    on_progress(float(match.group(1)) / 100.0)
-                # progress lines would push the warnings download_with_repair reads out of the error's output
-                if not (match and line.startswith("[download]")):
-                    output_lines.append(line)
+                output_lines.append(line)
             process.wait()
         finally:
             watchdog.cancel()

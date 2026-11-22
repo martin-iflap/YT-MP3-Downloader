@@ -277,13 +277,15 @@ downloadBtn.addEventListener('click', () => {
 });
 
 openInAppBtn.addEventListener('click', () => {
-  // Everything is optional here; the user can fill it in inside the app.
+  // Everything is optional here; the user can fill it in inside the app. The format only
+  // preselects the app's switch, and a host before 2.2.0 ignores it, so it needs no hostSupports.
   showResult('Launching app...', 'info');
   sendNativeAction({
     action: 'download_gui',
     url: urlInput.value.trim() || undefined,
     folder: folderInput.value.trim() || undefined,
-    filename: filenameInput.value.trim() || undefined
+    filename: filenameInput.value.trim() || undefined,
+    ...formatRequest(currentFormat, selectedOptions(currentFormat))
   }, (resp) => {
     if (resp.status === 'success') showResult(resp.message || 'App launched', 'success');
     else if (resp.status === 'error') showResult(resp.message || 'Failed to launch app', 'error', resp.helpUrl);

@@ -222,4 +222,4 @@ def test_progress_lines_do_not_crowd_warnings_out_of_the_error(repairs: Repairs,
     with pytest.raises(subprocess.CalledProcessError) as error:
         core.download_audio(URL, out_dir, media_format=Mp3Format())
     assert "some harmless warning" in error.value.output
-    assert "[download]" not in error.value.output
+    assert ytdlp.PROGRESS_MARKER not in error.value.output

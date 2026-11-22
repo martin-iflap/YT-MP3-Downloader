@@ -489,6 +489,61 @@ def test_the_fallback_download_timeout_is_below_the_cap() -> None:
     assert ytdlp.DOWNLOAD_TIMEOUT_S <= ytdlp.DOWNLOAD_TIMEOUT_CAP_S
 
 
+def downloading(downloaded: int, **sizes: float) -> dict[str, object]:
+    return {"status": "downloading", "downloaded_bytes": downloaded, **sizes}
+
+
+def finished(size: int) -> dict[str, object]:
+    return {"status": "finished", "downloaded_bytes": size, "total_bytes": size}
+
+
+class TestProgressTracker:
+    """The edge cases the fake yt-dlp doesn't print; test_download_audio covers the usual ones."""
+
+    def test_an_hls_download_counts_against_its_growing_estimate(self) -> None:
+        # fragment downloads only estimate their size, and the estimate grows with each fragment
+        tracker = ytdlp.ProgressTracker()
+        assert tracker.update(downloading(250, total_bytes_estimate=1000.0)) == ytdlp.Progress("downloading", 0.25)
+        assert tracker.update(downloading(600, total_bytes_estimate=2000.0)) == ytdlp.Progress("downloading", 0.3)
+        assert tracker.update(finished(2100)) == ytdlp.Progress("downloading", 1.0)
+
+    def test_an_estimate_that_shrinks_never_moves_the_fraction_back(self) -> None:
+        tracker = ytdlp.ProgressTracker()
+        tracker.update(downloading(500, total_bytes=1000))
+        assert tracker.update(downloading(600, total_bytes_estimate=4000.0)) is None  # 0.15 would go back
+
+    def test_an_unknown_size_reports_downloading_without_a_fraction(self) -> None:
+        tracker = ytdlp.ProgressTracker()
+        assert tracker.update(downloading(500)) == ytdlp.Progress("downloading")
+        assert tracker.update(downloading(900)) is None  # the same for the user
+
+    def test_the_expected_size_counts_streams_not_started_yet(self) -> None:
+        tracker = ytdlp.ProgressTracker()
+        tracker.expected_bytes = 4000
+        assert tracker.update(finished(3000)) == ytdlp.Progress("downloading", 0.75)
+
+    def test_a_size_above_the_expected_one_wins(self) -> None:
+        # filesize_approx is an estimate; the bar must not reach the end before the download does
+        tracker = ytdlp.ProgressTracker()
+        tracker.expected_bytes = 1000
+        assert tracker.update(downloading(1000, total_bytes=2000)) == ytdlp.Progress("downloading", 0.5)
+
+    def test_processing_is_reported_once(self) -> None:
+        tracker = ytdlp.ProgressTracker()
+        tracker.update(finished(1000))
+        assert tracker.update({"status": "started", "postprocessor": "ExtractAudio"}) == ytdlp.Progress("processing")
+        assert tracker.update({"status": "finished", "postprocessor": "ExtractAudio"}) is None
+        assert tracker.update({"status": "started", "postprocessor": "MoveFiles"}) is None
+
+    @pytest.mark.parametrize("event", [{"status": "error", "downloaded_bytes": 10, "total_bytes": 100}, {}])
+    def test_errors_and_unknown_events_report_nothing(self, event: dict[str, object]) -> None:
+        assert ytdlp.ProgressTracker().update(event) is None
+
+    @pytest.mark.parametrize("payload", ["not json", "[1, 2]", ""])
+    def test_a_broken_progress_line_is_an_empty_event(self, payload: str) -> None:
+        assert ytdlp._progress_event(ytdlp.PROGRESS_MARKER + payload) == {}
+
+
 def file_of_size(path: Path, size: int) -> Path:
     """A file of size bytes, without writing them (NTFS extends it sparsely)."""
     with path.open("wb") as f:

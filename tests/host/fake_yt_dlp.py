@@ -1,8 +1,9 @@
 """Stand-in for yt-dlp.exe in the host tests.
 
 Run as `python fake_yt_dlp.py <the arguments ytdlp.build_download_command builds>`.
-It honors the real `-o` output template and the `--print` info template (`%(.{fields})j`:
-a JSON object of the requested fields the video has), so the tests also check the
+It honors the real `-o` output template, the `--print` info template (`%(.{fields})j`:
+a JSON object of the requested fields the video has) and the `--progress-template`s
+(`download:`/`postprocess:` with `%(progress.{fields})j`), so the tests also check the
 command contract. With `--version` (health.yt_dlp_version_command) it only prints its
 version; fail, hang and bad_version apply there too.
 Behavior comes from environment variables:
@@ -23,6 +24,8 @@ media file in either format.
     FAKE_YTDLP_THUMB    an image to copy as the .png thumbnail (default: junk .webp)
     FAKE_YTDLP_CHILD_PID_FILE  where hang mode writes the PID of the process it leaves behind
     FAKE_YTDLP_DELAY_S  seconds the download takes after the info is printed (default 0), for the watchdog
+    FAKE_YTDLP_STREAMS  the sizes of the downloaded streams as a JSON list (default: [3000000], or
+                        [3000000, 1000000] for a merged video and audio); each reports 0 %, 42.5 % and finished
 """
 
 import json
@@ -76,6 +79,25 @@ def output_ext(args: list[str]) -> str:
     return "webm"  # what YouTube's best streams merge to without it
 
 
+def progress_templates(args: list[str]) -> dict[str, tuple[str, list[str]]]:
+    """The marker and fields of each --progress-template, by type (download, postprocess)."""
+    templates = {}
+    for index, arg in enumerate(args):
+        if arg == "--progress-template":
+            kind, _, template = args[index + 1].partition(":")
+            parts = re.fullmatch(r"(.*)%\(progress\.\{(.*)}\)j", template)
+            assert parts, "unexpected --progress-template"
+            templates[kind] = (parts[1], parts[2].split(","))
+    return templates
+
+
+def emit_progress(templates: dict[str, tuple[str, list[str]]], kind: str, event: dict[str, object]) -> None:
+    """Print one progress event like the real yt-dlp: only the requested fields the event has."""
+    if kind in templates:
+        marker, fields = templates[kind]
+        emit(marker + json.dumps({field: event[field] for field in fields if field in event}))
+
+
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")  # yt-dlp runs with --encoding utf-8
     args = sys.argv[1:]
@@ -108,8 +130,12 @@ def main() -> None:
     partial = Path(f"{stem}.webm.part")
     partial.write_bytes(b"partial download")
     time.sleep(float(os.environ.get("FAKE_YTDLP_DELAY_S", "0")))
-    for percent in ("0.0", "42.5", "100.0"):
-        emit(f"[download] {percent:>5}% of 3.00MiB at 1.00MiB/s ETA 00:01")
+    templates = progress_templates(args)
+    merged = "--merge-output-format" in args
+    for size in json.loads(os.environ.get("FAKE_YTDLP_STREAMS", "[3000000, 1000000]" if merged else "[3000000]")):
+        for downloaded in (0, int(size * 0.425)):
+            emit_progress(templates, "download", {"status": "downloading", "downloaded_bytes": downloaded, "total_bytes": size})
+        emit_progress(templates, "download", {"status": "finished", "downloaded_bytes": size, "total_bytes": size})
 
     if mode == "fail":
         emit("WARNING: [youtube] some harmless warning")
@@ -119,6 +145,9 @@ def main() -> None:
         hang()
 
     partial.unlink()
+    for postprocessor in ("ExtractAudio" if "-x" in args else "Merger", "MoveFiles"):
+        for status in ("started", "finished"):
+            emit_progress(templates, "postprocess", {"status": status, "postprocessor": postprocessor})
     if mode != "no_mp3":
         ext = output_ext(args)
         if source := os.environ.get(f"FAKE_YTDLP_{ext.upper()}"):

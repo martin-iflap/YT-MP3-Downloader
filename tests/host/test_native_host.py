@@ -15,7 +15,7 @@ import pytest
 
 from conftest import EmbedCall, FakeYtDlp, point_yt_dlp_at
 from ytmp3_host import MP3, __version__, config, files, health, native_messaging, processes, updater, ytdlp
-from ytmp3_host.media_format import Mp3Format
+from ytmp3_host.media_format import MediaFormat, Mp3Format, Mp4Format
 from ytmp3_host.naming import MAX_FILENAME_CHARS, filename_too_long_message
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
@@ -154,6 +154,25 @@ def test_a_window_that_can_not_open_is_one_final_error_and_the_host_exits(monkey
     monkeypatch.setattr(MP3, "open_gui", _fail)
     [response] = run_host(monkeypatch, requests({"action": "download_gui"}, {"action": "get_current_folder"}))
     assert response == {"status": "error", "message": "Could not open the app window: no display", "final": True}
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({}, Mp3Format()),  # sidebars before 2.2.0 send no format
+        ({"format": "mp4", "quality": "720", "codec": "compatible"}, Mp4Format(quality="720", codec="compatible")),
+        ({"format": "flac"}, Mp3Format()),  # only a preselection: the window still opens
+        ({"format": "mp4", "quality": "4320"}, Mp3Format()),
+    ],
+)
+def test_the_window_opens_with_the_requested_format(
+    monkeypatch: pytest.MonkeyPatch, fields: dict[str, str], expected: MediaFormat
+) -> None:
+    opened: list[tuple[object, ...]] = []
+    monkeypatch.setattr(MP3, "open_gui", lambda *args: opened.append(args))
+    with pytest.raises(SystemExit):
+        MP3.download_gui({"action": "download_gui", "url": "https://youtu.be/x", **fields})
+    assert opened == [("https://youtu.be/x", "", "", expected)]
 
 
 # --- show_in_folder and play --------------------------------------------------

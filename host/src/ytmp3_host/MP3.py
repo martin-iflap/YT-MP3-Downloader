@@ -10,7 +10,7 @@ from collections.abc import Callable
 
 from ytmp3_host import __version__
 from ytmp3_host.config import setup_logging
-from ytmp3_host.media_format import media_format_from_request
+from ytmp3_host.media_format import Mp3Format, media_format_from_request
 from ytmp3_host.native_messaging import (
     Message,
     read_message,
@@ -61,9 +61,16 @@ def download_gui(request: Message) -> None:
 
     The extension keeps this port open so Firefox does not kill the window, so the
     host exits itself once the window is closed instead of waiting on stdin forever.
+    The format only preselects the window's switch, so an unknown one selects MP3
+    instead of keeping the window closed.
     """
     try:
-        open_gui(request.get("url", ""), request.get("folder", ""), request.get("filename", ""))
+        media_format = media_format_from_request(request)
+    except ValueError as e:
+        logger.warning("Opening the GUI with MP3: %s", e)
+        media_format = Mp3Format()
+    try:
+        open_gui(request.get("url", ""), request.get("folder", ""), request.get("filename", ""), media_format)
     except Exception as e:
         # report it here: after main() reported it, the host would wait on stdin forever
         logger.exception("Could not open the GUI")

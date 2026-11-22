@@ -92,11 +92,18 @@ class FakeYtDlp:
     monkeypatch: pytest.MonkeyPatch
 
     def set(
-        self, mode: str = "success", title: str | None = None, version: str | None = None, info: dict | None = None
+        self,
+        mode: str = "success",
+        title: str | None = None,
+        version: str | None = None,
+        info: dict | None = None,
+        streams: list[int] | None = None,
     ) -> None:
-        """Set the mode (see fake_yt_dlp.py) and the title, version and other video info the fake
-        prints; None keeps the defaults."""
+        """Set the mode (see fake_yt_dlp.py) and the title, version, other video info and stream
+        sizes the fake prints; None keeps the defaults."""
         self.monkeypatch.setenv("FAKE_YTDLP_MODE", mode)
+        if streams is not None:
+            self.monkeypatch.setenv("FAKE_YTDLP_STREAMS", json.dumps(streams))
         if title is not None:
             self.monkeypatch.setenv("FAKE_YTDLP_TITLE", title)
         if version is not None:

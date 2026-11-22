@@ -50,3 +50,12 @@ class TestMediaFormat:
         for quality in mf.MP4_QUALITIES:
             for codec in mf.MP4_CODECS:
                 assert mf.get_suffix(mf.Mp4Format(quality=quality, codec=codec)) == ".mp4"
+
+def test_the_gui_offers_every_mp4_choice_once() -> None:
+    # the window maps its dropdown labels back to these values; a missing or shared label would lose a choice
+    from ytmp3_host import gui
+
+    for labels, choices in ((gui.QUALITY_LABELS, mf.MP4_QUALITIES), (gui.CODEC_LABELS, mf.MP4_CODECS)):
+        assert list(labels) == list(choices)  # the first one is the default, as in the request
+        assert len(set(labels.values())) == len(labels)
+        assert all(gui._choice(labels, label) == choice for choice, label in labels.items())

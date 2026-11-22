@@ -11,11 +11,16 @@ import pytest
 from conftest import EmbedCall, FakeYtDlp
 from ytmp3_host import config, core, files, ytdlp
 from ytmp3_host.media_format import Mp3Format, Mp4Format
+from ytmp3_host.ytdlp import Progress
 
 URL = "https://www.youtube.com/watch?v=abc123"
 
 # these tests are about the MP3 download; an MP4 test passes its own media_format
 download_audio = functools.partial(core.download_audio, media_format=Mp3Format())
+
+
+def downloading(*fractions: float) -> list[Progress]:
+    return [Progress("downloading", fraction) for fraction in fractions]
 
 
 def leftovers(folder: Path) -> list[str]:
@@ -75,7 +80,7 @@ def test_existing_artist_title_file_stops_before_downloading(
     # the early check uses the same name as the final file, artist included
     fake_yt_dlp.set(title="Flickermood", info={"artists": ["Forss"], "uploader": "Forss"})
     (out_dir / "Forss - Flickermood.mp3").write_bytes(b"user's file")
-    progress: list[float] = []
+    progress: list[Progress] = []
     with pytest.raises(FileExistsError):
         download_audio("https://soundcloud.com/forss/flickermood", out_dir, on_progress=progress.append)
     assert progress == [] and fake_embed == []
@@ -114,10 +119,31 @@ def test_missing_thumbnail_warns_and_still_saves(
     assert len(warnings) == 1 and "thumbnail" in warnings[0]
 
 
-def test_reports_progress_as_fractions(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
-    progress: list[float] = []
+def test_reports_the_download_then_processing(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    progress: list[Progress] = []
     download_audio(URL, out_dir, on_progress=progress.append)
-    assert progress == [0.0, 0.425, 1.0]
+    assert progress == [*downloading(0.0, 0.425, 1.0), Progress("processing")]
+
+
+def test_mp4_progress_counts_video_and_audio_as_one_download(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # yt-dlp reports each stream from 0 to its own size; filesize_approx is both together
+    fake_yt_dlp.set(streams=[3_000_000, 1_000_000], info={"filesize_approx": 4_000_000})
+    progress: list[Progress] = []
+    core.download_audio(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+    # the audio's first event (0 of it, 0.75 in all) repeats the last one and is left out
+    assert progress == [*downloading(0.0, 0.319, 0.75, 0.856, 1.0), Progress("processing")]
+
+
+def test_mp4_progress_without_a_size_never_goes_back(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # without filesize_approx the audio stream is unknown until it starts; the bar stays full meanwhile
+    fake_yt_dlp.set(streams=[3_000_000, 1_000_000])
+    progress: list[Progress] = []
+    core.download_audio(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+    assert progress == [*downloading(0.0, 0.425, 1.0), Progress("processing")]
 
 
 def test_existing_requested_file_fails_before_downloading(
@@ -141,7 +167,7 @@ def test_existing_title_file_stops_before_downloading(
     fake_yt_dlp.set(title="Artist - Song (Official Video)")
     existing = out_dir / "Artist - Song.mp3"
     existing.write_bytes(b"user's file")
-    progress: list[float] = []
+    progress: list[Progress] = []
 
     with pytest.raises(FileExistsError) as info:
         download_audio(URL, out_dir, on_progress=progress.append)
@@ -356,7 +382,7 @@ def test_cancel_through_on_start_stops_the_download(
     fake_yt_dlp.set("hang")
     started: list[subprocess.Popen[str]] = []
 
-    def _cancel(_fraction: float) -> None:
+    def _cancel(_progress: Progress) -> None:
         ytdlp.kill_process_tree(started[0])
 
     start = time.monotonic()
@@ -373,7 +399,7 @@ def test_raising_progress_callback_does_not_leave_yt_dlp_running(
     fake_yt_dlp.set("hang")
     prcs: list[subprocess.Popen[str]] = []
 
-    def _broken_progress(_fraction: float) -> None:
+    def _broken_progress(_progress: Progress) -> None:
         raise RuntimeError("UI is gone")
 
     start = time.monotonic()
