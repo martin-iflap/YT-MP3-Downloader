@@ -1,4 +1,4 @@
-/* exported isYouTubeUrl, isKnownSiteUrl, isWebUrl */
+/* exported isYouTubeUrl, isKnownSiteUrl, isAudioSiteUrl, isWebUrl */
 
 // Shared by background.js and sidebar.js (loaded as a plain script in both).
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be']);
@@ -37,7 +37,12 @@ function isYouTubeUrl(value) {
 
 // A YouTube video or a track on one of AUDIO_SITES.
 function isKnownSiteUrl(value) {
-  if (isYouTubeUrl(value)) return true;
+  return isYouTubeUrl(value) || isAudioSiteUrl(value);
+}
+
+// A track on one of AUDIO_SITES. They have no video, so an MP4 of one fails (the host
+// decides: yt-dlp reports a link's streams, these checks only know the URL).
+function isAudioSiteUrl(value) {
   const url = parseWebUrl(value);
   if (!url) return false;
   const host = url.hostname.replace(/^(www|m)\./, '');

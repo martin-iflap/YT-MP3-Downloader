@@ -89,12 +89,12 @@ def get_current_folder(_request: Message) -> None:
 
 
 def show_in_folder(request: Message) -> None:
-    """Handle the `show_in_folder` action: show a downloaded MP3 (`path`) selected in Explorer."""
+    """Handle the `show_in_folder` action: show a downloaded MP3 or MP4 (`path`) selected in Explorer."""
     run_open_file(request.get("path", ""), select=True)
 
 
 def play(request: Message) -> None:
-    """Handle the `play` action: open a downloaded MP3 (`path`) in the default player."""
+    """Handle the `play` action: open a downloaded MP3 or MP4 (`path`) in the default player."""
     run_open_file(request.get("path", ""), select=False)
 
 

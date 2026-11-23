@@ -21,9 +21,11 @@ type VideoInfo = dict[str, object]
 # the video info yt-dlp prints as JSON before downloading: the title names the file, the rest
 # become tags. artists/album/release_year/track_number exist only for YouTube Music uploads
 # and music sites (SoundCloud, Bandcamp, ...); other sites have an uploader instead of a channel.
+# filesize_approx and duration set the timeout, format_id ("399+251") the progress's stream count,
+# and vcodec ("none" for audio only) stops an MP4 download of a link without video.
 INFO_FIELDS = (
     "title", "artists", "album", "release_year", "track_number", "channel",
-    "uploader", "webpage_url", "extractor_key", "filesize_approx", "duration",
+    "uploader", "webpage_url", "extractor_key", "filesize_approx", "duration", "format_id", "vcodec",
 )
 # sites whose `artists` list the tracks of a mix, not who made it
 TRACKLIST_EXTRACTORS = frozenset({"Mixcloud"})

@@ -9,7 +9,7 @@
 #define MyAppName         "YouTube MP3 Downloader"
 ; Must match __version__ in host\src\ytmp3_host\__init__.py
 ; (tests\host\test_versions.py checks it).
-#define MyAppVersion      "2.1.0"
+#define MyAppVersion      "2.2.0"
 #define MyAppPublisher    "Martin"
 
 ; Must match browser_specific_settings.gecko.id in the

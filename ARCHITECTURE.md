@@ -15,7 +15,7 @@ updates of itself, yt-dlp and (when needed) Deno.
 ```mermaid
 flowchart TB
     subgraph FF["Firefox"]
-        SB["sidebar.html + sidebar.js<br/>(UI, app status notice)"]
+        SB["sidebar.html + sidebar.js<br/>(UI, MP3/MP4 switch, progress, app status notice)"]
         CM["Context menu<br/>'Download as MP3'"]
         BG["background.js<br/>action whitelist + timeouts<br/>one native port per request<br/>check-and-repair, notifications"]
         SB -- "runtime.sendMessage" --> BG
@@ -38,8 +38,8 @@ flowchart TB
     end
 
     subgraph TOOLS["External binaries"]
-        YT["yt-dlp.exe<br/>audio MP3 V0 + raw thumbnail"]
-        FFM["ffmpeg.exe (core.embed_thumbnail)<br/>cover art + tags, audio copied"]
+        YT["yt-dlp.exe<br/>audio MP3 V0, or video + audio merged to MP4<br/>+ raw thumbnail"]
+        FFM["ffmpeg.exe (core.embed_thumbnail)<br/>cover art + tags, media copied"]
         YT --> FFM
     end
 
@@ -47,7 +47,7 @@ flowchart TB
 
     BG <-- "stdin / stdout<br/>4-byte length + JSON" --> MAIN
     CORE --> YT
-    FFM --> OUT[("Documents/YT-MP3-Downloads/<br/>title.mp3")]
+    FFM --> OUT[("Documents/YT-MP3-Downloads/<br/>title.mp3 / title.mp4")]
     HEALTH --> GH
     UPD --> GH
 ```
@@ -72,6 +72,8 @@ live in the host, because WebExtensions cannot do them.
 | Download logic (headless and GUI)                      | `core.download_audio`; request handling in `native_messaging.run_native` / `gui.py` |
 | Retry after a yt-dlp failure, Deno on demand           | `core.download_with_repair`                                                         |
 | yt-dlp arguments                                       | `ytdlp.build_download_command`                                                       |
+| Formats (MP3, MP4 quality and codec)                   | `media_format.py`, `ytdlp._format_args`; the sidebar's choices in `extension/formats.js` |
+| Download progress                                      | `ytdlp.ProgressTracker`; `native_messaging.run_native`, `gui.show_progress`, `formats.progressText` |
 | Filename cleanup, cover art, tags                      | `naming.safe_filename`, `core.embed_thumbnail`, `metadata.artist_for`, `metadata.extra_tags`  |
 | Updates of yt-dlp, Deno and the host                   | `host/src/ytmp3_host/updater.py`                                                    |
 | Versions and tool state reported to the extension      | `host/src/ytmp3_host/health.py`                                                     |
@@ -90,7 +92,10 @@ extension/                  Firefox add-on; zipped as-is for AMO
   background.js             Message router, native-messaging client, check-and-repair, context menu, notifications
   sidebar.html              Sidebar markup and inline CSS
   sidebar.js                Sidebar logic: fields, buttons, app status notice, request/response tracking
-  youtube.js                URL checks (isYouTubeUrl, isKnownSiteUrl, isWebUrl), shared by background and sidebar
+  youtube.js                URL checks (isYouTubeUrl, isKnownSiteUrl, isAudioSiteUrl, isWebUrl), shared by background and sidebar
+  naming.js                 The filename length limit (mirrors naming.filename_limit), sidebar only
+  formats.js                The download formats (FORMATS), their requests and progress text, sidebar only
+  theme.js                  Light, dark or automatic theme, loaded first in sidebar.html
   icons/                    48/96 px PNGs
 
 host/
@@ -99,10 +104,11 @@ host/
     MP3.py                  Entry point: ACTIONS dispatch table, the request loop, --self-check
     native_messaging.py     stdio framing, run_native() (headless download), run_open_file(), send_current_folder()
     core.py                 Download pipeline and repair, cover art, describe_error()
+    media_format.py         Mp3Format | Mp4Format (quality, codec), parsed from a request
     naming.py               Filename sanitizing, artist/title from a filename, URL checks
     metadata.py             The video info yt-dlp prints: title-based filename, artist and other tags
     files.py                Folders, temp file cleanup, Show in folder / Play
-    ytdlp.py                yt-dlp arguments, the download with its watchdog, kill_process_tree()
+    ytdlp.py                yt-dlp arguments, the download with its watchdog and progress, kill_process_tree()
     config.py               Install layout and paths, DEFAULT_FOLDER, setup_logging()
     health.py               get_version facts: versions, tool state; version parsing and comparison
     github.py               latest_release_tag() (one HEAD request per lookup)
@@ -235,24 +241,34 @@ Exceptions:
 ### 4.1 Requests (extension → host)
 
 ```json
-{ "action": "download", "url": "https://...", "folder": "C:\\...", "filename": "..." }
+{ "action": "download", "url": "https://...", "folder": "C:\\...", "filename": "...",
+  "format": "mp4", "quality": "720", "codec": "best" }
 ```
 
 | `action`             | Fields                         | Host behaviour                                                                                      | Timeout (`background.js`)   |
 |----------------------|--------------------------------|-----------------------------------------------------------------------------------------------------|-----------------------------|
-| `download`           | `url`, `folder?`, `filename?`  | Headless download, `run_native()` (with one repair and retry, §7.6)                                 | 51 min                      |
-| `download_gui`       | `url?`, `folder?`, `filename?` | Opens the pre-filled Tk window, `gui.open_gui()`                                                    | 30 s (until `"GUI opened"`) |
+| `download`           | `url`, `folder?`, `filename?`, format fields | Headless download, `run_native()` (with one repair and retry, §7.6)                   | 70 min, extended by `deadline_s` |
+| `download_gui`       | `url?`, `folder?`, `filename?`, format fields | Opens the pre-filled Tk window with that format selected, `gui.open_gui()`           | 30 s (until `"GUI opened"`) |
 | `select_folder`      | `folder?`                      | Folder picker starting at `folder`; returns the selection, or `folder` (else the default) on cancel | 10 min (user interaction)   |
 | `get_current_folder` | —                              | Returns the default folder, creating it if missing                                                  | 15 s                        |
-| `show_in_folder`     | `path`                         | Opens the MP3's folder in Explorer with it selected (`files.show_in_folder`)                         | 15 s                        |
-| `play`               | `path`                         | Opens the MP3 in its default app, through Explorer (`files.open_file`)                               | 15 s                        |
+| `show_in_folder`     | `path`                         | Opens the file's folder in Explorer with it selected (`files.show_in_folder`)                        | 15 s                        |
+| `play`               | `path`                         | Opens the file in its default app, through Explorer (`files.open_file`)                              | 15 s                        |
 | `get_version`        | —                              | The host version and the state of its tools (`health.host_status`, §7.1)                            | 30 s                        |
 | `update_yt_dlp`      | —                              | Installs the latest yt-dlp, or repairs a missing/broken one (`updater.update_yt_dlp`)               | 11 min                      |
 | `update_host`        | —                              | Starts the installer of a newer host release (`updater.update_host`)                                | 9 min                       |
 | `ping`               | —                              | Answers with `version` only; sent by the self-check (§7.5), not by the extension                    | —                           |
 
-`show_in_folder` and `play` only accept an absolute path to an existing `.mp3`
-(`files.downloaded_mp3`); anything else is "The MP3 was moved or deleted". `play` must
+Format fields (`media_format.media_format_from_request`): without `format` the request is
+an MP3, so old extensions and context-menu downloads keep working, and the sidebar never
+sends one for MP3. `"format": "mp4"` takes `quality` (`best`, `1080`, `720`, `480`) and
+`codec` (`best`: AV1/VP9, `compatible`: H.264 + AAC); a missing option is its default
+(`best`). An unknown format or option is a final error for `download`, never a silent MP3;
+`download_gui` only preselects the window's switch, so there it selects MP3. The sidebar
+sends a format other than MP3 only when the host lists it in `get_version`'s `formats`: a
+host before 2.2.0 ignores the field and would download an MP3.
+
+`show_in_folder` and `play` only accept an absolute path to an existing `.mp3` or `.mp4`
+(`files.downloaded_file`); anything else is "The file was moved or deleted". `play` must
 never run a program.
 
 The host treats a missing or unknown `action` as `download`. `background.js` rejects
@@ -271,6 +287,8 @@ unknown actions before spawning the host, so this path is not reached from the e
 |--------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `final: false`     | Intermediate message; request still running. `download` sends warnings ("Could not fetch the video title, …", "No thumbnail found, …") and infos about a repair ("The download failed, checking for a yt-dlp update...", "Trying the download again..."). The final success repeats the warnings in `message`, since the sidebar replaces them. |
 | `final: true`      | Last message for the request. Exactly one per request.                                                                                                                                                                                                                                                                                          |
+| `progress`         | `download`, `final: false`, `status: info`, no `message`: `{ "stage": "downloading" \| "processing", "fraction": 0.0-1.0 \| null }` for the whole download (an MP4's video and audio count as one). `run_native` sends it at most every `PROGRESS_INTERVAL_S` (0.3 s), but always a new stage and 100 %, which no later update would replace. Sidebars before 2.2.0 show only intermediate responses with a `message`, so they ignore it. |
+| `deadline_s`       | `download`, `final: false`, no `message`: yt-dlp's timeout grew with the video's size (`ytdlp.download_timeout`), in seconds from its start. `background.js` does not relay it; it moves the request's timeout to that plus the action's own timeout from now, never earlier. |
 | `filename`, `path` | Set on a successful download.                                                                                                                                                                                                                                                                                                                   |
 | `folder`           | Set by folder actions.                                                                                                                                                                                                                                                                                                                          |
 | `version`          | `get_version`: the host version. `update_host`: the tag being installed, or `null` if this host is the latest.                                                                                                                                                                                                                                  |
@@ -287,6 +305,7 @@ as intermediate.
   "yt_dlp": { "installed": true, "version": "2026.10.21", "latest": "2026.10.21", "outdated": false },
   "ffmpeg": { "installed": true },
   "js_runtime": { "name": "deno", "installed": false },
+  "formats": ["mp3", "mp4"],
   "final": true }
 ```
 
@@ -311,11 +330,12 @@ shows as a "Download the installer" link with a hint about the unsigned-installe
 
 All files are plain scripts sharing one global scope per page. `youtube.js` is loaded
 before the page script in both the background page and the sidebar, which makes its URL
-checks globals in both.
+checks globals in both. The sidebar also loads `theme.js` (in `<head>`, so the page is
+drawn in its theme from the start), `naming.js` and `formats.js`.
 
 ```mermaid
 flowchart LR
-    YT["youtube.js<br/>isYouTubeUrl, isKnownSiteUrl, isWebUrl"]
+    YT["youtube.js<br/>isYouTubeUrl, isKnownSiteUrl, isAudioSiteUrl, isWebUrl"]
     BG["background.js"]
     SB["sidebar.js"]
     HTML["sidebar.html"]
@@ -363,11 +383,11 @@ flowchart TB
 | `contextMenus.create` (top level)             | Registers "Download as MP3" for YouTube, SoundCloud, Bandcamp and Mixcloud links (`targetUrlPatterns`). Runs on every startup because MV2 persistent backgrounds do not keep menus.                                                  |
 | `browserAction.onClicked`                     | The toolbar button (`default_area: navbar`): toggles the sidebar, which Firefox gives no launcher when tabs are on top. `toggle()` is called directly, as it needs the user action. Remembers the click time for `toolbarTipWanted`. |
 | `runtime.onMessage` (`toolbar_tip`)           | Answers the sidebar with `toolbarTipWanted()`: true if the button is pinned and the sidebar opened without it (no click in 5 s, not restored at startup), until dismissed. Extensions can't unpin the button themselves.             |
-| `runtime.onMessage`                           | Accepts `native_action` from the sidebar. Rejects actions not in `ACTION_TIMEOUTS_MS`. Copies only `action`, `url`, `folder`, `filename`, `path` into the payload.                                                                   |
+| `runtime.onMessage`                           | Accepts `native_action` from the sidebar. Rejects actions not in `ACTION_TIMEOUTS_MS`. Copies only `action`, `url`, `folder`, `filename`, `path` and the format fields (`format`, `quality`, `codec`) into the payload.            |
 | `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set, starts a `download`, then `checkHostInBackground`.                                                                                                    |
 | `checkHostInBackground()`                     | A silent `checkHost` for context-menu-only users, at most once a day: 1 min after startup and after a context-menu download. Any check counts; its start time is `storage.local.lastHostCheck` (§7.2).                               |
 | `runNativeAction(payload, requestId, origin)` | Runs the request (`get_version` through `checkHost`), relays intermediate responses, then exactly one final one; notifies for downloads.                                                                                             |
-| `hostRequest(payload, onProgress)`            | Opens the port, posts the payload, starts the timeout. Resolves once with `{ response, source }`; `source` is `host`, `timeout`, `disconnect` or `connect`.                                                                          |
+| `hostRequest(payload, onProgress)`            | Opens the port, posts the payload, starts the timeout. Resolves once with `{ response, source }`; `source` is `host`, `timeout`, `disconnect` or `connect`. A `deadline_s` response extends the timeout instead of going to `onProgress`. |
 | `checkHost(onProgress)`                       | One check-and-repair at a time; a second caller shares the running one (§7.2).                                                                                                                                                       |
 | `relay(message)`                              | Sends `native_response` to extension pages. Rejection (no page open) is ignored.                                                                                                                                                     |
 | `notifyDownloadResult(origin, response)`      | `download` only. Context-menu downloads always notify; sidebar downloads only if the sidebar is closed when the result arrives. A click on a success notification shows the file.                                                    |
@@ -393,8 +413,9 @@ stateDiagram-v2
 | App status                       | `checkHost()` sends `get_version` on every open. Intermediate responses (repairs running) and a final warning/error show in the persistent `#hostNotice`, with the installer link when `helpUrl` is set; success hides it.  |
 | URL field                        | `syncUrlFromActiveTab()` mirrors the active tab's URL when `isKnownSiteUrl` accepts it, on tab switch and in-page navigation. Skipped once the user types a URL (`autofilledUrl` tracks the last autofilled value).         |
 | Folder field                     | `loadFolder()` uses `storage.local.lastFolder`; if unset, requests `get_current_folder` and stores the result. Manual edits are saved on `change`; an empty value removes the key. Context-menu downloads use the same key. |
-| Download button                  | Accepts any http(s) URL (`isWebUrl`), sends `download`. Intermediate responses show as info/warning, the final one as success/error.                                                                                        |
-| Open in app button               | Sends `download_gui` with whichever fields are filled.                                                                                                                                                                      |
+| Format switch                    | MP3/MP4 at the top. Shows the fields marked with that `data-format` (MP4: quality and codec selects, built from `FORMATS` in `formats.js`). The format and each format's choices are remembered (`storage.local.format`, `<format>Options`); a stored value this version doesn't know falls back to the default. |
+| Download button                  | Accepts any http(s) URL (`isWebUrl`); a filename too long for the folder is refused first (`naming.js`). An MP4 needs the host to list `mp4` in `formats` (`hostSupports`), else the sidebar says the app needs an update. Sends `download` with `formatRequest(...)` (nothing for MP3). Shows "Starting the download...", then each `progress` as `progressText` ("Downloading 42%", "Converting to MP3...", "Saving the MP4..."), other intermediate responses as info/warning, the final one as success/error. |
+| Open in app button               | Sends `download_gui` with whichever fields are filled and the selected format.                                                                                                                                              |
 | Choose button                    | Sends `select_folder` with the current folder field, so cancelling keeps it.                                                                                                                                                |
 | `showResult()` / `clearResult()` | Status pill. A successful download gets "Show in folder" and "Play" (`fileActions`) and stays until the next result; other successes hide after 5 s.                                                                        |
 
@@ -406,6 +427,9 @@ stateDiagram-v2
   `/<user>/<track>` and `on.soundcloud.com` share links, `<artist>.bandcamp.com/track/…`,
   Mixcloud `/<user>/<show>`). These get the context menu (whose `targetUrlPatterns` must
   cover them) and fill the sidebar's URL field.
+- `isAudioSiteUrl(value)`: a track on `AUDIO_SITES` alone. With MP4 selected, the sidebar
+  shows `#urlWarning` under the URL field for such a link (they have no video), without
+  blocking the download: only yt-dlp knows a link's streams, the host raises `NoVideoError`.
 - `isWebUrl(value)`: any http(s) URL, what the sidebar accepts when pasted (yt-dlp knows
   many sites and reports the ones it can't download).
 
@@ -434,7 +458,14 @@ flowchart BT
     ME["metadata.py"]
     FI["files.py"]
     YD["ytdlp.py"]
+    MF["media_format.py<br/>(no project imports)"]
 
+    CORE --> MF
+    YD --> MF
+    NM --> MF
+    NM --> YD
+    GUI --> MF
+    MP3 --> MF
     CORE --> CFG
     CORE --> NA
     CORE --> ME
@@ -520,8 +551,8 @@ third-party libraries log WARNING and up. Every module logs through
 
 | Handler              | Behaviour                                                                                                             |
 |----------------------|-----------------------------------------------------------------------------------------------------------------------|
-| `download`           | `native_messaging.run_native(url, folder, filename)`                                                                  |
-| `download_gui`       | `gui.open_gui(...)`, then `sys.exit(0)` once the window is closed (the port is kept open, so stdin never reaches EOF) |
+| `download`           | `media_format_from_request(request)` (an unknown format is a final error), then `native_messaging.run_native(url, folder, filename, media_format)` |
+| `download_gui`       | `gui.open_gui(..., media_format)` (an unknown format selects MP3), then `sys.exit(0)` once the window is closed (the port is kept open, so stdin never reaches EOF) |
 | `select_folder`      | `gui.select_folder(folder)`                                                                                           |
 | `get_current_folder` | `send_current_folder("")`: the default folder, created if missing                                                     |
 | `show_in_folder`     | `run_open_file(path, select=True)`                                                                                    |
@@ -529,6 +560,7 @@ third-party libraries log WARNING and up. Every module logs through
 | `get_version`        | `updater.remove_installed_downloads()` and `updater.remove_unused_yt_dlp()`, then `health.host_status()`              |
 | `update_yt_dlp`      | `updater.update_yt_dlp()` (bound as `install_yt_dlp`); `UpdateError` becomes a final error                            |
 | `update_host`        | `updater.update_host()` (bound as `install_host_update`); `UpdateError` becomes a final error                         |
+| `ping`               | Answers with `version` only, for the self-check (§7.5)                                                                |
 
 Started as `mp3.exe --self-check` (`SELF_CHECK_ARG`), it runs `selfcheck.self_check()`
 and exits with its code instead of serving requests. Started as `mp3.exe --install-yt-dlp`
@@ -542,7 +574,7 @@ starts the host with other arguments (the manifest path and the extension ID).
 flowchart TB
     R["read_message()"] -- "EOF" --> X["sys.exit(0)"]
     R --> D{"action"}
-    D -- "download / unknown / missing" --> RN["run_native(url, folder, filename)"]
+    D -- "download / unknown / missing" --> RN["run_native(url, folder, filename, media_format)"]
     D -- "download_gui" --> RG["gui.open_gui(...)"] --> X0["sys.exit(0) after the window closes"]
     D -- "other actions" --> H["ACTIONS[action](request)"]
     RN --> R
@@ -561,26 +593,29 @@ the main thread only, and the worker thread changes widgets only via `self.after
 
 | Function                                                    | Behaviour                                                                                                                                                                                                                                                                                                                                                             |
 |-------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `open_gui(url, folder, filename)`                           | Builds the window and calls `run_native_gui`.                                                                                                                                                                                                                                                                                                                         |
-| `run_native_gui(url, folder, filename)`                     | Pre-fills the fields. Invalid folder → the default folder is kept, the window's status label and the final `"GUI opened, folder not found …"` message say so. Schedules the final response (100 ms) and blocks in `mainloop()`.                                                                                                                                       |
-| `start_download()`                                          | Main thread: validates URL (`is_web_url`) and folder (`resolve_folder`), switches the button to Cancel (so a second click cannot start a second download), then starts `_download_thread` with the values.                                                                                                                                                            |
-| `_download_thread(url, folder_path, filename, download_id)` | Calls `core.download_with_repair` with `on_progress` (progress bar), `on_start` (remembers the process for cancel; kills it if Cancel was clicked before yt-dlp started), `on_info` (repair messages) and `is_cancelled`. Shows the result. Once a newer download started (`download_id` changed), a canceled thread that is still repairing leaves the window alone. |
-| `show_saved(mp3_path, warnings)`                            | The "Saved" status with "Show in folder" and "Play" below it (`files.show_in_folder`, `files.open_file`).                                                                                                                                                                                                                                                               |
+| `open_gui(url, folder, filename, media_format)`             | Builds the window and calls `run_native_gui`.                                                                                                                                                                                                                                                                                                                         |
+| `run_native_gui(url, folder, filename, media_format)`       | Selects the format (`set_format`) and pre-fills the fields. Invalid folder → the default folder is kept, the window's status label and the final `"GUI opened, folder not found …"` message say so. Schedules the final response (100 ms) and blocks in `mainloop()`.                                                                                                 |
+| `selected_format()`, `set_format()`                         | The FORMAT row at the top: an MP3/MP4 switch; for MP4 a quality and a codec dropdown (`QUALITY_LABELS`, `CODEC_LABELS`, the sidebar's choices), shown only while MP4 is selected. The Download button says "Download MP3"/"Download MP4" (not while it is Cancel or Next).                                                                                         |
+| `start_download()`                                          | Main thread: validates URL (`is_web_url`), folder (`resolve_folder`, `folder_is_writable`) and filename length, reads the format, switches the button to Cancel (so a second click cannot start a second download), then starts `_download_thread` with the values.                                                                                                |
+| `_download_thread(url, folder_path, filename, media_format, download_id)` | Calls `core.download_with_repair` with `on_progress` (`show_progress`, checked against Cancel on the main thread), `on_start` (remembers the process for cancel; kills it if Cancel was clicked before yt-dlp started), `on_info` (repair messages) and `is_cancelled`. Shows the result. Once a newer download started (`download_id` changed), a canceled thread that is still repairing leaves the window alone. |
+| `show_progress(progress, media_format)`                     | "Preparing..." and a moving bar until yt-dlp reports; "Downloading 42%" with the bar filling; "Converting to MP3..." / "Saving the MP4..." with a moving bar while yt-dlp encodes or merges and the cover pass runs.                                                                                                                                              |
+| `show_saved(saved_path, warnings)`                          | The "Saved" status with "Show in folder" and "Play" below it (`files.show_in_folder`, `files.open_file`).                                                                                                                                                                                                                                                               |
 | `cancel_download()`                                         | Sets `download_cancelled`, kills the yt-dlp tree, resets the UI, starts `cleanup_partial_downloads()` on a thread.                                                                                                                                                                                                                                                    |
 | `cleanup_partial_downloads(temp_stem)`                      | Waits 2 s, then `files.remove_temp_files` (fallback; `download_audio` already cleans up on exit).                                                                                                                                                                                                                                                                      |
-| `reset_fields()`                                            | Clears URL and filename and restores the "Download MP3" button.                                                                                                                                                                                                                                                                                                       |
+| `reset_fields()`                                            | Clears URL and filename and restores the "Download MP3/MP4" button.                                                                                                                                                                                                                                                                                                   |
 | `select_folder(folder)`                                     | Hidden topmost root + `askdirectory` starting at `folder` (else the default). Sends the selection, or the start folder on cancel.                                                                                                                                                                                                                                     |
 
 Main button states:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> DownloadMP3
-    DownloadMP3 --> Cancel: click, start_download()
+    [*] --> Download
+    Download --> Download: format switch ("Download MP3" / "Download MP4")
+    Download --> Cancel: click, start_download()
     Cancel --> Next: download succeeds
     Cancel --> Next: click, cancel_download()
-    Cancel --> DownloadMP3: error (status label shows it)
-    Next --> DownloadMP3: click, reset_fields()
+    Cancel --> Download: error (status label shows it)
+    Next --> Download: click, reset_fields()
 ```
 
 ### 6.5 `native_messaging.py`
@@ -589,7 +624,7 @@ stateDiagram-v2
 folder actions via `files.resolve_folder`. `run_open_file(path, select)` handles
 `show_in_folder` / `play`.
 
-`run_native(url, folder, filename)` handles a headless `download`:
+`run_native(url, folder, filename, media_format)` handles a headless `download`:
 
 ```mermaid
 flowchart TB
@@ -602,9 +637,11 @@ flowchart TB
     C --> DL["core.download_with_repair()"]
     DL -. "on_warning (no title / no thumbnail)" .-> W2["warning, final false"]
     DL -. "on_info (repair running)" .-> I1["info, final false"]
+    DL -. "on_progress (at most every 0.3 s,<br/>always a new stage and 100 %)" .-> P1["info + progress, final false"]
+    DL -. "on_timeout (longer yt-dlp timeout)" .-> P2["info + deadline_s, final false"]
     DL -- "FileExistsError" --> E2["error: File with this name already exists: name.mp3 (+ filename)"]
     DL -- "TimeoutExpired" --> E3["error: Download timed out after N s (tool)"]
-    DL -- "other exception" --> E4["error: Download failed: describe_error(e)"]
+    DL -- "other exception (e.g. NoVideoError)" --> E4["error: Download failed: describe_error(e)"]
     DL --> S["success: filename + path<br/>(+ message repeating any warnings)"]
 ```
 
@@ -616,7 +653,8 @@ yt-dlp's own last `ERROR:` line (e.g. "This video is unavailable"), never the co
 `core.py` holds the pipeline: `download_audio`, `download_with_repair`, `embed_thumbnail`, `describe_error`.
 The rest of this table lives in `naming.py` (URL checks, `safe_filename`,
 `requested_filename`), `metadata.py` (`title_filename`, `artist_for`, `extra_tags`),
-`files.py` (folders, temp files, file actions) and `ytdlp.py` (`build_download_command`,
+`files.py` (folders, temp files, file actions), `media_format.py` (the formats) and
+`ytdlp.py` (`build_download_command`, `download_timeout`, `ProgressTracker`,
 `kill_process_tree`).
 
 | Function                                                                            | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -629,24 +667,31 @@ The rest of this table lives in `naming.py` (URL checks, `safe_filename`,
 | `title_filename(info)`                                                              | The name of a file named after its title. A title without a spaced dash gets the site's `artists` in front ("Forss - Flickermood"), never the channel (a vlog stays "Me at the zoo").                                                                                                                                                                                                                                              |
 | `artist_for(filename, info)`                                                        | The text before the first spaced dash (` - `, ` – `, ` — `) in the filename (a dash inside a word does not separate); without one the video's `artists` (`info_artists`, which ignores Mixcloud's: a mix's tracklist), else the channel without " - Topic", else the uploader, else `<unknown>`. The title tag is the text after the dash (`title_from_filename`).                                                                            |
 | `extra_tags(info)`                                                                  | Album, year (`release_year` only: an official video's upload year is often decades after the song), track number, the video URL as the comment; each only when the video has it.                                                                                                                                                                                                                                                   |
-| `download_audio(url, folder, filename, on_progress, on_start, on_warning, timeout)` | The single pipeline (§6.7). Verifies the final MP3 exists before returning it. Raises `FileExistsError`, `FileNotFoundError` (ffmpeg/yt-dlp missing, no MP3 produced), `TimeoutExpired`, `CalledProcessError`. Temp files are always removed.                                                                                                                                                                                      |
+| `media_format_from_request(request)`, `get_suffix(media_format)`                    | `Mp3Format()` or `Mp4Format(quality, codec)` (frozen dataclasses; `MediaFormat` is their union, matched with `match`); no `format` is MP3, anything unknown raises `ValueError`. The suffix (`.mp3`/`.mp4`) names the temp and the final file.                                                                                                                                                                                     |
+| `download_audio(url, folder, filename, media_format, on_progress, on_start, on_warning, on_timeout)` | The single pipeline for both formats (§6.7). Verifies the final file exists before returning it. Raises `FileExistsError`, `NoVideoError` (an MP4 of a link with only audio, at `before_dl`), `FileNotFoundError` (ffmpeg/yt-dlp missing, no file produced), `TimeoutExpired`, `CalledProcessError`. Temp files are always removed. |
 | `download_with_repair(...)`                                                         | `download_audio`, retried once after a yt-dlp failure that a repair may fix (§7.6). Used by both the headless and the GUI path.                                                                                                                                                                                                                                                                                                    |
 | `describe_error(error)`                                                             | One-line user message for a `download_audio` exception (headless and GUI).                                                                                                                                                                                                                                                                                                                                                         |
-| `embed_thumbnail(temp_mp3, thumb, artist, title, output, tags)`                     | One ffmpeg pass (50 s timeout): audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3, artist, title and `tags`. Writes `output` directly, removes it on failure. Raises `FileExistsError` itself if `output` exists: ffmpeg 7 exits 0 when `-n` refuses to overwrite.                                                                                                                                              |
+| `embed_thumbnail(temp_file, thumb, artist, title, output, tags)`                    | One ffmpeg pass (`embed_thumb_timeout`: 50 s plus the file at 20 MB/s, at most 10 min), the output's suffix decides the format. MP3: audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3. MP4: video and audio copied, the thumbnail uncropped as an MJPEG `attached_pic` stream (players show it as the cover). Then artist, title and `tags`. Writes `output` directly, removes it on failure. Raises `FileExistsError` itself if `output` exists: ffmpeg 7 exits 0 when `-n` refuses to overwrite. |
+| `download_timeout(info, media_format, fallback)`                                   | yt-dlp's timeout from the video's size: 120 s plus `filesize_approx` at 500 KB/s (without it, `duration` × the format's worst bytes per second), never below `fallback` (900 s), never above 4 h (`DOWNLOAD_TIMEOUT_CAP_S`).                                                                                                                                                                                                        |
+| `ProgressTracker`                                                                   | Turns yt-dlp's progress events into one `Progress(stage, fraction)` for the whole download (§6.7).                                                                                                                                                                                                                                                                                                                                 |
 | `kill_process_tree(process)`                                                        | `taskkill /F /T`; `Popen.kill()` misses yt-dlp's ffmpeg child (and the onefile fallback's real process).                                                                                                                                                                                                                                                                                                                           |
-| `remove_temp_files(temp_stem)`, `remove_stale_temp_files(folder)`                   | Delete `<temp_stem>.*`, retrying files Windows still locks after a kill; before each download, delete `_ytmp3_*` files older than 1 h that a killed host left behind.                                                                                                                                                                                                                                                              |
-| `downloaded_mp3(path)`, `show_in_folder(file)`, `open_file(file)`                   | File actions. Show uses `SHOpenFolderAndSelectItems` (`explorer /select,` splits the path at commas). Play runs `explorer.exe "<path>"` via `processes.launch_detached`, so the player is not ended with the host.                                                                                                                                                                                                                 |
+| `remove_temp_files(temp_stem)`, `remove_stale_temp_files(folder)`                   | Delete `<temp_stem>.*` (also an MP4's stream files, `.f399.mp4`, `.webm.part`), retrying files Windows still locks after a kill; before each download, delete `_ytmp3_*` files older than 4.5 h (`STALE_TEMP_AGE_S`, above the longest yt-dlp call plus the longest cover pass) that a killed host left behind. |
+| `downloaded_file(path)`, `show_in_folder(file)`, `open_file(file)`                  | File actions, for an absolute path to an existing `.mp3` or `.mp4` only. Show uses `SHOpenFolderAndSelectItems` (`explorer /select,` splits the path at commas). Play runs `explorer.exe "<path>"` via `processes.launch_detached`, so the player is not ended with the host.                                                                                                                                                     |
 
 ### 6.7 Download pipeline
 
 ```
 yt-dlp.exe --no-playlist --playlist-items 1 --concurrent-fragments 3
-           -x --audio-format mp3 --audio-quality 0
+           MP3: -x --audio-format mp3 --audio-quality 0
+           MP4: -S [vcodec:h264,acodec:aac,][res:<height>,]hdr:sdr --merge-output-format mp4 --remux-video mp4
            --write-thumbnail
            --ffmpeg-location <ffmpeg.exe>
-           --print before_dl:YTMP3_INFO:%(.{title,artists,album,release_year,track_number,channel,uploader,webpage_url,extractor_key})j
+           --print before_dl:YTMP3_INFO:%(.{title,artists,album,release_year,track_number,channel,uploader,webpage_url,extractor_key,filesize_approx,duration,format_id,vcodec})j
            --no-simulate
-           --progress --newline --encoding utf-8
+           --progress --newline
+           --progress-template download:YTMP3_PROGRESS:%(progress.{status,downloaded_bytes,total_bytes,total_bytes_estimate})j
+           --progress-template postprocess:YTMP3_PROGRESS:%(progress.{status,postprocessor})j
+           --encoding utf-8
            [--js-runtimes deno:<INSTALL_DIR>\deno.exe]      only once the host installed Deno
            -o "<folder>/_ytmp3_<hex>.%(ext)s"
            <url>
@@ -654,29 +699,58 @@ yt-dlp.exe --no-playlist --playlist-items 1 --concurrent-fragments 3
 
 ```mermaid
 flowchart LR
-    U["video / track URL"] --> Y["yt-dlp.exe (900 s watchdog)"]
-    Y -- "audio, LAME V0" --> M["_ytmp3_hex.mp3"]
+    U["video / track URL"] --> Y["yt-dlp.exe (900 s watchdog,<br/>longer by size: download_timeout)"]
+    Y -- "MP3: audio, LAME V0" --> M["_ytmp3_hex.mp3"]
+    Y -- "MP4: video + audio merged" --> M4["_ytmp3_hex.mp4"]
     Y -- "raw thumbnail" --> J["_ytmp3_hex.webp"]
     Y -- "stdout, before_dl" --> T["video info JSON after YTMP3_INFO:"]
+    Y -- "stdout, each step" --> P["progress JSON after YTMP3_PROGRESS:<br/>→ ProgressTracker → on_progress"]
     T --> N["filename = title_filename(info)<br/>unless one was requested"]
-    M --> F["ffmpeg: copy audio + crop/encode cover<br/>ID3v2.3, artist/title/album/year/track/URL tags"]
+    M --> F["ffmpeg: copy the media + encode the cover<br/>artist/title/album/year/track/URL tags"]
+    M4 --> F
     J --> F
     N --> F
-    F --> OUT[("folder/filename.mp3")]
+    F --> OUT[("folder/filename.mp3 or .mp4")]
 ```
 
 - One yt-dlp call, one ffmpeg pass. MP3 is always LAME V0 (`--audio-quality 0`, which
   encodes as fast as the default V5); the cover is a high-quality JPEG (`-q:v 2`).
+- MP4 is never re-encoded (slow and lossy). yt-dlp keeps its own choice (best video plus
+  best audio, `bv*+ba/b`); `-S` only sets what it prefers, earlier keys first: `compatible`
+  puts H.264 + AAC first (plays everywhere, up to 1080p, ~2.5x the size of AV1), a quality
+  is the best height at or below it (a video without it gets the nearest), and SDR is
+  always preferred (HDR is ~1.6x the size and looks washed out on most screens). "Best" is
+  not capped and gives 4K when the video has it. `--merge-output-format mp4` merges the two
+  streams without re-encoding; `--remux-video mp4` does the same for a site's single video
+  file in another container (WebM, FLV) and leaves a merged MP4 as it is.
+- An MP4 of a link with only audio (a SoundCloud track: yt-dlp falls back to `b`, which is
+  the audio) would download it and then find no MP4. The video info's `vcodec` is `"none"`
+  there, so the `before_dl` callback raises `NoVideoError` ("This link has no video,
+  download it as MP3 instead") before anything is downloaded. It is not a yt-dlp failure,
+  so it is never repaired.
+- Progress: yt-dlp reports every stream on its own, each from 0 to its own size.
+  `ProgressTracker` counts the bytes of all streams together. The stream count comes from
+  `format_id` (`"399+251"` is 2) and the expected size from `filesize_approx`. Once every
+  size is known (the last stream reports its own), they are the whole, so the download
+  ends at exactly 100 % even when `filesize_approx` was off (126 MB estimated for a 120 MB
+  file was measured). Before that the whole is `filesize_approx`, but never less than the
+  sizes known so far plus 10 % (`UNKNOWN_SHARE`) for what is still unknown: an MP4's video
+  ends at 90 % at most, never at 100 % while the audio still downloads. Nothing known at
+  all gives no fraction ("Downloading..."). The fraction never goes back and is rounded to
+  0.1 %; repeats are dropped. The first postprocessor (the MP3 encode or the MP4 merge)
+  starts `processing`, which reports no progress of its own.
 - Output goes to a unique temp stem, so the title is only needed after the download; there
   is no separate `--get-title` call. With a requested filename the "already exists" check
   runs before anything starts. Named after the title, the check runs when the info prints
-  (`before_dl`), before any audio is downloaded, and again after the download.
+  (`before_dl`), before any media is downloaded, and again after the download.
 - `--print` would make yt-dlp a dry run without `--no-simulate`, and implies `--quiet`, so
-  `--progress` keeps the progress lines.
+  `--progress` keeps the progress lines; the postprocessor lines still print in that mode.
 - `--playlist-items 1` keeps a playlist URL (SoundCloud set, Bandcamp album) to one file.
-- The watchdog kills the whole tree after `DOWNLOAD_TIMEOUT_S`; a callback that raises
-  also kills it. `[download]` progress lines are left out of the error output, so the
-  warnings `download_with_repair` looks for stay in it.
+- The watchdog kills the whole tree after `DOWNLOAD_TIMEOUT_S` (900 s). When the video
+  info gives a longer `download_timeout`, it is re-armed, counted from yt-dlp's start, and
+  reported through `on_timeout` (the host sends it as `deadline_s`). A callback that raises
+  also kills the tree. Progress lines are left out of the error output, so the warnings
+  `download_with_repair` looks for stay in it.
 
 ---
 
@@ -941,8 +1015,8 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    A["download_audio()"] -- success --> OK["MP3"]
-    A -- "FileExistsError, ffmpeg failure, timeout,<br/>canceled GUI download" --> RAISE["raise the error"]
+    A["download_audio()"] -- success --> OK["MP3 / MP4"]
+    A -- "FileExistsError, NoVideoError, ffmpeg failure,<br/>timeout, canceled GUI download" --> RAISE["raise the error"]
     A -- "yt-dlp failed or missing" --> B{"output shows a damaged install?<br/>(ImportError, ModuleNotFoundError,<br/>DLL load failed)"}
     B -- no --> U["info: checking for a yt-dlp update...<br/>updater.update_yt_dlp()"]
     B -- yes --> R["info: yt-dlp is damaged, repairing it...<br/>updater.update_yt_dlp(damaged=True)<br/>(a current onedir build → single-file exe)"]
@@ -1005,19 +1079,28 @@ sequenceDiagram
     participant H as mp3.exe
     participant T as yt-dlp + ffmpeg
 
-    User->>SB: click Download MP3
-    SB->>SB: isWebUrl(url)
-    SB->>BG: native_action download, requestId
+    User->>SB: click Download MP3 (or MP4)
+    SB->>SB: isWebUrl(url), hostSupports(format)
+    SB->>BG: native_action download, requestId (+ format fields for MP4)
     BG->>BG: whitelist check, runNativeAction(origin sidebar)
-    BG->>H: connectNative + postMessage, start 51 min timer
+    BG->>H: connectNative + postMessage, start 70 min timer
     H->>H: main() then run_native()
     opt folder doesn't exist
         H-->>BG: error, final true (the folder is named, nothing is downloaded)
     end
     H->>T: core.download_audio: one yt-dlp call
-    T-->>H: temp mp3 + thumbnail + video info
+    T-->>H: video info (before_dl)
+    opt the size makes yt-dlp's timeout longer
+        H-->>BG: info, deadline_s (not relayed, the timer is extended)
+    end
+    loop while yt-dlp downloads, encodes or merges
+        T-->>H: progress lines
+        H-->>BG: info + progress, at most every 0.3 s
+        BG-->>SB: native_response, shows "Downloading 42%"
+    end
+    T-->>H: temp mp3 or mp4 + thumbnail
     H->>T: embed_thumbnail: one ffmpeg pass
-    T-->>H: folder/filename.mp3
+    T-->>H: folder/filename.mp3 or .mp4
     H-->>BG: success, filename, path, final true
     BG-->>SB: native_response final, shows Downloaded + Show in folder / Play
     BG->>BG: notify only if the sidebar is closed now
@@ -1039,16 +1122,16 @@ sequenceDiagram
     participant T as yt-dlp + ffmpeg
 
     User->>SB: click Open in app
-    SB->>BG: native_action download_gui (url, folder, filename optional)
+    SB->>BG: native_action download_gui (url, folder, filename optional; the selected format)
     BG->>H: connectNative + postMessage, 30 s timer
-    H->>H: run_native_gui fills the fields (invalid folder: default kept, noted in the window and the message)
+    H->>H: run_native_gui selects the format, fills the fields (invalid folder: default kept, noted in the window and the message)
     H-->>BG: success, GUI opened, final true (after 100 ms)
     BG-->>SB: native_response, shows App launched
     Note over BG,H: port stays open (KEEP_ALIVE_ACTIONS)
     H->>H: mainloop() blocks
-    User->>H: click Download MP3 in window
+    User->>H: click Download MP3 / MP4 in window
     H->>T: _download_thread runs core.download_with_repair
-    T-->>H: progress lines, progress bar updates
+    T-->>H: progress lines, show_progress updates the text and the bar
     H->>H: status shows Saved + Show in folder / Play, button becomes Next
     User->>H: closes window
     H->>H: mainloop returns, sys.exit(0)
@@ -1170,8 +1253,8 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    T["background.test.js<br/>host_status.test.js<br/>youtube.test.js"] --> H["harness.js<br/>loadBackground()"]
-    H -- "node:vm sandbox" --> E["extension/youtube.js<br/>extension/background.js<br/>(real files)"]
+    T["background.test.js<br/>host_status.test.js<br/>youtube.test.js<br/>naming.test.js, formats.test.js<br/>theme.test.js"] --> H["harness.js<br/>loadBackground(), loadScripts()"]
+    H -- "node:vm sandbox" --> E["extension/*.js<br/>(real files)"]
     H -- "fake browser global" --> FB["runtime, contextMenus,<br/>notifications, sidebarAction,<br/>storage.local"]
     FB --> FP["fake ports<br/>reply() = host message<br/>exit() = host disconnect"]
 ```
@@ -1179,8 +1262,11 @@ flowchart LR
 `background.test.js` covers the request lifecycle: single final response, keep-alive,
 timeouts, disconnect errors, notifications, context menu. `host_status.test.js` covers the
 check-and-repair: version parsing, every status of §7.1, each repair at most once, the
-host-update wait, shared concurrent checks. `youtube.test.js` covers the URL checks.
-`sidebar.js` has no automated tests.
+host-update wait, shared concurrent checks. `youtube.test.js` covers the URL checks,
+`naming.test.js` the filename limit, `formats.test.js` the format requests, `hostSupports`
+and `progressText`, `theme.test.js` the theme. `sidebar.js` has no automated tests;
+`test_media_format.py` and `test_versions.py` check that `formats.js` and `naming.js`
+agree with the host.
 
 ### 10.2 Host tests
 
@@ -1191,8 +1277,9 @@ folders or a real video; everything else runs for real. Real `Popen` and pipes, 
 
 | File                      | Covers                                                                                                                  |
 |---------------------------|-------------------------------------------------------------------------------------------------------------------------|
-| `test_core_helpers.py`    | Filenames, artist and tags, folders, URL check, error messages.                                                         |
-| `test_download_audio.py`  | `download_audio` with the fake yt-dlp: naming, warnings, errors, timeout and cleanup.                                   |
+| `test_core_helpers.py`    | Filenames, artist and tags, folders, URL check, error messages, the yt-dlp command, timeouts, `ProgressTracker`.       |
+| `test_media_format.py`    | Parsing the format fields of a request; the sidebar and the GUI offer the host's choices.                              |
+| `test_download_audio.py`  | `download_audio` with the fake yt-dlp: naming, warnings, errors, timeout, progress, MP4, cleanup.                       |
 | `test_embed_thumbnail.py` | `embed_thumbnail` and the whole pipeline with the real ffmpeg (skipped without one).                                    |
 | `test_repair.py`          | `download_with_repair` with fake repairs (yt-dlp update or damaged build, Deno).                                            |
 | `test_native_host.py`     | The native-messaging contract through `MP3.main()` with real framed bytes, including the update actions.                |
@@ -1214,13 +1301,17 @@ binary from `host/bin/` or `PATH`, a generated 1 s MP3 and PNG). `core` and `ytd
 their paths by name, so they are patched on those modules, not on `config`.
 
 **`fake_yt_dlp.py`** takes the real yt-dlp arguments (including `--version`), honors the
-real `-o` and `--print` templates, prints yt-dlp-style progress lines, writes a
+real `-o`, `--print` and `--progress-template` templates (each stream reports 0 %, 42.5 %
+and finished, `FAKE_YTDLP_STREAMS`; then the postprocessors), gives the file the extension
+the real one would (`.mp3` with `-x`, `.mp4` with `--merge-output-format mp4`), writes a
 `.webm.part` file (so cleanup is tested), and acts according to `FAKE_YTDLP_MODE`:
 `success` (default), `fail`, `hang` (a grandchild holds stdout open, like the onefile
 bootloader's child, so `kill_process_tree` is tested), `no_title` / `no_thumb` /
-`no_mp3`, `bad_version`, and `needs_js` (fails like YouTube wanting JavaScript, unless
-given `--js-runtimes`). `FAKE_YTDLP_TITLE`, `FAKE_YTDLP_INFO`, `FAKE_YTDLP_VERSION`,
-`FAKE_YTDLP_MP3` and `FAKE_YTDLP_THUMB` set what it prints and writes.
+`no_mp3`, `bad_version`, `needs_js` (fails like YouTube wanting JavaScript, unless
+given `--js-runtimes`) and `missing_dll` (a onedir build with a quarantined DLL).
+`FAKE_YTDLP_TITLE`, `FAKE_YTDLP_INFO` (its `format_id` and `vcodec` default to YouTube's;
+`{"vcodec": "none"}` is a link without video), `FAKE_YTDLP_VERSION`, `FAKE_YTDLP_MP3`,
+`FAKE_YTDLP_MP4`, `FAKE_YTDLP_THUMB` and `FAKE_YTDLP_DELAY_S` set what it prints and writes.
 
 In `test_updater.py` / `test_github.py` the fake `yt-dlp.exe` downloads are small Python
 scripts run as `python <file> --version`, so whether a download "runs" depends on its
@@ -1247,9 +1338,10 @@ internet or the real binaries gets `@pytest.mark.network`.
 - No stdout output in host code other than `send_message`.
 - Exactly one `final: true` response per request. Intermediate responses must set
   `final: false` explicitly.
-- `ACTION_TIMEOUTS_MS` must stay above the host's worst case: `download` (51 min) above
-  the yt-dlp call (900 s) + ffmpeg (50 s) + a yt-dlp update + Deno + one retry (about
-  50 min); `update_yt_dlp` (11 min) above ~595 s (a onedir build that fails its test-run,
+- `ACTION_TIMEOUTS_MS` must stay above the host's worst case: `download` (70 min) above
+  the yt-dlp call (900 s without a size) + the cover pass (up to 600 s) + a yt-dlp update
+  + Deno + one retry (about 68 min); a longer yt-dlp timeout arrives as `deadline_s` and
+  gets the whole budget after it; `update_yt_dlp` (11 min) above ~595 s (a onedir build that fails its test-run,
   then the single-file exe: two downloads); `update_host` (9 min) above ~485 s. The
   sums are in the comment above `ACTION_TIMEOUTS_MS`; `test_versions.py` checks the first two.
 - `app_manifest`, `yt.downloader@converter.org`, `mp3.exe`, the installer's `AppName` and
@@ -1278,9 +1370,14 @@ internet or the real binaries gets `@pytest.mark.network`.
    `tests/host/test_native_host.py` for the host's responses.
 7. A new host module goes into `selfcheck.MODULES` (a test checks it).
 
-**Changing yt-dlp arguments:** `ytdlp.build_download_command`. Measure download time
-before and after (see the project priorities in `CLAUDE.md`), and never trade quality for
-speed silently.
+**Changing yt-dlp arguments:** `ytdlp.build_download_command` (`_format_args` for a
+format's own). Measure download time before and after (see the project priorities in
+`CLAUDE.md`), and never trade quality for speed silently.
+
+**Adding a format or a format option:** `media_format.py` (a dataclass, or a value in a
+`Literal`), `_format_args` and `get_suffix`, `FORMATS` in `extension/formats.js` (with its
+`processing` text), the GUI's labels, and `health.host_status`'s `formats`. Tests check that
+the sidebar, the GUI and the host offer the same choices.
 
 ---
 
@@ -1295,6 +1392,8 @@ Resolved:
 
 | Former issue                                                                                                                     | Resolution                                                                                                                                                                  |
 |----------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| The GUI's progress bar sat at 0 during extraction, at 100 during the encode, and restarted for an MP4's audio (2.1.0)            | yt-dlp's progress as JSON (`--progress-template`) and `ProgressTracker`: one 0-100 for all streams, a moving bar before and after; the sidebar shows it too (2.2.0).        |
+| A fixed 900 s yt-dlp timeout was too short for a long MP4 (2.1.0)                                                                | `download_timeout` from the video's size, sent to the extension as `deadline_s` (2.2.0).                                                                                     |
 | Deno was never updated: a newer yt-dlp needing a newer Deno kept failing                                                         | `install_and_update_deno` updates the host's `deno.exe` when YouTube's challenge still fails with it.                                                                       |
 | Updates ran only from the sidebar (2.0.0)                                                                                        | `checkHostInBackground` checks at most once a day, after startup and after a context-menu download (2.1.0).                                                                 |
 | A broken release was started again on every sidebar open after the 10 min grace, with 3 min of "Updating..." (2.0.0)             | The same installer is retried only once a day (`INSTALL_RETRY_S`); meanwhile `update_host` fails at once (2.1.0).                                                           |

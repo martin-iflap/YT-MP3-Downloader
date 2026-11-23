@@ -10,7 +10,7 @@ import pytest
 
 from conftest import EmbedCall, FakeYtDlp
 from ytmp3_host import config, core, files, ytdlp
-from ytmp3_host.media_format import Mp3Format, Mp4Format
+from ytmp3_host.media_format import MediaFormat, Mp3Format, Mp4Format
 from ytmp3_host.ytdlp import Progress
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -136,14 +136,51 @@ def test_mp4_progress_counts_video_and_audio_as_one_download(
     assert progress == [*downloading(0.0, 0.319, 0.75, 0.856, 1.0), Progress("processing")]
 
 
-def test_mp4_progress_without_a_size_never_goes_back(
+def test_mp4_progress_without_a_size_leaves_room_for_the_audio(
     fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
-    # without filesize_approx the audio stream is unknown until it starts; the bar stays full meanwhile
+    # without filesize_approx the audio is unknown until it starts: the video counts as 90 %, and
+    # the audio's first events (75 % and 85.6 % of both) would go back, so they are left out
     fake_yt_dlp.set(streams=[3_000_000, 1_000_000])
     progress: list[Progress] = []
     core.download_audio(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
-    assert progress == [*downloading(0.0, 0.425, 1.0), Progress("processing")]
+    assert progress == [*downloading(0.0, 0.383, 0.9, 1.0), Progress("processing")]
+
+
+@pytest.mark.parametrize(
+    ("media_format", "streams", "fractions"),
+    [
+        (Mp3Format(), [3_000_000], (0.0, 0.425, 1.0)),  # the stream's own size, not 3.3 MB
+        (Mp4Format(), [3_000_000, 1_000_000], (0.0, 0.29, 0.682, 0.75, 0.856, 1.0)),
+    ],
+)
+def test_progress_ends_at_100_when_the_size_was_overestimated(
+    fake_yt_dlp: FakeYtDlp,
+    fake_embed: list[EmbedCall],
+    out_dir: Path,
+    media_format: MediaFormat,
+    streams: list[int],
+    fractions: tuple[float, ...],
+) -> None:
+    # filesize_approx 10 % above the real size (126 MB estimated for a 120 MB file was measured)
+    fake_yt_dlp.set(streams=streams, info={"filesize_approx": sum(streams) * 1.1})
+    progress: list[Progress] = []
+    core.download_audio(URL, out_dir, media_format=media_format, on_progress=progress.append)
+    assert progress == [*downloading(*fractions), Progress("processing")]
+
+
+def test_an_mp4_of_a_link_without_video_stops_before_downloading(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # what the real yt-dlp picks for a SoundCloud track in MP4 mode: the audio alone
+    fake_yt_dlp.set(info={"format_id": "hls_aac_160k", "vcodec": "none"})
+    progress: list[Progress] = []
+    with pytest.raises(core.NoVideoError):
+        core.download_audio(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+    assert progress == []  # stopped at the video info, before the first download event
+    assert fake_embed == []
+    assert leftovers(out_dir) == []
+    assert core.describe_error(core.NoVideoError()) == "This link has no video, download it as MP3 instead"
 
 
 def test_existing_requested_file_fails_before_downloading(

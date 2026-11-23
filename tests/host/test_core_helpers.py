@@ -335,7 +335,7 @@ def test_build_download_command_keeps_quality_and_contract(tmp_path: Path, monke
     assert value("-o") == f"{stem}.%(ext)s"
     assert value("--print") == (
         f"before_dl:{ytdlp.INFO_MARKER}%(.{{title,artists,album,release_year,track_number,channel,"
-        "uploader,webpage_url,extractor_key,filesize_approx,duration})j"
+        "uploader,webpage_url,extractor_key,filesize_approx,duration,format_id,vcodec})j"
     )
     assert "--no-simulate" in cmd  # --print must never turn the call into a dry run
     assert value("--ffmpeg-location") == str(ytdlp.FFMPEG_PATH)
@@ -357,6 +357,7 @@ def test_build_download_command_mp4_presets(media_format: Mp4Format, sort: str, 
 
     assert cmd[cmd.index("-S") + 1] == sort
     assert cmd[cmd.index("--merge-output-format") + 1] == "mp4"
+    assert cmd[cmd.index("--remux-video") + 1] == "mp4"  # a site's single WebM or FLV video
     assert not {"-x", "--audio-format", "--audio-quality"} & set(cmd)  # those would make it an MP3
     assert {"--write-thumbnail", "--no-simulate", "--newline"} <= set(cmd)  # the rest of the contract is shared
     assert cmd[-1] == "https://youtu.be/abc"
@@ -517,16 +518,41 @@ class TestProgressTracker:
         assert tracker.update(downloading(500)) == ytdlp.Progress("downloading")
         assert tracker.update(downloading(900)) is None  # the same for the user
 
+    def test_the_stream_count_and_size_come_from_the_info(self) -> None:
+        tracker = ytdlp.ProgressTracker()
+        tracker.use_info({"format_id": "399+251", "filesize_approx": 4000})
+        assert (tracker.streams, tracker.expected_bytes) == (2, 4000.0)
+        tracker.use_info({"format_id": 251})  # not text: one stream, as without a format_id
+        assert (tracker.streams, tracker.expected_bytes) == (1, None)
+
     def test_the_expected_size_counts_streams_not_started_yet(self) -> None:
         tracker = ytdlp.ProgressTracker()
-        tracker.expected_bytes = 4000
+        tracker.use_info({"format_id": "399+251", "filesize_approx": 4000})
         assert tracker.update(finished(3000)) == ytdlp.Progress("downloading", 0.75)
 
-    def test_a_size_above_the_expected_one_wins(self) -> None:
-        # filesize_approx is an estimate; the bar must not reach the end before the download does
+    def test_an_expected_size_too_small_still_leaves_room_for_later_streams(self) -> None:
+        # the video alone is above filesize_approx: the bar must not be full before the audio
+        tracker = ytdlp.ProgressTracker()
+        tracker.use_info({"format_id": "399+251", "filesize_approx": 3000})
+        assert tracker.update(finished(3000)) == ytdlp.Progress("downloading", 0.9)
+        assert tracker.update(downloading(500, total_bytes=1000)) is None  # 87.5 % would go back
+        assert tracker.update(downloading(900, total_bytes=1000)) == ytdlp.Progress("downloading", 0.975)
+        assert tracker.update(finished(1000)) == ytdlp.Progress("downloading", 1.0)
+
+    def test_the_last_streams_own_size_beats_the_expected_one(self) -> None:
+        # filesize_approx is an estimate; once every size is known the download ends at 100 %
         tracker = ytdlp.ProgressTracker()
         tracker.expected_bytes = 1000
         assert tracker.update(downloading(1000, total_bytes=2000)) == ytdlp.Progress("downloading", 0.5)
+        tracker.expected_bytes = 4000
+        assert tracker.update(downloading(1500, total_bytes=2000)) == ytdlp.Progress("downloading", 0.75)
+
+    def test_a_last_stream_of_unknown_size_never_shows_100_before_it_ends(self) -> None:
+        tracker = ytdlp.ProgressTracker()
+        tracker.use_info({"format_id": "399+251"})
+        tracker.update(finished(3000))
+        assert tracker.update(downloading(500)) is None  # still 0.9
+        assert tracker.update(finished(1000)) == ytdlp.Progress("downloading", 1.0)
 
     def test_processing_is_reported_once(self) -> None:
         tracker = ytdlp.ProgressTracker()

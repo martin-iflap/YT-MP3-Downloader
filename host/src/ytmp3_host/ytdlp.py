@@ -66,20 +66,35 @@ class ProgressTracker:
 
     yt-dlp reports every stream on its own (an MP4 is two downloads, video then audio,
     each counting from 0 to its own size). The fraction counts the bytes of all streams
-    against `filesize_approx`, the size yt-dlp expects for all of them together, or
-    without it against the streams seen so far. It never goes back and is rounded to
+    together. Once every size is known (the last stream reports its own), they are the
+    whole, so the download ends at exactly 100 % even when `filesize_approx` was off.
+    Before that the whole is `filesize_approx`, the size yt-dlp expects for all streams,
+    but never less than the sizes known so far plus UNKNOWN_SHARE for what is still
+    unknown: without a usable estimate an MP4's video ends at 90 % instead of sitting at
+    100 % while the audio downloads. The fraction never goes back and is rounded to
     0.1 %, and an event that would repeat the last Progress gives none, so a large
     download reports at most ~1000 steps.
 
     Attributes:
         expected_bytes: `filesize_approx` from the video info, or None if unknown.
+        streams: How many streams yt-dlp downloads (`format_id` "399+251" is 2); 1 if unknown.
     """
+
+    UNKNOWN_SHARE = 0.1  # an MP4's audio is ~10 % of it (3.4 of 34 MB for a 1080p AV1 song)
 
     def __init__(self) -> None:
         self.expected_bytes: float | None = None
+        self.streams = 1
         self._finished_bytes = 0.0  # the streams that finished downloading
+        self._finished_streams = 0
         self._fraction = 0.0
         self._last: Progress | None = None
+
+    def use_info(self, info: VideoInfo) -> None:
+        """Take the expected size and the stream count from the video info yt-dlp printed."""
+        self.expected_bytes = _positive_number(info, "filesize_approx")
+        format_id = info.get("format_id")
+        self.streams = format_id.count("+") + 1 if isinstance(format_id, str) else 1
 
     def update(self, event: dict[str, object]) -> Progress | None:
         """Take one event of the progress templates (see build_download_command).
@@ -101,11 +116,12 @@ class ProgressTracker:
 
     def _download_progress(self, event: dict[str, object]) -> Progress | None:
         """The Progress while yt-dlp downloads the streams, or None if the event is not a download one.
-         - compute the downloaded bytes and the whole size from the event and the finished streams
+         - compute the downloaded bytes and the sizes known so far from the event and the finished streams
+         - the whole is those sizes once nothing is unknown, else filesize_approx with room for the rest
          - update the fraction, never going back and rounding to 0.1 %
 
          Notes: - total bytes is the stream's size
-                - total bytes estimate is the stream's size if known, else the best guess
+                - total bytes estimate is the stream's size if known, else the best guess (HLS)
                 - filesize_approx is the whole download's size, if known, else None
         """
         status = event.get("status")
@@ -115,11 +131,20 @@ class ProgressTracker:
         size = _positive_number(event, "total_bytes") or _positive_number(event, "total_bytes_estimate")
         if status == "finished":
             self._finished_bytes += downloaded or size or 0.0
-            done = seen = self._finished_bytes
+            self._finished_streams += 1
+            done = known = self._finished_bytes
+            unknown_left = self._finished_streams < self.streams
         else:
             done = self._finished_bytes + downloaded
-            seen = self._finished_bytes + size if size else None
-        whole = max(self.expected_bytes or 0.0, seen or 0.0)
+            known = self._finished_bytes + (size or 0.0)
+            unknown_left = size is None or self._finished_streams + 1 < self.streams
+        if not unknown_left:
+            whole = known
+        elif known or self.expected_bytes:
+            # done: a stream of unknown size has at least the bytes it downloaded
+            whole = max(self.expected_bytes or 0.0, max(known, done) / (1 - self.UNKNOWN_SHARE))
+        else:
+            whole = 0.0  # nothing about the size is known yet
         if not whole:
             return Progress("downloading")
         self._fraction = max(self._fraction, round(min(done / whole, 1.0), 3))
@@ -187,7 +212,9 @@ def _format_args(media_format: MediaFormat) -> list[str]:
     it prefers, earlier keys first. `compatible` prefers H.264 video and AAC audio
     (plays everywhere) over resolution; a quality is the best resolution at or below it;
     SDR is preferred, since HDR looks washed out on most screens and players.
-    `--merge-output-format mp4` puts the two streams into one MP4 without re-encoding.
+    `--merge-output-format mp4` puts the two streams into one MP4 without re-encoding;
+    `--remux-video mp4` does the same for a site's single video file in another container
+    (WebM, FLV). A merged MP4 is left as it is.
 
     Args:
         media_format: The requested media format.
@@ -202,7 +229,7 @@ def _format_args(media_format: MediaFormat) -> list[str]:
             if quality != "best":
                 sort.append(f"res:{quality}")
             sort.append("hdr:sdr")
-            return ["-S", ",".join(sort), "--merge-output-format", "mp4"]
+            return ["-S", ",".join(sort), "--merge-output-format", "mp4", "--remux-video", "mp4"]
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -344,7 +371,7 @@ def run_yt_dlp(
                     continue
                 if line.startswith(INFO_MARKER):
                     info = parse_info(line[len(INFO_MARKER):])
-                    tracker.expected_bytes = _positive_number(info, "filesize_approx")
+                    tracker.use_info(info)
                     on_video_info(info)
                     new = download_timeout(info, media_format, timeout)
                     if timeout < new:

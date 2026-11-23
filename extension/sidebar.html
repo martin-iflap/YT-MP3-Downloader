@@ -575,6 +575,9 @@
             font-size: 12px;
             transition: max-height 160ms ease, opacity 160ms ease, padding 160ms ease;
         }
+        /* a note under a field that stays visible, unlike .helper */
+        .field-warning { margin-top: 6px; padding: 0 6px; font-size: 12px; color: var(--warning-text); }
+        .field-warning[hidden] { display: none; }
     </style>
 </head>
 <body>
@@ -602,9 +605,10 @@
             <li>Only a spaced dash splits: "Jay-Z" stays whole.</li>
         </ul>
 
-        <h3>The MP3</h3>
+        <h3>The file</h3>
         <ul>
-            <li>Best quality, with the thumbnail as cover art.</li>
+            <li>MP3: best quality, with the thumbnail as cover art.</li>
+            <li>MP4: the quality you pick (or the nearest the video has), never re-encoded.</li>
             <li>Album, year and track number when the site has them.</li>
         </ul>
 
@@ -645,6 +649,8 @@
                 <label class="input-label" for="urlInput">Video URL</label>
                 <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." aria-describedby="urlHelp">
                 <div id="urlHelp" class="helper">Paste a link or open the page: YouTube, SoundCloud, Bandcamp, Mixcloud...</div>
+                <!-- sidebar.js: shown for MP4 and a link of an audio site (a warning only, the host decides) -->
+                <div id="urlWarning" class="field-warning" role="status" hidden>SoundCloud, Bandcamp and Mixcloud have no video: choose MP3</div>
             </div>
 
             <div class="input-group">

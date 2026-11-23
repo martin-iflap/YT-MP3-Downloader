@@ -14,7 +14,9 @@ Behavior comes from environment variables:
                         missing_dll (a onedir build with a DLL a virus scanner removed: --version works, a
                         download fails at an import)
     FAKE_YTDLP_TITLE    the video title to print
-    FAKE_YTDLP_INFO     more video info as a JSON object, e.g. {"album": "..."} (default: {"channel": "Some Channel"})
+    FAKE_YTDLP_INFO     more video info as a JSON object, e.g. {"album": "..."} (default: {"channel": "Some Channel"});
+                        format_id and vcodec default to YouTube's (one audio stream for an MP3, AV1 video
+                        plus audio for an MP4), {"vcodec": "none"} is a link without video
     FAKE_YTDLP_VERSION  the version to print (default 2026.08.19)
     FAKE_YTDLP_MP3      an MP3 to copy as the download (default: junk bytes)
     FAKE_YTDLP_MP4      the same for an MP4 download
@@ -111,6 +113,10 @@ def main() -> None:
     marker, fields = template.groups()
     info = json.loads(os.environ.get("FAKE_YTDLP_INFO", '{"channel": "Some Channel"}'))
     info["title"] = os.environ.get("FAKE_YTDLP_TITLE", "Artist - Song (Official Video)")
+    merged = "--merge-output-format" in args
+    # what the real one picks on YouTube: the audio for an MP3, AV1 video plus audio for an MP4
+    info.setdefault("format_id", "399+251" if merged else "251")
+    info.setdefault("vcodec", "av01.0.08M.08" if merged else "none")
 
     if mode == "missing_dll":  # what the PyInstaller build of yt-dlp prints
         emit("Traceback (most recent call last):")
@@ -131,7 +137,6 @@ def main() -> None:
     partial.write_bytes(b"partial download")
     time.sleep(float(os.environ.get("FAKE_YTDLP_DELAY_S", "0")))
     templates = progress_templates(args)
-    merged = "--merge-output-format" in args
     for size in json.loads(os.environ.get("FAKE_YTDLP_STREAMS", "[3000000, 1000000]" if merged else "[3000000]")):
         for downloaded in (0, int(size * 0.425)):
             emit_progress(templates, "download", {"status": "downloading", "downloaded_bytes": downloaded, "total_bytes": size})

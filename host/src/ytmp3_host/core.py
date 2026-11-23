@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ytmp3_host.config import DENO_PATH, FFMPEG_PATH, yt_dlp_path
 from ytmp3_host.files import remove_stale_temp_files, remove_temp_files
-from ytmp3_host.media_format import MediaFormat, get_suffix
+from ytmp3_host.media_format import MediaFormat, Mp4Format, get_suffix
 from ytmp3_host.metadata import VideoInfo, artist_for, extra_tags, info_text, named_title, title_filename
 from ytmp3_host.naming import DEFAULT_FILENAME, is_youtube_url, title_from_filename
 from ytmp3_host.ytdlp import Progress, find_thumbnail, run_yt_dlp
@@ -30,6 +30,15 @@ JS_CHALLENGE_FAILURES = ("Signature solving failed", "n challenge solving failed
 # what Python prints when a file of yt-dlp's onedir build is missing or blocked (e.g. a virus scanner
 # removed a DLL): `--version` does not load every module, so the build can still look
 BROKEN_INSTALL_FAILURES = ("ImportError", "ModuleNotFoundError", "DLL load failed")
+
+
+class NoVideoError(Exception):
+    """An MP4 was requested for a link that has only audio (e.g. a SoundCloud track).
+    Raised at `before_dl`, before anything is downloaded. Not a yt-dlp failure, so it is never repaired.
+    """
+    def __init__(self) -> None:
+        super().__init__("This link has no video, download it as MP3 instead")
+
 
 EMBED_TIMEOUT_S = 50
 EMBED_MIN_SPEED_BPS = 20_000_000  # for slow disks
@@ -180,6 +189,7 @@ def download_audio(
 
     Raises:
         FileExistsError: If the target file already exists (`filename` holds its path).
+        NoVideoError: If an MP4 was requested for a link without video.
         FileNotFoundError: If ffmpeg.exe or yt-dlp.exe is missing, or yt-dlp or
             ffmpeg did not produce its file.
         subprocess.TimeoutExpired: If yt-dlp or ffmpeg timed out.
@@ -193,7 +203,11 @@ def download_audio(
         if on_warning:
             on_warning(message)
 
-    def _check_title(video_info: VideoInfo) -> None:
+    def _check_info(video_info: VideoInfo) -> None:
+        # yt-dlp's choice falls back to an audio-only file when a link has no video ("b" in "bv*+ba/b")
+        # so we need to check for that case and raise
+        if isinstance(media_format, Mp4Format) and video_info.get("vcodec") == "none":
+            raise NoVideoError
         if not filename:
             _ensure_not_exists(folder / f"{title_filename(video_info, folder)}{suffix}")
 
@@ -210,7 +224,7 @@ def download_audio(
     try:
         info = run_yt_dlp(
             url, temp_stem, media_format, on_progress=on_progress, on_start=on_start,
-            on_video_info=_check_title, on_timeout=on_timeout,
+            on_video_info=_check_info, on_timeout=on_timeout,
         )
         downloaded = time.perf_counter()
         logger.debug("yt-dlp took %.2f s, info: %r", downloaded - start, info)
@@ -395,6 +409,8 @@ def describe_error(error: Exception) -> str:
     match error:
         case FileExistsError():
             return f"File with this name already exists: {Path(error.filename or '').name}"
+        case NoVideoError():
+            return str(error)
         case subprocess.TimeoutExpired():
             return f"Download timed out after {error.timeout:.0f} s ({_tool(error.cmd)})"
         case subprocess.CalledProcessError():

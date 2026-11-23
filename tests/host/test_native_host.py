@@ -454,6 +454,19 @@ def test_yt_dlp_failure_is_one_readable_error(
     assert response["message"].endswith("failed: [youtube] abc123: Video unavailable")
 
 
+def test_an_mp4_of_a_link_without_video_is_one_error_without_a_repair(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    fake_yt_dlp.set(info={"vcodec": "none"})
+    request = {"action": "download", "url": URL, "folder": str(out_dir), "format": "mp4"}
+    [response] = run_host(monkeypatch, frame(request))  # no "checking for a yt-dlp update" info
+    assert response == {
+        "status": "error",
+        "message": "Download failed: This link has no video, download it as MP3 instead",
+        "final": True,
+    }
+
+
 def test_timeout_is_one_error(
     monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:

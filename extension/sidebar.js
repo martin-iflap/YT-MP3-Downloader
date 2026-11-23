@@ -1,4 +1,4 @@
-/* global isKnownSiteUrl, isWebUrl, filenameLimit, filenameTooLong, filenameTooLongMessage,
+/* global isKnownSiteUrl, isAudioSiteUrl, isWebUrl, filenameLimit, filenameTooLong, filenameTooLongMessage,
    FORMATS, DEFAULT_FORMAT, knownFormat, knownOption, formatRequest, hostSupports, progressText */
 
 const downloadBtn = document.getElementById('DownloadBtn');
@@ -9,6 +9,7 @@ const hostNotice = document.getElementById('hostNotice');
 const loader = document.getElementById('loader');
 const urlInput = document.getElementById('urlInput');
 const urlLabel = document.querySelector('label[for="urlInput"]');
+const urlWarning = document.getElementById('urlWarning');
 const folderInput = document.getElementById('folderInput');
 const filenameInput = document.getElementById('filenameInput');
 const filenameHelp = document.getElementById('filenameHelp');
@@ -54,7 +55,16 @@ async function syncUrlFromActiveTab() {
   urlInput.value = url;
   autofilledUrl = url;
   urlLabel.textContent = url ? 'Current URL' : 'Video URL';
+  updateUrlWarning();
 }
+
+// An MP4 of an audio site's link will fail. Only a warning: the download stays possible,
+// since yt-dlp, not the URL, knows whether a link has video.
+function updateUrlWarning() {
+  urlWarning.hidden = !(currentFormat === 'mp4' && isAudioSiteUrl(urlInput.value.trim()));
+}
+
+urlInput.addEventListener('input', updateUrlWarning);
 
 browser.tabs.onActivated.addListener(() => syncUrlFromActiveTab().catch(console.error));
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -145,6 +155,7 @@ function showFormat(format) {
   const { label } = FORMATS[format];
   downloadBtn.textContent = `Download ${label}`;
   filenameHelp.textContent = `Custom filename for the downloaded ${label} file`;
+  updateUrlWarning();
 }
 
 // The choices made in format's selects, as { option: value }.

@@ -137,7 +137,7 @@ async function isSidebarOpen() {
   }
 }
 
-// notification id -> the MP3 a click on it shows in its folder
+// notification id -> the downloaded file a click on it shows in its folder
 const notificationFiles = new Map();
 
 function notify(title, message, path) {
@@ -156,7 +156,7 @@ browser.notifications.onClosed.addListener(id => notificationFiles.delete(id));
 async function notifyDownloadResult(origin, response) {
   if (origin === 'sidebar' && await isSidebarOpen()) return;
   if (response.status === 'success') {
-    const saved = `${response.filename || 'The MP3'} saved successfully!`;
+    const saved = `${response.filename || 'The file'} saved successfully!`;
     notify('Download Complete', response.path ? `${saved} Click to show it in its folder.` : saved, response.path);
   } else {
     notify('Download Failed', response.message || 'An error occurred during download');
