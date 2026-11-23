@@ -1,7 +1,7 @@
 [project]
 name = "ytmp3-host"
 version = "2.2.0"  # = ytmp3_host.__version__
-description = "Native messaging host for the YouTube MP3 Downloader Firefox extension"
+description = "Native messaging host for the MP3 & MP4 Downloader Firefox extension"
 readme = "README.md"
 requires-python = ">=3.15"
 dependencies = [

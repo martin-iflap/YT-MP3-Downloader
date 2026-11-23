@@ -13,36 +13,122 @@ function sidebarAction(browser, action, extra = {}) {
 
 const finals = state => state.sent.filter(m => m.final === true);
 
-test('creates the context menu at startup', () => {
+test('creates the context menu entries at startup', () => {
   const { state } = loadBackground();
-  assert.equal(state.menus.length, 1);
-  assert.equal(state.menus[0].id, 'download-mp3');
+  assert.deepStrictEqual(state.menus.map(m => [m.id, m.title]), [
+    ['download-mp3', 'Download as MP3'],
+    ['download-mp4', 'Download as MP4']
+  ]);
 });
 
-test('the context menu appears on every kind of link a click accepts', () => {
-  const { state, context } = loadBackground();
-  // a match pattern as a regular expression: "*" is any text, a "*" scheme is http or https
-  const matchers = state.menus[0].targetUrlPatterns.map(pattern => new RegExp(
+// Whether Firefox shows a menu entry on a link: a match pattern as a regular expression,
+// "*" is any text, a "*" scheme is http or https.
+function menuShownOn(menu, url) {
+  return menu.targetUrlPatterns.some(pattern => new RegExp(
     `^${pattern.replace(/[.?]/g, '\\$&').replace(/^\*/, 'https?').replace(/\*/g, '.*')}$`
-  ));
-  for (const url of [
-    'https://www.youtube.com/watch?v=abc',
-    'https://m.youtube.com/watch?v=abc',
-    'https://music.youtube.com/watch?v=abc',
-    'https://music.youtube.com/shorts/abc',
-    'https://music.youtube.com/live/abc',
-    'https://www.youtube.com/shorts/abc',
-    'https://www.youtube.com/live/abc',
-    'https://youtu.be/abc',
-    'https://soundcloud.com/forss/flickermood',
-    'https://m.soundcloud.com/forss/flickermood',
-    'https://on.soundcloud.com/AbC123',
-    'https://artist.bandcamp.com/track/song',
-    'https://www.mixcloud.com/spartacus/party-time/'
-  ]) {
+  ).test(url));
+}
+
+const YOUTUBE_LINKS = [
+  'https://www.youtube.com/watch?v=abc',
+  'https://m.youtube.com/watch?v=abc',
+  'https://music.youtube.com/watch?v=abc',
+  'https://music.youtube.com/shorts/abc',
+  'https://music.youtube.com/live/abc',
+  'https://www.youtube.com/shorts/abc',
+  'https://www.youtube.com/live/abc',
+  'https://youtu.be/abc'
+];
+const AUDIO_SITE_LINKS = [
+  'https://soundcloud.com/forss/flickermood',
+  'https://m.soundcloud.com/forss/flickermood',
+  'https://on.soundcloud.com/AbC123',
+  'https://artist.bandcamp.com/track/song',
+  'https://www.mixcloud.com/spartacus/party-time/'
+];
+
+test('MP3 appears on every kind of link a click accepts', () => {
+  const { state, context } = loadBackground();
+  for (const url of [...YOUTUBE_LINKS, ...AUDIO_SITE_LINKS]) {
     assert.equal(context.isKnownSiteUrl(url), true, url);
-    assert.ok(matchers.some(m => m.test(url)), `no pattern matches ${url}`);
+    assert.ok(menuShownOn(state.menus[0], url), `no pattern matches ${url}`);
   }
+});
+
+test('MP4 appears on YouTube links only: the audio sites have no video', () => {
+  const { state, context } = loadBackground();
+  for (const url of YOUTUBE_LINKS) assert.ok(menuShownOn(state.menus[1], url), url);
+  for (const url of AUDIO_SITE_LINKS) {
+    assert.equal(context.isAudioSiteUrl(url), true, url);
+    assert.equal(menuShownOn(state.menus[1], url), false, url);
+  }
+});
+
+test('context menu MP4 sends the sidebar\'s MP4 choices and folder, without a check', async () => {
+  const { browser, state } = loadBackground({
+    storage: { lastFolder: 'D:\\Videos', hostFormats: ['mp3', 'mp4'], mp4Options: { quality: '720', codec: 'compatible' } }
+  });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp4', linkUrl: VIDEO_URL });
+  await flush();
+
+  assert.deepStrictEqual(state.ports.map(p => p.posted), [
+    [{ action: 'download', url: VIDEO_URL, format: 'mp4', quality: '720', codec: 'compatible', folder: 'D:\\Videos' }]
+  ]);
+});
+
+test('context menu MP4 without saved choices uses the defaults', async () => {
+  const { browser, state } = loadBackground({ storage: { hostFormats: ['mp3', 'mp4'], mp4Options: { quality: '4320' } } });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp4', linkUrl: VIDEO_URL });
+  await flush();
+
+  assert.deepStrictEqual(state.ports[0].posted, [
+    { action: 'download', url: VIDEO_URL, format: 'mp4', quality: 'best', codec: 'best' }
+  ], 'an unknown stored quality falls back too');
+});
+
+// A host that answers get_version with formats and records the downloads it gets.
+function hostWithFormats(formats) {
+  const downloads = [];
+  const nativeHost = (message, port) => {
+    if (message.action === 'get_version') {
+      port.reply({
+        status: 'success', version: '2.2.0', latest: '2.2.0', outdated: false, self_update: true, formats,
+        yt_dlp: { installed: true, version: '2026.08.19', latest: '2026.08.19', outdated: false },
+        ffmpeg: { installed: true }, final: true
+      });
+    } else downloads.push(message);
+  };
+  return { nativeHost, downloads };
+}
+
+test('context menu MP4 checks a host it knows nothing about first, then downloads', async () => {
+  const { nativeHost, downloads } = hostWithFormats(['mp3', 'mp4']);
+  const { browser, state } = loadBackground({ nativeHost });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp4', linkUrl: VIDEO_URL });
+  for (let i = 0; i < 10; i++) await flush();
+
+  assert.deepStrictEqual(state.ports.map(p => p.posted[0].action), ['get_version', 'download']);
+  assert.equal(downloads[0].format, 'mp4');
+  assert.deepStrictEqual(state.storage.hostFormats, ['mp3', 'mp4']);
+});
+
+test('context menu MP4 on a host without MP4 notifies and downloads nothing', async () => {
+  const { nativeHost, downloads } = hostWithFormats(undefined);
+  const { browser, state } = loadBackground({ nativeHost, storage: { hostFormats: [] } });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp4', linkUrl: VIDEO_URL });
+  for (let i = 0; i < 10; i++) await flush();
+
+  assert.deepStrictEqual(downloads, [], 'an older host would ignore the format and save an MP3');
+  assert.deepStrictEqual(state.notifications.map(n => n.title), ['Download Failed']);
+  assert.match(state.notifications[0].message, /MP4 needs a newer version/);
+});
+
+test('context menu MP3 never waits for a check', async () => {
+  const { browser, state } = loadBackground({ storage: { mp4Options: { quality: '720' } } });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: VIDEO_URL });
+  await flush();
+
+  assert.deepStrictEqual(state.ports.map(p => p.posted), [[{ action: 'download', url: VIDEO_URL }]]);
 });
 
 test('the toolbar button toggles the sidebar', () => {

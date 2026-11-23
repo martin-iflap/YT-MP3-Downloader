@@ -1,22 +1,26 @@
-/* global isKnownSiteUrl */
+/* global isKnownSiteUrl, FORMATS, formatRequest, hostSupports */
 
 const NATIVE_HOST_NAME = 'app_manifest';
 const MENU_ID = 'download-mp3';
+const MP4_MENU_ID = 'download-mp4';
 const NOTIFICATION_ICON = 'icons/icon-48.png';
 // The installer of the latest release, downloaded directly: the one link that fixes every
 // host problem, including hosts that can't update themselves (1.x, broken installs).
 // Every release must carry this asset name (updater.INSTALLER_ASSET, checked by test_versions.py).
 const INSTALLER_URL = 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest/download/YT-MP3-Downloader-Setup.exe';
-const HOST_MISSING_MESSAGE = 'The YT MP3 Downloader app is not installed. Install it from GitHub, then restart Firefox.';
+// The name users see (manifest.json, the sidebar, the app window). The installer keeps the
+// 1.x AppName, which is its AppId (mp3_installer.iss).
+const APP_NAME = 'MP3 & MP4 Downloader';
+const HOST_MISSING_MESSAGE = `The ${APP_NAME} app is not installed. Install it from GitHub, then restart Firefox.`;
 
 // The oldest host this extension works with. Raise it when the extension starts to rely on
 // a new host action or response field; a newer host is always fine.
 const MIN_HOST_VERSION = '2.0.0';
-const HOST_OUTDATED_MESSAGE = `The YT MP3 Downloader app is out of date (version ${MIN_HOST_VERSION} or newer is needed). Install the update from GitHub.`;
-const HOST_BROKEN_MESSAGE = 'The YT MP3 Downloader app is not working (it closed without answering). Reinstall it from GitHub.';
+const HOST_OUTDATED_MESSAGE = `The ${APP_NAME} app is out of date (version ${MIN_HOST_VERSION} or newer is needed). Install the update from GitHub.`;
+const HOST_BROKEN_MESSAGE = `The ${APP_NAME} app is not working (it closed without answering). Reinstall it from GitHub.`;
 // What a 1.x host answers to get_version: it treats unknown actions as a download without a URL.
 const LEGACY_HOST_REPLY = 'Invalid YouTube URL';
-const LEGACY_HOST_MESSAGE = "This version of the YT MP3 Downloader app can't update itself. Install the new version once, from then on it keeps itself up to date.";
+const LEGACY_HOST_MESSAGE = `This version of the ${APP_NAME} app can't update itself. Install the new version once, from then on it keeps itself up to date.`;
 
 // Per-action timeouts. The host allows 900s for yt-dlp plus up to 600s for the ffmpeg cover
 // pass, and select_folder waits on the user, so these must stay above that. get_version waits
@@ -44,7 +48,7 @@ const ACTION_TIMEOUTS_MS = {
 
 // What the sidebar shows while a repair runs.
 const REPAIR_MESSAGES = {
-  update_host: 'Updating the YT MP3 Downloader app...',
+  update_host: `Updating the ${APP_NAME} app...`,
   update_yt_dlp: 'Updating yt-dlp...'
 };
 // After update_host the installer runs on its own; poll until the new version answers.
@@ -56,39 +60,50 @@ const HOST_UPDATE_WAIT_MS = 3 * 60 * 1000;
 // itself once the window is closed.
 const KEEP_ALIVE_ACTIONS = new Set(['download_gui']);
 
+// The links isKnownSiteUrl accepts (youtube.js), as match patterns; a click checks the link exactly.
+const YOUTUBE_PATTERNS = [
+  '*://www.youtube.com/watch*',
+  '*://youtube.com/watch*',
+  '*://m.youtube.com/watch*',
+  '*://music.youtube.com/watch*',
+  '*://music.youtube.com/shorts/*',
+  '*://music.youtube.com/live/*',
+  '*://youtu.be/*',
+  '*://www.youtube.com/shorts/*',
+  '*://youtube.com/shorts/*',
+  '*://m.youtube.com/shorts/*',
+  '*://www.youtube.com/live/*',
+  '*://youtube.com/live/*',
+  '*://m.youtube.com/live/*'
+];
+const AUDIO_SITE_PATTERNS = [
+  '*://soundcloud.com/*/*',
+  '*://www.soundcloud.com/*/*',
+  '*://m.soundcloud.com/*/*',
+  '*://on.soundcloud.com/*',
+  '*://*.bandcamp.com/track/*',
+  '*://mixcloud.com/*/*',
+  '*://www.mixcloud.com/*/*',
+  '*://m.mixcloud.com/*/*'
+];
+
+// One entry per format (formats.js). MP4 is offered on YouTube links only: the audio sites
+// (isAudioSiteUrl) have no video, so there MP3 stays the only entry. Firefox shows a single
+// entry directly with the extension's icon, and puts two in a submenu named after the extension.
 // Menus are not persisted across browser restarts for MV2 persistent backgrounds,
-// so create it on every startup rather than in onInstalled. The patterns cover the links
-// isKnownSiteUrl accepts (youtube.js); a click checks the link exactly.
-browser.contextMenus.create({
-  id: MENU_ID,
-  title: 'Download as MP3',
-  contexts: ['link'],
-  targetUrlPatterns: [
-    '*://www.youtube.com/watch*',
-    '*://youtube.com/watch*',
-    '*://m.youtube.com/watch*',
-    '*://music.youtube.com/watch*',
-    '*://music.youtube.com/shorts/*',
-    '*://music.youtube.com/live/*',
-    '*://youtu.be/*',
-    '*://www.youtube.com/shorts/*',
-    '*://youtube.com/shorts/*',
-    '*://m.youtube.com/shorts/*',
-    '*://www.youtube.com/live/*',
-    '*://youtube.com/live/*',
-    '*://m.youtube.com/live/*',
-    '*://soundcloud.com/*/*',
-    '*://www.soundcloud.com/*/*',
-    '*://m.soundcloud.com/*/*',
-    '*://on.soundcloud.com/*',
-    '*://*.bandcamp.com/track/*',
-    '*://mixcloud.com/*/*',
-    '*://www.mixcloud.com/*/*',
-    '*://m.mixcloud.com/*/*'
-  ]
-}, () => {
-  if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
-});
+// so create them on every startup rather than in onInstalled.
+const MENU_FORMATS = { [MENU_ID]: 'mp3', [MP4_MENU_ID]: 'mp4' };
+const MENU_PATTERNS = { [MENU_ID]: [...YOUTUBE_PATTERNS, ...AUDIO_SITE_PATTERNS], [MP4_MENU_ID]: YOUTUBE_PATTERNS };
+for (const [id, format] of Object.entries(MENU_FORMATS)) {
+  browser.contextMenus.create({
+    id,
+    title: `Download as ${FORMATS[format].label}`,
+    contexts: ['link'],
+    targetUrlPatterns: MENU_PATTERNS[id]
+  }, () => {
+    if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
+  });
+}
 
 // The toolbar button opens and closes the sidebar. With tabs on top, Firefox shows no
 // sidebar launcher, so without it users would not find the extension. toggle() must run
@@ -306,6 +321,12 @@ async function checkAndRepairHost(onProgress) {
       check = await hostRequest({ action: 'get_version' });
     }
   }
+  // the formats the host downloads, for the context menu (a host before 2.2.0 lists none:
+  // MP3 only); a host that did not answer leaves the last known ones
+  if (check.source === 'host') {
+    browser.storage.local.set({ hostFormats: check.response.formats ?? [] })
+      .catch(e => console.warn('Could not save the host formats:', e));
+  }
   return withRepairFailures(assessHostStatus(check.response, check.source), failures);
 }
 
@@ -430,17 +451,31 @@ async function runNativeAction(payload, requestId, origin) {
   if (payload.action === 'download') notifyDownloadResult(origin, response);
 }
 
+// Whether the host downloads format: what the last check saw (hostFormats), else a check
+// now, which also updates a host that is too old for it.
+async function menuHostSupports(format, hostFormats) {
+  if (hostSupports(hostFormats, format)) return true;
+  return hostSupports((await checkHost(() => {})).formats, format);
+}
+
 browser.contextMenus.onClicked.addListener(async (info) => {
-  if (info.menuItemId !== MENU_ID) return;
+  const format = MENU_FORMATS[info.menuItemId];
+  if (!format) return;
   if (!isKnownSiteUrl(info.linkUrl)) {
     notify('Invalid URL', 'Not a link to a video or track');
     return;
   }
 
-  // Use the default folder chosen in the sidebar; without one the host falls back to its own.
-  const payload = { action: 'download', url: info.linkUrl };
-  const { lastFolder } = await browser.storage.local.get('lastFolder').catch(() => ({}));
-  if (lastFolder) payload.folder = lastFolder;
+  // The sidebar's folder and the format's choices; without them the host's default folder
+  // and the format's default choices.
+  const optionsKey = `${format}Options`;
+  const stored = await browser.storage.local.get(['lastFolder', 'hostFormats', optionsKey]).catch(() => ({}));
+  if (!await menuHostSupports(format, stored.hostFormats)) {
+    notify('Download Failed', `Downloading ${FORMATS[format].label} needs a newer version of the ${APP_NAME} app. Open the sidebar to see why it could not update.`);
+    return;
+  }
+  const payload = { action: 'download', url: info.linkUrl, ...formatRequest(format, stored[optionsKey]) };
+  if (stored.lastFolder) payload.folder = stored.lastFolder;
 
   // the check comes after the download, so it never delays it
   runNativeAction(payload, crypto.randomUUID(), 'menu').then(checkHostInBackground);

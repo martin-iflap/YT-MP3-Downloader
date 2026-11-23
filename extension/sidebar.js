@@ -260,7 +260,7 @@ downloadBtn.addEventListener('click', () => {
   if (!hostSupports(hostFormats, format)) {
     showResult(hostFormats === null
       ? 'Still checking the app, try again in a moment'
-      : `Downloading ${FORMATS[format].label} needs a newer version of the YT MP3 Downloader app`, 'error');
+      : `Downloading ${FORMATS[format].label} needs a newer version of the MP3 & MP4 Downloader app`, 'error');
     return;
   }
 

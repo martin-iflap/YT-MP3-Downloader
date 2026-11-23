@@ -1,4 +1,4 @@
-"""Native-messaging host of the YouTube MP3 Downloader Firefox extension."""
+"""Native-messaging host of the MP3 & MP4 Downloader Firefox extension."""
 
 # Bump together with `version` in pyproject.toml and MyAppVersion in
 # packaging/installer/mp3_installer.iss (tests/host/test_versions.py checks they match).

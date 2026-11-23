@@ -99,7 +99,7 @@ class DownloaderApp(ctk.CTk):
         ctk.set_default_color_theme("green")
         super().__init__(fg_color=BG)
 
-        self.title("YouTube MP3 Converter")
+        self.title("MP3 & MP4 Downloader")
         self.geometry("560x580")
         # room for the MP4 choices in one row, a two-line status and the file buttons below it
         self.minsize(470, 580)
@@ -121,7 +121,7 @@ class DownloaderApp(ctk.CTk):
         main_frame = ctk.CTkFrame(self, fg_color="transparent")
         main_frame.pack(fill="both", expand=True, padx=18, pady=(16, 18))
 
-        ctk.CTkLabel(main_frame, text="YouTube MP3 Downloader", text_color="#ffffff", font=(FONT_SEMIBOLD, 17)).pack(
+        ctk.CTkLabel(main_frame, text="MP3 & MP4 Downloader", text_color="#ffffff", font=(FONT_SEMIBOLD, 17)).pack(
             pady=(0, 12)
         )
 

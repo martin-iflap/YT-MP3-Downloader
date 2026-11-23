@@ -84,7 +84,8 @@ function createFakeBrowser({ sidebarOpen = false, pinned = true, storage = {}, n
     },
     storage: {
       local: {
-        get: async key => (key in state.storage ? { [key]: state.storage[key] } : {}),
+        get: async keys => Object.fromEntries([keys].flat()
+          .filter(key => key in state.storage).map(key => [key, state.storage[key]])),
         set: async (items) => { Object.assign(state.storage, plain(items)); }
       }
     }
@@ -118,10 +119,13 @@ function loadScripts(files, globals) {
   return context;
 }
 
+// The background page's scripts, in the order Firefox loads them.
+const BACKGROUND_SCRIPTS = JSON.parse(fs.readFileSync(path.join(EXTENSION_DIR, 'manifest.json'), 'utf8')).background.scripts;
+
 // context exposes the scripts' top-level functions and constants, e.g. context.parseVersion.
 function loadBackground(options) {
   const { browser, state } = createFakeBrowser(options);
-  const context = loadScripts(['youtube.js', 'background.js'], { browser });
+  const context = loadScripts(BACKGROUND_SCRIPTS, { browser });
   return { browser, state, context };
 }
 

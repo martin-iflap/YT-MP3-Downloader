@@ -16,7 +16,7 @@ updates of itself, yt-dlp and (when needed) Deno.
 flowchart TB
     subgraph FF["Firefox"]
         SB["sidebar.html + sidebar.js<br/>(UI, MP3/MP4 switch, progress, app status notice)"]
-        CM["Context menu<br/>'Download as MP3'"]
+        CM["Context menu<br/>'Download as MP3' / 'as MP4'"]
         BG["background.js<br/>action whitelist + timeouts<br/>one native port per request<br/>check-and-repair, notifications"]
         SB -- "runtime.sendMessage" --> BG
         CM -- "contextMenus.onClicked" --> BG
@@ -380,11 +380,11 @@ flowchart TB
 
 | Function / listener                           | Responsibility                                                                                                                                                                                                                       |
 |-----------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `contextMenus.create` (top level)             | Registers "Download as MP3" for YouTube, SoundCloud, Bandcamp and Mixcloud links (`targetUrlPatterns`). Runs on every startup because MV2 persistent backgrounds do not keep menus.                                                  |
+| `contextMenus.create` (top level)             | Registers one entry per format (`MENU_FORMATS`): "Download as MP3" for YouTube, SoundCloud, Bandcamp and Mixcloud links, "Download as MP4" for YouTube links only (`MENU_PATTERNS`), since the audio sites have no video. Firefox shows a single matching entry directly with the extension icon, two in a submenu named after the extension. Runs on every startup because MV2 persistent backgrounds do not keep menus. |
 | `browserAction.onClicked`                     | The toolbar button (`default_area: navbar`): toggles the sidebar, which Firefox gives no launcher when tabs are on top. `toggle()` is called directly, as it needs the user action. Remembers the click time for `toolbarTipWanted`. |
 | `runtime.onMessage` (`toolbar_tip`)           | Answers the sidebar with `toolbarTipWanted()`: true if the button is pinned and the sidebar opened without it (no click in 5 s, not restored at startup), until dismissed. Extensions can't unpin the button themselves.             |
 | `runtime.onMessage`                           | Accepts `native_action` from the sidebar. Rejects actions not in `ACTION_TIMEOUTS_MS`. Copies only `action`, `url`, `folder`, `filename`, `path` and the format fields (`format`, `quality`, `codec`) into the payload.            |
-| `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set, starts a `download`, then `checkHostInBackground`.                                                                                                    |
+| `contextMenus.onClicked`                      | Validates the link (`isKnownSiteUrl`), adds `storage.local.lastFolder` if set and, for MP4, the sidebar's `mp4Options` (`formatRequest` from `formats.js`), starts a `download`, then `checkHostInBackground`. MP4 goes only to a host whose last check listed it (`storage.local.hostFormats`, saved by `checkAndRepairHost` when the host answered); otherwise `menuHostSupports` runs a check first, and a host still without MP4 gets a notification instead of a download it would save as MP3. |
 | `checkHostInBackground()`                     | A silent `checkHost` for context-menu-only users, at most once a day: 1 min after startup and after a context-menu download. Any check counts; its start time is `storage.local.lastHostCheck` (§7.2).                               |
 | `runNativeAction(payload, requestId, origin)` | Runs the request (`get_version` through `checkHost`), relays intermediate responses, then exactly one final one; notifies for downloads.                                                                                             |
 | `hostRequest(payload, onProgress)`            | Opens the port, posts the payload, starts the timeout. Resolves once with `{ response, source }`; `source` is `host`, `timeout`, `disconnect` or `connect`. A `deadline_s` response extends the timeout instead of going to `onProgress`. |
@@ -808,7 +808,7 @@ sequenceDiagram
     BG->>H: get_version
     H-->>BG: facts
     opt newer host release and self_update
-        BG-->>SB: info "Updating the YT MP3 Downloader app..."
+        BG-->>SB: info "Updating the MP3 & MP4 Downloader app..."
         BG->>H: update_host
         H-->>BG: success, version = tag (installer started)
         loop every 5 s, up to 3 min
@@ -1149,12 +1149,17 @@ sequenceDiagram
     participant ST as storage.local
     participant H as mp3.exe
 
-    User->>BG: right-click a video/track link, Download as MP3
+    User->>BG: right-click a video/track link, Download as MP3 or MP4
     alt not isKnownSiteUrl(linkUrl)
         BG->>User: Invalid URL notification
     else valid
-        BG->>ST: get lastFolder
-        ST-->>BG: folder or nothing
+        BG->>ST: get lastFolder, hostFormats, mp4Options
+        ST-->>BG: what is saved
+        opt MP4 and hostFormats lacks it
+            BG->>H: checkHost (get_version, repairs)
+            H-->>BG: formats
+            Note over BG: still no MP4: Download Failed notification, stop
+        end
         BG->>H: runNativeAction(download, origin menu)
         Note over BG,H: same host path as 8.1
         H-->>BG: final response

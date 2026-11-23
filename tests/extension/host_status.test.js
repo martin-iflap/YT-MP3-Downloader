@@ -83,6 +83,23 @@ test('the formats also reach the sidebar with a host problem', async () => {
   assert.deepStrictEqual(final.formats, ['mp3', 'mp4']);
 });
 
+test('a check saves the formats the host downloads, for the context menu', async () => {
+  const current = await checkHost({ get_version: report({ formats: ['mp3', 'mp4'] }) });
+  assert.deepStrictEqual(current.state.storage.hostFormats, ['mp3', 'mp4']);
+  const before22 = await checkHost({ get_version: report() });
+  assert.deepStrictEqual(before22.state.storage.hostFormats, [], 'no list: MP3 only');
+  const legacy = await checkHost({ get_version: { status: 'error', message: 'Invalid YouTube URL' } });
+  assert.deepStrictEqual(legacy.state.storage.hostFormats, []);
+});
+
+test('a host that did not answer leaves the saved formats alone', async () => {
+  const { nativeHost } = scriptedHost({ get_version: port => port.exit('Error reading from native app') });
+  const { browser, state } = loadBackground({ nativeHost, storage: { hostFormats: ['mp3', 'mp4'] } });
+  browser.runtime.onMessage.fire({ type: 'native_action', requestId: 'req-1', action: 'get_version' });
+  await settle();
+  assert.deepStrictEqual(state.storage.hostFormats, ['mp3', 'mp4']);
+});
+
 // --- versions -----------------------------------------------------------------------
 
 test('parseVersion accepts plain and v-prefixed dotted versions only', () => {
@@ -270,7 +287,7 @@ test('a newer host release is installed, then the check waits for the new versio
     update_host: { status: 'success', version: 'v2.1.0' }
   }, { clockMs: 30 * 1000 });
   assert.deepStrictEqual(calls, ['get_version', 'update_host', 'get_version', 'get_version', 'get_version']);
-  assert.deepStrictEqual(progress, ['Updating the YT MP3 Downloader app...']);
+  assert.deepStrictEqual(progress, ['Updating the MP3 & MP4 Downloader app...']);
   assert.equal(final.status, 'success');
   assert.equal(final.version, '2.1.0');
 });

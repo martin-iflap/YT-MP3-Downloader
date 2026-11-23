@@ -1,6 +1,6 @@
-# YouTube MP3 Downloader
+# MP3 & MP4 Downloader
 
-YouTube MP3 Downloader is a Firefox extension paired with a small Windows app that saves
+MP3 & MP4 Downloader (formerly YouTube MP3 Downloader) is a Firefox extension paired with a small Windows app that saves
 YouTube videos as MP3 audio or MP4 video (and SoundCloud, Bandcamp, Mixcloud tracks and
 other sites), with cover art and tags.
 
@@ -20,8 +20,8 @@ Both parts are required.
 
 https://addons.mozilla.org/en-US/firefox/addon/youtube-mp3-downloader
 
-It adds a sidebar and a **Download as MP3** entry to the right-click menu of video and
-track links.
+It adds a sidebar and **Download as MP3** / **Download as MP4** entries to the right-click
+menu of video and track links (MP3 only for SoundCloud, Bandcamp and Mixcloud tracks).
 
 ### 2. Install the Windows app
 
