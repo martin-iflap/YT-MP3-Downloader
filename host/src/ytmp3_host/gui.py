@@ -572,7 +572,7 @@ class DownloaderApp(ctk.CTk):
 
 def cleanup_partial_downloads(temp_stem: Path) -> None:
     """Remove a canceled download's leftover files.
-    core.download_audio already removes them when it exits; this is the fallback
+    core.download_media already removes them when it exits; this is the fallback
     for files Windows still had locked at that moment.
 
     Args:

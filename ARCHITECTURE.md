@@ -27,7 +27,7 @@ flowchart TB
         MAIN["MP3.main()<br/>dispatch by action"]
         RN["native_messaging.run_native<br/>(headless download)"]
         GUI["gui.py, lazy<br/>(customtkinter window, folder picker)"]
-        CORE["core.download_with_repair<br/>→ core.download_audio"]
+        CORE["core.download_with_repair<br/>→ core.download_media"]
         HEALTH["health.py, lazy<br/>(get_version facts)"]
         UPD["updater.py, lazy<br/>(yt-dlp, Deno, host updates)"]
         MAIN --> RN --> CORE
@@ -69,7 +69,7 @@ live in the host, because WebExtensions cannot do them.
 | Request routing, timeouts, notifications, context menu | `extension/background.js`                                                           |
 | What the user is told about the app, which repairs run | `background.js`: `checkAndRepairHost`, `neededRepairs`, `assessHostStatus`          |
 | Add or change a host action                            | `MP3.ACTIONS` + `ACTION_TIMEOUTS_MS` in `background.js` (see §11)                   |
-| Download logic (headless and GUI)                      | `core.download_audio`; request handling in `native_messaging.run_native` / `gui.py` |
+| Download logic (headless and GUI)                      | `core.download_media`; request handling in `native_messaging.run_native` / `gui.py` |
 | Retry after a yt-dlp failure, Deno on demand           | `core.download_with_repair`                                                         |
 | yt-dlp arguments                                       | `ytdlp.build_download_command`                                                       |
 | Formats (MP3, MP4 quality and codec)                   | `media_format.py`, `ytdlp._format_args`; the sidebar's choices in `extension/formats.js` |
@@ -601,7 +601,7 @@ the main thread only, and the worker thread changes widgets only via `self.after
 | `show_progress(progress, media_format)`                     | "Preparing..." and a moving bar until yt-dlp reports; "Downloading 42%" with the bar filling; "Converting to MP3..." / "Saving the MP4..." with a moving bar while yt-dlp encodes or merges and the cover pass runs.                                                                                                                                              |
 | `show_saved(saved_path, warnings)`                          | The "Saved" status with "Show in folder" and "Play" below it (`files.show_in_folder`, `files.open_file`).                                                                                                                                                                                                                                                               |
 | `cancel_download()`                                         | Sets `download_cancelled`, kills the yt-dlp tree, resets the UI, starts `cleanup_partial_downloads()` on a thread.                                                                                                                                                                                                                                                    |
-| `cleanup_partial_downloads(temp_stem)`                      | Waits 2 s, then `files.remove_temp_files` (fallback; `download_audio` already cleans up on exit).                                                                                                                                                                                                                                                                      |
+| `cleanup_partial_downloads(temp_stem)`                      | Waits 2 s, then `files.remove_temp_files` (fallback; `download_media` already cleans up on exit).                                                                                                                                                                                                                                                                      |
 | `reset_fields()`                                            | Clears URL and filename and restores the "Download MP3/MP4" button.                                                                                                                                                                                                                                                                                                   |
 | `select_folder(folder)`                                     | Hidden topmost root + `askdirectory` starting at `folder` (else the default). Sends the selection, or the start folder on cancel.                                                                                                                                                                                                                                     |
 
@@ -650,7 +650,7 @@ yt-dlp's own last `ERROR:` line (e.g. "This video is unavailable"), never the co
 
 ### 6.6 `core.py` and the helper modules
 
-`core.py` holds the pipeline: `download_audio`, `download_with_repair`, `embed_thumbnail`, `describe_error`.
+`core.py` holds the pipeline: `download_media`, `download_with_repair`, `embed_thumbnail`, `describe_error`.
 The rest of this table lives in `naming.py` (URL checks, `safe_filename`,
 `requested_filename`), `metadata.py` (`title_filename`, `artist_for`, `extra_tags`),
 `files.py` (folders, temp files, file actions), `media_format.py` (the formats) and
@@ -668,9 +668,9 @@ The rest of this table lives in `naming.py` (URL checks, `safe_filename`,
 | `artist_for(filename, info)`                                                        | The text before the first spaced dash (` - `, ` – `, ` — `) in the filename (a dash inside a word does not separate); without one the video's `artists` (`info_artists`, which ignores Mixcloud's: a mix's tracklist), else the channel without " - Topic", else the uploader, else `<unknown>`. The title tag is the text after the dash (`title_from_filename`).                                                                            |
 | `extra_tags(info)`                                                                  | Album, year (`release_year` only: an official video's upload year is often decades after the song), track number, the video URL as the comment; each only when the video has it.                                                                                                                                                                                                                                                   |
 | `media_format_from_request(request)`, `get_suffix(media_format)`                    | `Mp3Format()` or `Mp4Format(quality, codec)` (frozen dataclasses; `MediaFormat` is their union, matched with `match`); no `format` is MP3, anything unknown raises `ValueError`. The suffix (`.mp3`/`.mp4`) names the temp and the final file.                                                                                                                                                                                     |
-| `download_audio(url, folder, filename, media_format, on_progress, on_start, on_warning, on_timeout)` | The single pipeline for both formats (§6.7). Verifies the final file exists before returning it. Raises `FileExistsError`, `NoVideoError` (an MP4 of a link with only audio, at `before_dl`), `FileNotFoundError` (ffmpeg/yt-dlp missing, no file produced), `TimeoutExpired`, `CalledProcessError`. Temp files are always removed. |
-| `download_with_repair(...)`                                                         | `download_audio`, retried once after a yt-dlp failure that a repair may fix (§7.6). Used by both the headless and the GUI path.                                                                                                                                                                                                                                                                                                    |
-| `describe_error(error)`                                                             | One-line user message for a `download_audio` exception (headless and GUI).                                                                                                                                                                                                                                                                                                                                                         |
+| `download_media(url, folder, filename, media_format, on_progress, on_start, on_warning, on_timeout)` | The single pipeline for both formats (§6.7). Verifies the final file exists before returning it. Raises `FileExistsError`, `NoVideoError` (an MP4 of a link with only audio, at `before_dl`), `FileNotFoundError` (ffmpeg/yt-dlp missing, no file produced), `TimeoutExpired`, `CalledProcessError`. Temp files are always removed. |
+| `download_with_repair(...)`                                                         | `download_media`, retried once after a yt-dlp failure that a repair may fix (§7.6). Used by both the headless and the GUI path.                                                                                                                                                                                                                                                                                                    |
+| `describe_error(error)`                                                             | One-line user message for a `download_media` exception (headless and GUI).                                                                                                                                                                                                                                                                                                                                                         |
 | `embed_thumbnail(temp_file, thumb, artist, title, output, tags)`                    | One ffmpeg pass (`embed_thumb_timeout`: 50 s plus the file at 20 MB/s, at most 10 min), the output's suffix decides the format. MP3: audio copied, thumbnail center-cropped 1:1 as JPEG `-q:v 2`, ID3v2.3. MP4: video and audio copied, the thumbnail uncropped as an MJPEG `attached_pic` stream (players show it as the cover). Then artist, title and `tags`. Writes `output` directly, removes it on failure. Raises `FileExistsError` itself if `output` exists: ffmpeg 7 exits 0 when `-n` refuses to overwrite. |
 | `download_timeout(info, media_format, fallback)`                                   | yt-dlp's timeout from the video's size: 120 s plus `filesize_approx` at 500 KB/s (without it, `duration` × the format's worst bytes per second), never below `fallback` (900 s), never above 4 h (`DOWNLOAD_TIMEOUT_CAP_S`).                                                                                                                                                                                                        |
 | `ProgressTracker`                                                                   | Turns yt-dlp's progress events into one `Progress(stage, fraction)` for the whole download (§6.7).                                                                                                                                                                                                                                                                                                                                 |
@@ -1015,7 +1015,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
-    A["download_audio()"] -- success --> OK["MP3 / MP4"]
+    A["download_media()"] -- success --> OK["MP3 / MP4"]
     A -- "FileExistsError, NoVideoError, ffmpeg failure,<br/>timeout, canceled GUI download" --> RAISE["raise the error"]
     A -- "yt-dlp failed or missing" --> B{"output shows a damaged install?<br/>(ImportError, ModuleNotFoundError,<br/>DLL load failed)"}
     B -- no --> U["info: checking for a yt-dlp update...<br/>updater.update_yt_dlp()"]
@@ -1026,7 +1026,7 @@ flowchart TB
     J -- no --> C
     DN --> C{"new yt-dlp.exe installed<br/>or deno.exe installed or replaced?"}
     C -- no --> RAISE
-    C -- yes --> RETRY["info: trying again...<br/>download_audio() once more"]
+    C -- yes --> RETRY["info: trying again...<br/>download_media() once more"]
 ```
 
 - Runs in the host, so sidebar, context-menu and GUI downloads all get it, and the
@@ -1088,7 +1088,7 @@ sequenceDiagram
     opt folder doesn't exist
         H-->>BG: error, final true (the folder is named, nothing is downloaded)
     end
-    H->>T: core.download_audio: one yt-dlp call
+    H->>T: core.download_media: one yt-dlp call
     T-->>H: video info (before_dl)
     opt the size makes yt-dlp's timeout longer
         H-->>BG: info, deadline_s (not relayed, the timer is extended)
@@ -1279,7 +1279,7 @@ folders or a real video; everything else runs for real. Real `Popen` and pipes, 
 |---------------------------|-------------------------------------------------------------------------------------------------------------------------|
 | `test_core_helpers.py`    | Filenames, artist and tags, folders, URL check, error messages, the yt-dlp command, timeouts, `ProgressTracker`.       |
 | `test_media_format.py`    | Parsing the format fields of a request; the sidebar and the GUI offer the host's choices.                              |
-| `test_download_audio.py`  | `download_audio` with the fake yt-dlp: naming, warnings, errors, timeout, progress, MP4, cleanup.                       |
+| `test_download_audio.py`  | `download_media` with the fake yt-dlp: naming, warnings, errors, timeout, progress, MP4, cleanup.                       |
 | `test_embed_thumbnail.py` | `embed_thumbnail` and the whole pipeline with the real ffmpeg (skipped without one).                                    |
 | `test_repair.py`          | `download_with_repair` with fake repairs (yt-dlp update or damaged build, Deno).                                            |
 | `test_native_host.py`     | The native-messaging contract through `MP3.main()` with real framed bytes, including the update actions.                |
@@ -1402,7 +1402,7 @@ Resolved:
 | 1.x stopped the install when yt-dlp could not be downloaded                                                                      | The install goes on; the host downloads yt-dlp itself.                                                                                                                      |
 | `get_current_folder` did not create the default folder                                                                           | `send_current_folder` uses `files.resolve_folder`, which creates the default folder when it is requested.                                                                    |
 | Host lingered after `download_gui` (rejected folder, and also after the window was closed)                                       | An invalid folder opens the window with the default folder and says so (window + final message); `MP3.download_gui` exits the host when the window closes or fails to open. |
-| Headless download only logged "file exists" / "ffmpeg missing"                                                                   | `core.download_audio` raises `FileExistsError` / `FileNotFoundError`, which `run_native` reports with a specific message.                                                   |
+| Headless download only logged "file exists" / "ffmpeg missing"                                                                   | `core.download_media` raises `FileExistsError` / `FileNotFoundError`, which `run_native` reports with a specific message.                                                   |
 | `select_folder` cancel returned the default folder                                                                               | The sidebar sends its current folder; the picker starts there and returns it on cancel.                                                                                     |
 | GUI read Tk variables from the download thread; double click could start two downloads; Cancel before yt-dlp started was ignored | Fixed in `gui.py` (§6.4).                                                                                                                                                   |
 | `.part` files could survive a killed download (Windows locks)                                                                    | `files.remove_temp_files` retries locked files; `remove_stale_temp_files` removes what a killed host left.                                                                   |

@@ -220,6 +220,6 @@ def test_an_ffmpeg_failure_is_not_a_yt_dlp_repair(repairs: Repairs, out_dir: Pat
 def test_progress_lines_do_not_crowd_warnings_out_of_the_error(repairs: Repairs, out_dir: Path) -> None:
     repairs.fake_yt_dlp.set("fail")
     with pytest.raises(subprocess.CalledProcessError) as error:
-        core.download_audio(URL, out_dir, media_format=Mp3Format())
+        core.download_media(URL, out_dir, media_format=Mp3Format())
     assert "some harmless warning" in error.value.output
     assert ytdlp.PROGRESS_MARKER not in error.value.output

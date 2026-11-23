@@ -8,7 +8,7 @@ import pytest
 
 from conftest import FakeYtDlp, Media
 from ytmp3_host import core
-from ytmp3_host.core import download_audio, embed_thumbnail
+from ytmp3_host.core import download_media, embed_thumbnail
 from ytmp3_host.media_format import Mp3Format, Mp4Format
 from ytmp3_host.naming import filename_limit
 
@@ -122,7 +122,7 @@ def test_full_pipeline(fake_yt_dlp: FakeYtDlp, ffmpeg: Path, media: Media, out_d
     monkeypatch.setenv("FAKE_YTDLP_THUMB", str(media.cover))
     fake_yt_dlp.set(title="Jay-Z - Empire State of Mind (Official Video)")
 
-    result = download_audio("https://youtu.be/abc", out_dir, media_format=Mp3Format())
+    result = download_media("https://youtu.be/abc", out_dir, media_format=Mp3Format())
 
     assert [p.name for p in out_dir.iterdir()] == ["Jay-Z - Empire State of Mind.mp3"]
     info = probe(ffmpeg, result)
@@ -216,7 +216,7 @@ def test_full_mp4_pipeline(fake_yt_dlp: FakeYtDlp, ffmpeg: Path, media: Media, o
     monkeypatch.setenv("FAKE_YTDLP_THUMB", str(media.cover))
     fake_yt_dlp.set(title="Jay-Z - Empire State of Mind (Official Video)")
 
-    result = download_audio("https://youtu.be/abc", out_dir, media_format=Mp4Format(quality="best", codec="best"))
+    result = download_media("https://youtu.be/abc", out_dir, media_format=Mp4Format(quality="best", codec="best"))
 
     assert result == out_dir / "Jay-Z - Empire State of Mind.mp4"
     assert [p.name for p in out_dir.iterdir()] == [result.name]  # no temp files left

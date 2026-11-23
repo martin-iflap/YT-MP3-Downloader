@@ -114,10 +114,10 @@ class FakeYtDlp:
 
 @pytest.fixture
 def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
-    """Make download_audio run fake_yt_dlp.py instead of yt-dlp.exe.
+    """Make download_media run fake_yt_dlp.py instead of yt-dlp.exe.
 
     - Creates empty yt-dlp.exe and ffmpeg.exe in <tmp_path>/bin and points config.yt_dlp_path()
-      (point_yt_dlp_at) and core and ytdlp at them, so the "binary exists" checks in download_audio
+      (point_yt_dlp_at) and core and ytdlp at them, so the "binary exists" checks in download_media
       pass. They never run.
     - Wraps ytdlp.build_download_command and health.yt_dlp_version_command: the real
       command is built, then only its executable is swapped for `python
@@ -175,7 +175,7 @@ def fake_embed(monkeypatch: pytest.MonkeyPatch) -> list[EmbedCall]:
     """Replace core.embed_thumbnail (the ffmpeg pass) with a fake.
 
     The fake records its arguments as an EmbedCall and copies the temp mp3's bytes
-    to the output path, so download_audio's "output was written" check passes and
+    to the output path, so download_media's "output was written" check passes and
     the test can compare the final file with what the fake yt-dlp wrote.
     Returns the list of calls; `[call] = fake_embed` also asserts there was exactly one.
     """

@@ -1,4 +1,4 @@
-"""core.download_audio with the fake yt-dlp: naming, warnings, errors, timeout and cleanup."""
+"""core.download_media with the fake yt-dlp: naming, warnings, errors, timeout and cleanup."""
 
 import functools
 import os
@@ -16,7 +16,7 @@ from ytmp3_host.ytdlp import Progress
 URL = "https://www.youtube.com/watch?v=abc123"
 
 # these tests are about the MP3 download; an MP4 test passes its own media_format
-download_audio = functools.partial(core.download_audio, media_format=Mp3Format())
+download_audio = functools.partial(core.download_media, media_format=Mp3Format())
 
 
 def downloading(*fractions: float) -> list[Progress]:
@@ -24,7 +24,7 @@ def downloading(*fractions: float) -> list[Progress]:
 
 
 def leftovers(folder: Path) -> list[str]:
-    """Temp files of any download in folder (there must be none after download_audio)."""
+    """Temp files of any download in folder (there must be none after download_media)."""
     return sorted(p.name for p in folder.glob("_ytmp3_*"))
 
 
@@ -131,7 +131,7 @@ def test_mp4_progress_counts_video_and_audio_as_one_download(
     # yt-dlp reports each stream from 0 to its own size; filesize_approx is both together
     fake_yt_dlp.set(streams=[3_000_000, 1_000_000], info={"filesize_approx": 4_000_000})
     progress: list[Progress] = []
-    core.download_audio(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+    core.download_media(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
     # the audio's first event (0 of it, 0.75 in all) repeats the last one and is left out
     assert progress == [*downloading(0.0, 0.319, 0.75, 0.856, 1.0), Progress("processing")]
 
@@ -143,7 +143,7 @@ def test_mp4_progress_without_a_size_leaves_room_for_the_audio(
     # the audio's first events (75 % and 85.6 % of both) would go back, so they are left out
     fake_yt_dlp.set(streams=[3_000_000, 1_000_000])
     progress: list[Progress] = []
-    core.download_audio(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+    core.download_media(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
     assert progress == [*downloading(0.0, 0.383, 0.9, 1.0), Progress("processing")]
 
 
@@ -165,7 +165,7 @@ def test_progress_ends_at_100_when_the_size_was_overestimated(
     # filesize_approx 10 % above the real size (126 MB estimated for a 120 MB file was measured)
     fake_yt_dlp.set(streams=streams, info={"filesize_approx": sum(streams) * 1.1})
     progress: list[Progress] = []
-    core.download_audio(URL, out_dir, media_format=media_format, on_progress=progress.append)
+    core.download_media(URL, out_dir, media_format=media_format, on_progress=progress.append)
     assert progress == [*downloading(*fractions), Progress("processing")]
 
 
@@ -176,7 +176,7 @@ def test_an_mp4_of_a_link_without_video_stops_before_downloading(
     fake_yt_dlp.set(info={"format_id": "hls_aac_160k", "vcodec": "none"})
     progress: list[Progress] = []
     with pytest.raises(core.NoVideoError):
-        core.download_audio(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+        core.download_media(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
     assert progress == []  # stopped at the video info, before the first download event
     assert fake_embed == []
     assert leftovers(out_dir) == []
@@ -257,7 +257,7 @@ def test_mp4_download_is_named_and_embedded_as_mp4(
 ) -> None:
     fake_yt_dlp.set(title="Jay-Z - Empire State of Mind (Official Music Video)")
 
-    result = core.download_audio(URL, out_dir, media_format=Mp4Format(quality="720"))
+    result = core.download_media(URL, out_dir, media_format=Mp4Format(quality="720"))
 
     assert result == out_dir / "Jay-Z - Empire State of Mind.mp4"
     assert result.read_bytes() == b"fake mp4"  # the fake only writes .mp4 when the command merges to MP4
@@ -272,7 +272,7 @@ def test_an_existing_mp4_stops_an_mp4_download(fake_yt_dlp: FakeYtDlp, fake_embe
     existing.write_bytes(b"user's file")
 
     with pytest.raises(FileExistsError) as info:
-        core.download_audio(URL, out_dir, "Taken", media_format=Mp4Format())
+        core.download_media(URL, out_dir, "Taken", media_format=Mp4Format())
 
     assert info.value.filename == str(existing)
     assert existing.read_bytes() == b"user's file"
@@ -285,7 +285,7 @@ def test_an_mp3_with_the_same_name_does_not_stop_an_mp4_download(
     fake_yt_dlp.set(title="Artist - Song")
     (out_dir / "Artist - Song.mp3").write_bytes(b"user's mp3")
 
-    result = core.download_audio(URL, out_dir, media_format=Mp4Format())
+    result = core.download_media(URL, out_dir, media_format=Mp4Format())
 
     assert result == out_dir / "Artist - Song.mp4"
     assert (out_dir / "Artist - Song.mp3").read_bytes() == b"user's mp3"
@@ -294,7 +294,7 @@ def test_an_mp3_with_the_same_name_does_not_stop_an_mp4_download(
 def test_yt_dlp_without_mp4_raises(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
     fake_yt_dlp.set("no_mp3")  # writes no media file in either format
     with pytest.raises(FileNotFoundError, match="did not create the MP4"):
-        core.download_audio(URL, out_dir, media_format=Mp4Format())
+        core.download_media(URL, out_dir, media_format=Mp4Format())
     assert leftovers(out_dir) == []
     assert list(out_dir.iterdir()) == []
 

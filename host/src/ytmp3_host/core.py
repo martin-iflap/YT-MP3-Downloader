@@ -151,7 +151,7 @@ def _ensure_not_exists(output: Path) -> None:
         raise FileExistsError(errno.EEXIST, "File with this name already exists", str(output))
 
 
-def download_audio(
+def download_media(
     url: str,
     folder: Path,
     filename: str = "",
@@ -267,7 +267,7 @@ def download_audio(
 
 
 def _yt_dlp_failed(error: Exception) -> bool:
-    """Whether download_audio failed because of yt-dlp itself (an error exit or a missing exe)."""
+    """Whether download_media failed because of yt-dlp itself (an error exit or a missing exe)."""
     match error:
         case subprocess.CalledProcessError():  # yt-dlp's or ffmpeg's
             return not (isinstance(error.cmd, list) and error.cmd and error.cmd[0] == str(FFMPEG_PATH))
@@ -348,7 +348,7 @@ def download_with_repair(
     is_cancelled: Callable[[], bool] = lambda: False,
     on_timeout: Callable[[float], None] | None = None,
 ) -> Path:
-    """download_audio, tried once more after a yt-dlp failure that a repair may fix.
+    """download_media, tried once more after a yt-dlp failure that a repair may fix.
 
     YouTube changes break older yt-dlp versions, so when yt-dlp fails (or is
     missing) it is updated, and the download is retried only if a new yt-dlp was
@@ -363,16 +363,16 @@ def download_with_repair(
         folder: The folder to save the downloaded file in.
         filename: The name of the file to save the download as.
         media_format: The requested media format (MP3 or MP4) and its options.
-        on_progress: Optional callback receiving the download progress (see download_audio).
+        on_progress: Optional callback receiving the download progress (see download_media).
         on_start: Optional callback receiving the process and the file path when the download starts.
         on_warning: Optional callback receiving a warning message, for the user.
         on_info: Optional callback receiving what the repair is doing, for the user.
         is_cancelled: Tells whether the user canceled; a canceled download is not repaired.
-        on_timeout: Optional callback receiving yt-dlp's longer timeout (see download_audio).
+        on_timeout: Optional callback receiving yt-dlp's longer timeout (see download_media).
     Returns:
         The path of the final file.
     Raises:
-        As download_audio: the error of the first attempt, or of the retry.
+        As download_media: the error of the first attempt, or of the retry.
     """
     def _info(message: str) -> None:
         logger.info(message)
@@ -380,7 +380,7 @@ def download_with_repair(
             on_info(message)
 
     def _download() -> Path:
-        return download_audio(
+        return download_media(
             url, folder, filename, media_format=media_format, on_progress=on_progress,
             on_start=on_start, on_warning=on_warning, on_timeout=on_timeout
         )
@@ -395,11 +395,11 @@ def download_with_repair(
 
 
 def describe_error(error: Exception) -> str:
-    """Turn a download_audio exception into a short message for the user.
+    """Turn a download_media exception into a short message for the user.
     Used by both the headless and the GUI path, so they report errors the same way.
 
     Args:
-        error: The exception raised by download_audio.
+        error: The exception raised by download_media.
     Returns:
         A one-line message without the raw command line.
     """

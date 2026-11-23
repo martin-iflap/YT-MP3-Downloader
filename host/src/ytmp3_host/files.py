@@ -108,7 +108,7 @@ def remove_temp_files(temp_stem: Path) -> None:
 
 def remove_stale_temp_files(folder: Path) -> None:
     """Remove temp files that killed hosts left in folder.
-    When Firefox closes during a download it kills the host, so download_audio's
+    When Firefox closes during a download it kills the host, so download_media's
     cleanup never runs. Files younger than STALE_TEMP_AGE_S may belong to a running
     download and are kept; locked files are skipped. Failures are logged, not raised.
 

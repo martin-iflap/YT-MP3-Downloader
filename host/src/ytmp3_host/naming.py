@@ -150,7 +150,7 @@ def requested_filename(name: str) -> str:
         name: The filename from the request or the GUI field, possibly empty.
     Returns:
         The sanitized filename, or "" if nothing meaningful was given, which tells
-        download_audio to name the file after the video title.
+        download_media to name the file after the video title.
     """
     filename = safe_filename(name)
     return "" if filename.lower() == DEFAULT_FILENAME.lower() else filename
