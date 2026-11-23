@@ -984,8 +984,10 @@ flowchart TB
   one framed answer to `ping`, checks that HTTPS works (`ssl`, which the updater needs),
   and runs the ffmpeg steps of a download on a generated 1 s tone and image in a temp
   folder (libmp3lame V0 encode, then the real `core.embed_thumbnail`; the result must have
-  the ID3v2.3 artist, title and cover frames). All offline, about 1 s, so no test URL can
-  go stale. Exit code 0 or 1; problems go to `mp3.log` and stderr. yt-dlp is not checked:
+  the ID3v2.3 artist, title and cover frames), then the MP4 pass on a 1 s clip made with
+  ffmpeg's own `mpeg4`/`aac` encoders (downloads copy the streams, so no external encoder
+  is needed; the result must have the `covr` cover box, artist and title). All offline,
+  about 1 s, so no test URL can go stale. Exit code 0 or 1; problems go to `mp3.log` and stderr. yt-dlp is not checked:
   all versions share it and the host repairs it.
 - yt-dlp is downloaded, not bundled (YouTube changes break old versions), by the new
   version itself: `mp3.exe --install-yt-dlp` runs the host's own `update_yt_dlp()` (§7.3),

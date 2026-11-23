@@ -7,6 +7,9 @@
 ; there is exactly one source of truth for each identifier.
 
 #define MyAppName         "YouTube MP3 Downloader"
+; The name users see since 2.2.0 (Windows "Apps" list, Firefox's
+; native host manifest). MyAppName stays the 1.x name: it is the AppId.
+#define MyDisplayName     "MP3 & MP4 Downloader"
 ; Must match __version__ in host\src\ytmp3_host\__init__.py
 ; (tests\host\test_versions.py checks it).
 #define MyAppVersion      "2.2.0"
@@ -48,6 +51,8 @@
 ; upgrading the installed one.
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+; Only the name in Windows "Apps"; the uninstall key still comes from AppName
+UninstallDisplayName={#MyDisplayName}
 AppPublisher={#MyAppPublisher}
 WizardStyle=modern dynamic
 
@@ -231,7 +236,7 @@ begin
   JSON :=
     '{' + #13#10 +
     '  "name": "' + JsonEscape('{#NativeHostName}') + '",' + #13#10 +
-    '  "description": "YouTube MP3 Converter and Downloader",' + #13#10 +
+    '  "description": "' + JsonEscape('{#MyDisplayName}') + '",' + #13#10 +
     '  "path": "' + JsonEscape(ExePath) + '",' + #13#10 +
     '  "type": "stdio",' + #13#10 +
     '  "allowed_extensions": [' + #13#10 +
