@@ -13,10 +13,122 @@ function sidebarAction(browser, action, extra = {}) {
 
 const finals = state => state.sent.filter(m => m.final === true);
 
-test('creates the context menu at startup', () => {
+test('creates the context menu entries at startup', () => {
   const { state } = loadBackground();
-  assert.equal(state.menus.length, 1);
-  assert.equal(state.menus[0].id, 'download-mp3');
+  assert.deepStrictEqual(state.menus.map(m => [m.id, m.title]), [
+    ['download-mp3', 'Download as MP3'],
+    ['download-mp4', 'Download as MP4']
+  ]);
+});
+
+// Whether Firefox shows a menu entry on a link: a match pattern as a regular expression,
+// "*" is any text, a "*" scheme is http or https.
+function menuShownOn(menu, url) {
+  return menu.targetUrlPatterns.some(pattern => new RegExp(
+    `^${pattern.replace(/[.?]/g, '\\$&').replace(/^\*/, 'https?').replace(/\*/g, '.*')}$`
+  ).test(url));
+}
+
+const YOUTUBE_LINKS = [
+  'https://www.youtube.com/watch?v=abc',
+  'https://m.youtube.com/watch?v=abc',
+  'https://music.youtube.com/watch?v=abc',
+  'https://music.youtube.com/shorts/abc',
+  'https://music.youtube.com/live/abc',
+  'https://www.youtube.com/shorts/abc',
+  'https://www.youtube.com/live/abc',
+  'https://youtu.be/abc'
+];
+const AUDIO_SITE_LINKS = [
+  'https://soundcloud.com/forss/flickermood',
+  'https://m.soundcloud.com/forss/flickermood',
+  'https://on.soundcloud.com/AbC123',
+  'https://artist.bandcamp.com/track/song',
+  'https://www.mixcloud.com/spartacus/party-time/'
+];
+
+test('MP3 appears on every kind of link a click accepts', () => {
+  const { state, context } = loadBackground();
+  for (const url of [...YOUTUBE_LINKS, ...AUDIO_SITE_LINKS]) {
+    assert.equal(context.isKnownSiteUrl(url), true, url);
+    assert.ok(menuShownOn(state.menus[0], url), `no pattern matches ${url}`);
+  }
+});
+
+test('MP4 appears on YouTube links only: the audio sites have no video', () => {
+  const { state, context } = loadBackground();
+  for (const url of YOUTUBE_LINKS) assert.ok(menuShownOn(state.menus[1], url), url);
+  for (const url of AUDIO_SITE_LINKS) {
+    assert.equal(context.isAudioSiteUrl(url), true, url);
+    assert.equal(menuShownOn(state.menus[1], url), false, url);
+  }
+});
+
+test('context menu MP4 sends the sidebar\'s MP4 choices and folder, without a check', async () => {
+  const { browser, state } = loadBackground({
+    storage: { lastFolder: 'D:\\Videos', hostFormats: ['mp3', 'mp4'], mp4Options: { quality: '720', codec: 'compatible' } }
+  });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp4', linkUrl: VIDEO_URL });
+  await flush();
+
+  assert.deepStrictEqual(state.ports.map(p => p.posted), [
+    [{ action: 'download', url: VIDEO_URL, format: 'mp4', quality: '720', codec: 'compatible', folder: 'D:\\Videos' }]
+  ]);
+});
+
+test('context menu MP4 without saved choices uses the defaults', async () => {
+  const { browser, state } = loadBackground({ storage: { hostFormats: ['mp3', 'mp4'], mp4Options: { quality: '4320' } } });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp4', linkUrl: VIDEO_URL });
+  await flush();
+
+  assert.deepStrictEqual(state.ports[0].posted, [
+    { action: 'download', url: VIDEO_URL, format: 'mp4', quality: 'best', codec: 'best' }
+  ], 'an unknown stored quality falls back too');
+});
+
+// A host that answers get_version with formats and records the downloads it gets.
+function hostWithFormats(formats) {
+  const downloads = [];
+  const nativeHost = (message, port) => {
+    if (message.action === 'get_version') {
+      port.reply({
+        status: 'success', version: '2.2.0', latest: '2.2.0', outdated: false, self_update: true, formats,
+        yt_dlp: { installed: true, version: '2026.08.19', latest: '2026.08.19', outdated: false },
+        ffmpeg: { installed: true }, final: true
+      });
+    } else downloads.push(message);
+  };
+  return { nativeHost, downloads };
+}
+
+test('context menu MP4 checks a host it knows nothing about first, then downloads', async () => {
+  const { nativeHost, downloads } = hostWithFormats(['mp3', 'mp4']);
+  const { browser, state } = loadBackground({ nativeHost });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp4', linkUrl: VIDEO_URL });
+  for (let i = 0; i < 10; i++) await flush();
+
+  assert.deepStrictEqual(state.ports.map(p => p.posted[0].action), ['get_version', 'download']);
+  assert.equal(downloads[0].format, 'mp4');
+  assert.deepStrictEqual(state.storage.hostFormats, ['mp3', 'mp4']);
+});
+
+test('context menu MP4 on a host without MP4 notifies and downloads nothing', async () => {
+  const { nativeHost, downloads } = hostWithFormats(undefined);
+  const { browser, state } = loadBackground({ nativeHost, storage: { hostFormats: [] } });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp4', linkUrl: VIDEO_URL });
+  for (let i = 0; i < 10; i++) await flush();
+
+  assert.deepStrictEqual(downloads, [], 'an older host would ignore the format and save an MP3');
+  assert.deepStrictEqual(state.notifications.map(n => n.title), ['Download Failed']);
+  assert.match(state.notifications[0].message, /MP4 needs a newer version/);
+});
+
+test('context menu MP3 never waits for a check', async () => {
+  const { browser, state } = loadBackground({ storage: { mp4Options: { quality: '720' } } });
+  browser.contextMenus.onClicked.fire({ menuItemId: 'download-mp3', linkUrl: VIDEO_URL });
+  await flush();
+
+  assert.deepStrictEqual(state.ports.map(p => p.posted), [[{ action: 'download', url: VIDEO_URL }]]);
 });
 
 test('the toolbar button toggles the sidebar', () => {
@@ -68,6 +180,14 @@ test('toolbar tip: not when unpinned or dismissed', withClock(async () => {
   assert.equal(await toolbarTip(unpinned.browser), false);
   assert.equal(await toolbarTip(dismissed.browser), false);
 }));
+
+test('sidebar download in another format forwards its choices, and nothing else', () => {
+  const { browser, state } = loadBackground({ sidebarOpen: true });
+  sidebarAction(browser, 'download', { url: VIDEO_URL, format: 'mp4', quality: '720', codec: 'compatible', extra: 'x' });
+  assert.deepStrictEqual(state.ports[0].posted, [
+    { action: 'download', url: VIDEO_URL, format: 'mp4', quality: '720', codec: 'compatible' }
+  ]);
+});
 
 test('sidebar download: forwards payload, relays progress, then one final and disconnects', async () => {
   const { browser, state } = loadBackground({ sidebarOpen: true });
@@ -144,12 +264,12 @@ test('host exiting without a final response is reported as an error', async () =
   assert.equal(finals(state)[0].status, 'error');
 });
 
-test('long downloads are not cut off at 40s; a real timeout ends the request once', async () => {
+test('long downloads are not cut off early; a real timeout ends the request once', async () => {
   const { browser, state } = loadBackground();
   sidebarAction(browser, 'download', { url: VIDEO_URL });
   const [port] = state.ports;
 
-  mock.timers.tick(26 * 60 * 1000);
+  mock.timers.tick(69 * 60 * 1000);
   await flush();
   assert.equal(finals(state).length, 0, 'still within the host\'s budget for a download, a repair and a retry');
 
@@ -161,6 +281,74 @@ test('long downloads are not cut off at 40s; a real timeout ends the request onc
   assert.equal(finals(state)[0].status, 'error');
   assert.equal(port.disconnected, true);
 });
+
+const DOWNLOAD_TIMEOUT_MS = 70 * 60 * 1000;
+
+test('a longer yt-dlp timeout from the host moves the timeout, without being relayed', withClock(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+
+  mock.timers.tick(60 * 1000);
+  port.reply({ status: 'info', deadline_s: 3600, final: false });
+  mock.timers.tick(3600 * 1000 + DOWNLOAD_TIMEOUT_MS - 1000);
+  await flush();
+  assert.deepStrictEqual(state.sent, [], 'the deadline is not shown, and the request still runs');
+
+  port.reply({ status: 'success', filename: 'long', final: true });
+  await flush();
+  assert.deepStrictEqual(finals(state).map(m => [m.status, m.filename]), [['success', 'long']]);
+}));
+
+test('the moved timeout still ends a host that never answers, exactly once', withClock(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+
+  port.reply({ status: 'info', deadline_s: 3600, final: false });
+  mock.timers.tick(3600 * 1000 + DOWNLOAD_TIMEOUT_MS);
+  await flush();
+
+  assert.equal(finals(state).length, 1);
+  assert.equal(finals(state)[0].message, 'Native host did not respond in time');
+  assert.equal(port.disconnected, true);
+  mock.timers.tick(DOWNLOAD_TIMEOUT_MS);
+  await flush();
+  assert.equal(finals(state).length, 1);
+}));
+
+test('a deadline never shortens the timeout', withClock(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+
+  port.reply({ status: 'info', deadline_s: 3600, final: false });
+  mock.timers.tick(30 * 60 * 1000);
+  // the retry after a repair starts yt-dlp again with a shorter timeout
+  port.reply({ status: 'info', deadline_s: 600, final: false });
+  mock.timers.tick(3600 * 1000 + DOWNLOAD_TIMEOUT_MS - 30 * 60 * 1000 - 1000);
+  await flush();
+  assert.equal(finals(state).length, 0);
+
+  mock.timers.tick(1000);
+  await flush();
+  assert.equal(finals(state).length, 1);
+  assert.equal(finals(state)[0].status, 'error');
+}));
+
+test('a deadline that is not a positive number is ignored and not relayed', withClock(async () => {
+  const { browser, state } = loadBackground();
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+
+  for (const deadline of [-5, 0, 'soon', null, Infinity]) {
+    port.reply({ status: 'info', deadline_s: deadline, final: false });
+  }
+  mock.timers.tick(DOWNLOAD_TIMEOUT_MS);
+  await flush();
+
+  assert.deepStrictEqual(state.sent.map(m => [m.final, m.message]), [[true, 'Native host did not respond in time']]);
+}));
 
 test('sidebar download notifies when the sidebar was closed by the time it finished', async () => {
   const { browser, state } = loadBackground({ sidebarOpen: true });
@@ -311,6 +499,75 @@ test('background check: a sidebar check counts', atNow(async () => {
   await flush();
   assert.equal(versionChecks(state).length, 1, 'only the sidebar\'s');
 }));
+
+test('toolbar tip: not on Firefox before 118 (no getUserSettings)', withClock(async () => {
+  const { browser } = loadBackground();
+  browser.browserAction.getUserSettings = async () => { throw new Error('getUserSettings is not a function'); };
+  mock.timers.tick(60 * 1000);
+  assert.equal(await toolbarTip(browser), false);
+}));
+
+test('a response without "final" is final when it is a success or an error', async () => {
+  const { browser, state } = loadBackground({ sidebarOpen: true });
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  const [port] = state.ports;
+  port.reply({ status: 'warning', message: 'No thumbnail found' });
+  port.reply({ status: 'info', message: 'Updating yt-dlp...' });
+  await flush();
+  assert.equal(finals(state).length, 0, 'warnings and info are progress');
+
+  port.reply({ status: 'success', filename: 'song' });
+  port.reply({ status: 'error', message: 'too late' });
+  await flush();
+  assert.deepStrictEqual(state.sent.map(m => [m.status, m.final]), [
+    ['warning', false], ['info', false], ['success', true]
+  ], 'nothing after the final response');
+  assert.equal(port.disconnected, true);
+
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  state.ports[1].reply({ status: 'error', message: 'Invalid YouTube URL' });
+  await flush();
+  assert.deepStrictEqual(finals(state).at(-1), {
+    type: 'native_response', status: 'error', message: 'Invalid YouTube URL', requestId: 'req-1', final: true
+  });
+  assert.equal(state.ports[1].disconnected, true);
+});
+
+test('a host that can not be started answers once with an error', async () => {
+  const { browser, state } = loadBackground();
+  browser.runtime.connectNative = () => { throw new Error('connectNative failed'); };
+  sidebarAction(browser, 'get_current_folder');
+  mock.timers.tick(60 * 60 * 1000);
+  await flush();
+
+  assert.deepStrictEqual(finals(state).map(m => [m.status, m.message]), [['error', 'Could not connect to native host']]);
+});
+
+test('a request that can not be sent answers once with an error and closes the port', async () => {
+  const { browser, state } = loadBackground();
+  const connect = browser.runtime.connectNative;
+  browser.runtime.connectNative = (name) => {
+    const port = connect(name);
+    port.postMessage = () => { throw new Error('Attempt to postMessage on disconnected port'); };
+    return port;
+  };
+  sidebarAction(browser, 'download', { url: VIDEO_URL });
+  state.ports[0].exit(null); // Firefox then also reports the port as gone
+  mock.timers.tick(60 * 60 * 1000);
+  await flush();
+
+  assert.deepStrictEqual(finals(state).map(m => [m.status, m.message]), [['error', 'Failed to send to native host']]);
+  assert.equal(state.ports[0].disconnected, true);
+});
+
+test('clicks on other context menu entries are ignored', async () => {
+  const { browser, state } = loadBackground();
+  browser.contextMenus.onClicked.fire({ menuItemId: 'some-other-menu', linkUrl: VIDEO_URL });
+  await flush();
+
+  assert.equal(state.ports.length, 0);
+  assert.equal(state.notifications.length, 0);
+});
 
 test('context menu on a non-video link notifies and does not start the host', async () => {
   const { browser, state } = loadBackground();

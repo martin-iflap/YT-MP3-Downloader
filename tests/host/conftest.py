@@ -20,22 +20,28 @@ from pathlib import Path
 
 import pytest
 
-from ytmp3_host import config, core, health, updater
+from ytmp3_host import config, core, files, health, updater, ytdlp
 
 FAKE_YT_DLP = Path(__file__).with_name("fake_yt_dlp.py")
 
 
 @pytest.fixture(autouse=True)
 def default_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Point core.DEFAULT_FOLDER at <tmp_path>/default in every test (autouse).
+    """Point files.DEFAULT_FOLDER at <tmp_path>/default in every test (autouse).
 
     Keeps the code under test away from the real ~/Documents/YT-MP3-Downloads.
     The folder is not created, so tests can check that resolve_folder creates it.
     Returns its path.
     """
     folder = tmp_path / "default"
-    monkeypatch.setattr(core, "DEFAULT_FOLDER", folder)
+    monkeypatch.setattr(files, "DEFAULT_FOLDER", folder)
     return folder
+
+
+@pytest.fixture(autouse=True)
+def no_log_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep hosts started as child processes from writing mp3.log into the repo (autouse)."""
+    monkeypatch.setenv(config.LOG_LEVEL_ENV, "CRITICAL")
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +72,15 @@ def out_dir(tmp_path: Path) -> Path:
     return folder
 
 
+def point_yt_dlp_at(monkeypatch: pytest.MonkeyPatch, exe: Path) -> None:
+    """Make exe the single-file yt-dlp.exe (config.YT_DLP_PATH) and put the onedir builds (yt-dlp\\<tag>\\) and
+    the onedir-failed marker next to it. config.yt_dlp_path() and the updater read all three from config when
+    used; without the folder a dev's host/bin/yt-dlp\\<tag>\\ would be found."""
+    monkeypatch.setattr(config, "YT_DLP_PATH", exe)
+    monkeypatch.setattr(config, "YT_DLP_DIR", exe.with_name("yt-dlp"))
+    monkeypatch.setattr(config, "ONEDIR_FAILED_PATH", exe.with_name("yt-dlp") / "onedir-failed")
+
+
 @dataclass
 class FakeYtDlp:
     """Handle returned by the fake_yt_dlp fixture to choose how the fake behaves.
@@ -77,11 +92,18 @@ class FakeYtDlp:
     monkeypatch: pytest.MonkeyPatch
 
     def set(
-        self, mode: str = "success", title: str | None = None, version: str | None = None, info: dict | None = None
+        self,
+        mode: str = "success",
+        title: str | None = None,
+        version: str | None = None,
+        info: dict | None = None,
+        streams: list[int] | None = None,
     ) -> None:
-        """Set the mode (see fake_yt_dlp.py) and the title, version and other video info the fake
-        prints; None keeps the defaults."""
+        """Set the mode (see fake_yt_dlp.py) and the title, version, other video info and stream
+        sizes the fake prints; None keeps the defaults."""
         self.monkeypatch.setenv("FAKE_YTDLP_MODE", mode)
+        if streams is not None:
+            self.monkeypatch.setenv("FAKE_YTDLP_STREAMS", json.dumps(streams))
         if title is not None:
             self.monkeypatch.setenv("FAKE_YTDLP_TITLE", title)
         if version is not None:
@@ -92,11 +114,12 @@ class FakeYtDlp:
 
 @pytest.fixture
 def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
-    """Make download_audio run fake_yt_dlp.py instead of yt-dlp.exe.
+    """Make download_media run fake_yt_dlp.py instead of yt-dlp.exe.
 
-    - Creates empty yt-dlp.exe and ffmpeg.exe in <tmp_path>/bin and points core at
-      them, so the "binary exists" checks in download_audio pass. They never run.
-    - Wraps core.build_download_command and health.yt_dlp_version_command: the real
+    - Creates empty yt-dlp.exe and ffmpeg.exe in <tmp_path>/bin and points config.yt_dlp_path()
+      (point_yt_dlp_at) and core and ytdlp at them, so the "binary exists" checks in download_media
+      pass. They never run.
+    - Wraps ytdlp.build_download_command and health.yt_dlp_version_command: the real
       command is built, then only its executable is swapped for `python
       fake_yt_dlp.py`. The fake reads the real -o and --print arguments, so a broken
       output template or title marker fails the tests.
@@ -110,18 +133,19 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
     bin_dir.mkdir()
     for name in ("yt-dlp.exe", "ffmpeg.exe"):
         (bin_dir / name).write_bytes(b"")
-    for module in (core, health):
-        monkeypatch.setattr(module, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
+    point_yt_dlp_at(monkeypatch, bin_dir / "yt-dlp.exe")
+    for module in (core, ytdlp, health):
         monkeypatch.setattr(module, "FFMPEG_PATH", bin_dir / "ffmpeg.exe")
-    monkeypatch.setattr(updater, "YT_DLP_PATH", bin_dir / "yt-dlp.exe")
-    for module in (core, health, updater):
+    for module in (core, ytdlp, health, updater):
         monkeypatch.setattr(module, "DENO_PATH", bin_dir / "deno.exe")
 
-    real_build = core.build_download_command
+    real_build = ytdlp.build_download_command
     monkeypatch.setattr(
-        core,
+        ytdlp,
         "build_download_command",
-        lambda url, temp_stem: [sys.executable, str(FAKE_YT_DLP), *real_build(url, temp_stem)[1:]],
+        lambda url, temp_stem, media_format: [
+            sys.executable, str(FAKE_YT_DLP), *real_build(url, temp_stem, media_format)[1:]
+        ],
     )
     real_version = health.yt_dlp_version_command
     monkeypatch.setattr(
@@ -130,7 +154,7 @@ def fake_yt_dlp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FakeYtDlp:
         lambda exe=None: [sys.executable, str(FAKE_YT_DLP), *real_version(exe)[1:]],
     )
     for var in ("FAKE_YTDLP_MODE", "FAKE_YTDLP_TITLE", "FAKE_YTDLP_VERSION", "FAKE_YTDLP_INFO", "FAKE_YTDLP_MP3",
-                "FAKE_YTDLP_THUMB"):
+                "FAKE_YTDLP_MP4", "FAKE_YTDLP_THUMB", "FAKE_YTDLP_CHILD_PID_FILE"):
         monkeypatch.delenv(var, raising=False)
     return FakeYtDlp(monkeypatch)
 
@@ -151,7 +175,7 @@ def fake_embed(monkeypatch: pytest.MonkeyPatch) -> list[EmbedCall]:
     """Replace core.embed_thumbnail (the ffmpeg pass) with a fake.
 
     The fake records its arguments as an EmbedCall and copies the temp mp3's bytes
-    to the output path, so download_audio's "output was written" check passes and
+    to the output path, so download_media's "output was written" check passes and
     the test can compare the final file with what the fake yt-dlp wrote.
     Returns the list of calls; `[call] = fake_embed` also asserts there was exactly one.
     """
@@ -195,23 +219,32 @@ def ffmpeg() -> Path:
 
 @dataclass(frozen=True)
 class Media:
-    """Object containing paths to the test MP3 and cover image, created in a temp folder."""
+    """Paths to the test media and cover image, created in a temp folder."""
     mp3: Path  # 1 s sine, LAME V0
+    mp4: Path  # 1 s 320x240 test picture (MPEG-4) with a 1 s sine (AAC)
     cover: Path  # 320x180 PNG, not square on purpose
 
 
 @pytest.fixture(scope="session")
 def media(ffmpeg: Path, tmp_path_factory: pytest.TempPathFactory) -> Media:
-    """Create a 1 s sine MP3 and a 320x180 PNG cover with the real ffmpeg, and return their paths.
+    """Create a 1 s MP3, a 1 s MP4 and a 320x180 PNG cover with the real ffmpeg, and return their paths.
 
-    The cover is not square on purpose, to test the center-cropping in embed_thumbnail.
+    The cover is not square on purpose: embed_thumbnail center-crops it for an MP3 and
+    keeps its shape for an MP4. The MP4 uses ffmpeg's built-in encoders (mpeg4, aac),
+    which every ffmpeg build has, unlike libx264.
     Session scope: generated once per run in a shared temp folder (tmp_path_factory)
     and reused by every test, so tests must only read these files, never change them.
     pytest deletes the folder at the end of a fully passing run.
     """
     folder = tmp_path_factory.mktemp("media")
-    mp3, cover = folder / "sample.mp3", folder / "cover.png"
-    base = [str(ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i"]
-    subprocess.run([*base, "sine=frequency=440:duration=1", "-c:a", "libmp3lame", "-q:a", "0", str(mp3)], check=True)
-    subprocess.run([*base, "color=c=red:s=320x180", "-frames:v", "1", str(cover)], check=True)
-    return Media(mp3, cover)
+    mp3, mp4, cover = folder / "sample.mp3", folder / "sample.mp4", folder / "cover.png"
+    lavfi = [str(ffmpeg), "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i"]
+    sine = "sine=frequency=440:duration=1"
+    subprocess.run([*lavfi, sine, "-c:a", "libmp3lame", "-q:a", "0", str(mp3)], check=True)
+    subprocess.run(
+        [*lavfi, "testsrc=size=320x240:rate=15:duration=1", "-f", "lavfi", "-i", sine,
+         "-c:v", "mpeg4", "-c:a", "aac", str(mp4)],
+        check=True,
+    )
+    subprocess.run([*lavfi, "color=c=red:s=320x180", "-frames:v", "1", str(cover)], check=True)
+    return Media(mp3, mp4, cover)

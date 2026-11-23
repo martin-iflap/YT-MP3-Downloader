@@ -1,4 +1,5 @@
-/* global isKnownSiteUrl, isWebUrl */
+/* global isKnownSiteUrl, isAudioSiteUrl, isWebUrl, filenameLimit, filenameTooLong, filenameTooLongMessage,
+   FORMATS, DEFAULT_FORMAT, knownFormat, knownOption, formatRequest, hostSupports, progressText */
 
 const downloadBtn = document.getElementById('DownloadBtn');
 const openInAppBtn = document.getElementById('openInAppBtn');
@@ -8,8 +9,10 @@ const hostNotice = document.getElementById('hostNotice');
 const loader = document.getElementById('loader');
 const urlInput = document.getElementById('urlInput');
 const urlLabel = document.querySelector('label[for="urlInput"]');
+const urlWarning = document.getElementById('urlWarning');
 const folderInput = document.getElementById('folderInput');
 const filenameInput = document.getElementById('filenameInput');
+const filenameHelp = document.getElementById('filenameHelp');
 
 // ----- Native requests (relayed through background.js) -----
 
@@ -52,7 +55,16 @@ async function syncUrlFromActiveTab() {
   urlInput.value = url;
   autofilledUrl = url;
   urlLabel.textContent = url ? 'Current URL' : 'Video URL';
+  updateUrlWarning();
 }
+
+// An MP4 of an audio site's link will fail. Only a warning: the download stays possible,
+// since yt-dlp, not the URL, knows whether a link has video.
+function updateUrlWarning() {
+  urlWarning.hidden = !(currentFormat === 'mp4' && isAudioSiteUrl(urlInput.value.trim()));
+}
+
+urlInput.addEventListener('input', updateUrlWarning);
 
 browser.tabs.onActivated.addListener(() => syncUrlFromActiveTab().catch(console.error));
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -73,8 +85,18 @@ function saveFolder(folder) {
   op.catch(e => console.error('Could not save folder:', e));
 }
 
+// The filename field takes no more than fits in the folder (naming.js), so a name that is
+// too long can't be typed. One typed before the folder changed is refused at download.
+function updateFilenameLimit() {
+  filenameInput.maxLength = filenameLimit(folderInput.value);
+}
+
+updateFilenameLimit();
+folderInput.addEventListener('input', updateFilenameLimit);
+
 function setFolder(folder) {
   folderInput.value = folder;
+  updateFilenameLimit();
   saveFolder(folder);
 }
 
@@ -82,6 +104,7 @@ async function loadFolder() {
   const { lastFolder } = await browser.storage.local.get('lastFolder');
   if (lastFolder) {
     folderInput.value = lastFolder;
+    updateFilenameLimit();
     return;
   }
   sendNativeAction({ action: 'get_current_folder' }, (resp) => {
@@ -109,7 +132,69 @@ selectFolderBtn.addEventListener('click', () => {
   });
 });
 
+// ----- Format (formats.js) -----
+
+// One form for every format: the switch shows the fields marked with its data-format and
+// hides the others. The format and each format's choices are remembered
+// (storage.local `format`, `<format>Options`).
+const formatInputs = document.querySelectorAll('input[name="format"]');
+const optionSelects = document.querySelectorAll('select[data-option]');
+let currentFormat = DEFAULT_FORMAT;
+
+const formatOf = element => element.closest('[data-format]').dataset.format;
+
+for (const select of optionSelects) {
+  const choices = FORMATS[formatOf(select)].options[select.dataset.option];
+  select.append(...choices.map(([value, label]) => new Option(label, value)));
+}
+
+function showFormat(format) {
+  currentFormat = format;
+  for (const input of formatInputs) input.checked = input.value === format;
+  for (const element of document.querySelectorAll('[data-format]')) element.hidden = element.dataset.format !== format;
+  const { label } = FORMATS[format];
+  downloadBtn.textContent = `Download ${label}`;
+  filenameHelp.textContent = `Custom filename for the downloaded ${label} file`;
+  updateUrlWarning();
+}
+
+// The choices made in format's selects, as { option: value }.
+function selectedOptions(format) {
+  const choices = {};
+  for (const select of optionSelects) if (formatOf(select) === format) choices[select.dataset.option] = select.value;
+  return choices;
+}
+
+async function loadFormat() {
+  const stored = await browser.storage.local.get(['format', ...Object.keys(FORMATS).map(format => `${format}Options`)]);
+  for (const select of optionSelects) {
+    const format = formatOf(select);
+    select.value = knownOption(format, select.dataset.option, stored[`${format}Options`]?.[select.dataset.option]);
+  }
+  showFormat(knownFormat(stored.format));
+}
+
+loadFormat().catch(e => console.error('Could not load the format:', e));
+
+for (const input of formatInputs) {
+  input.addEventListener('change', () => {
+    showFormat(input.value);
+    browser.storage.local.set({ format: input.value }).catch(e => console.error('Could not save the format:', e));
+  });
+}
+
+for (const select of optionSelects) {
+  select.addEventListener('change', () => {
+    const format = formatOf(select);
+    browser.storage.local.set({ [`${format}Options`]: selectedOptions(format) })
+      .catch(e => console.error('Could not save the format options:', e));
+  });
+}
+
 // ----- App status -----
+
+// The formats the host can download (its get_version answer), null until the check is done.
+let hostFormats = null;
 
 // Checked on every sidebar open. background.js repairs what it can (updates the app and
 // yt-dlp, reporting each step as an intermediate response) and then turns the result into
@@ -117,6 +202,7 @@ selectFolderBtn.addEventListener('click', () => {
 // missing or broken tools).
 function checkHost() {
   sendNativeAction({ action: 'get_version' }, (resp) => {
+    if (resp.final) hostFormats = resp.formats ?? [];
     if (resp.final && resp.status === 'success') {
       hostNotice.className = '';
       hostNotice.textContent = '';
@@ -162,23 +248,41 @@ downloadBtn.addEventListener('click', () => {
     showResult('Please enter a valid URL (starting with https://)', 'error');
     return;
   }
+  const folder = folderInput.value.trim();
+  const filename = filenameInput.value.trim();
+  if (filenameTooLong(filename, folder)) {
+    showResult(filenameTooLongMessage(folder), 'error');
+    filenameInput.focus();
+    return;
+  }
+  // A host that doesn't know the format would download an MP3 instead.
+  const format = currentFormat;
+  if (!hostSupports(hostFormats, format)) {
+    showResult(hostFormats === null
+      ? 'Still checking the app, try again in a moment'
+      : `Downloading ${FORMATS[format].label} needs a newer version of the MP3 & MP4 Downloader app`, 'error');
+    return;
+  }
 
   setBusy(true);
-  clearResult();
+  showResult('Starting the download...', 'info');
   sendNativeAction({
     action: 'download',
     url,
-    folder: folderInput.value.trim() || undefined,
-    filename: filenameInput.value.trim() || undefined
+    folder: folder || undefined,
+    filename: filename || undefined,
+    ...formatRequest(format, selectedOptions(format))
   }, (resp) => {
     if (!resp.final) {
-      if (resp.message) showResult(resp.message, resp.status === 'warning' ? 'warning' : 'info');
+      // progress comes from hosts since 2.2.0, at most every 0.3 s; warnings return in the final message
+      if (resp.progress) showResult(progressText(resp.progress, format), 'info');
+      else if (resp.message) showResult(resp.message, resp.status === 'warning' ? 'warning' : 'info');
       return;
     }
     setBusy(false);
     if (resp.status === 'success') {
       filenameInput.value = '';
-      showResult(resp.message || `Downloaded: ${resp.filename || 'the MP3'}`, 'success', undefined, resp.path);
+      showResult(resp.message || `Downloaded: ${resp.filename || `the ${FORMATS[format].label}`}`, 'success', undefined, resp.path);
     } else {
       showResult(resp.message || 'Download failed', 'error', resp.helpUrl);
     }
@@ -186,13 +290,15 @@ downloadBtn.addEventListener('click', () => {
 });
 
 openInAppBtn.addEventListener('click', () => {
-  // Everything is optional here; the user can fill it in inside the app.
+  // Everything is optional here; the user can fill it in inside the app. The format only
+  // preselects the app's switch, and a host before 2.2.0 ignores it, so it needs no hostSupports.
   showResult('Launching app...', 'info');
   sendNativeAction({
     action: 'download_gui',
     url: urlInput.value.trim() || undefined,
     folder: folderInput.value.trim() || undefined,
-    filename: filenameInput.value.trim() || undefined
+    filename: filenameInput.value.trim() || undefined,
+    ...formatRequest(currentFormat, selectedOptions(currentFormat))
   }, (resp) => {
     if (resp.status === 'success') showResult(resp.message || 'App launched', 'success');
     else if (resp.status === 'error') showResult(resp.message || 'Failed to launch app', 'error', resp.helpUrl);
@@ -239,7 +345,7 @@ function fileActions(path) {
     button.className = 'secondary-btn secondary-narrow';
     button.textContent = label;
     button.addEventListener('click', () => sendNativeAction({ action, path }, (resp) => {
-      if (resp.final && resp.status === 'error') showResult(resp.message || 'Could not open the MP3', 'error', resp.helpUrl);
+      if (resp.final && resp.status === 'error') showResult(resp.message || 'Could not open the file', 'error', resp.helpUrl);
     }));
     row.append(button);
   }

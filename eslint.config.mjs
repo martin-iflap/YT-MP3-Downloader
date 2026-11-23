@@ -5,7 +5,7 @@ import globals from 'globals';
 export default [
   {
     // legacy/ is reference code, the rest is not ours or not JS we ship
-    ignores: ['legacy/**', '.venv/**', 'dist/**', 'build/**', 'packaging/installer/output/**']
+    ignores: ['legacy/**', '.venv/**', 'dist/**', 'build/**', 'packaging/installer/output/**', 'host/bin/**']
   },
   js.configs.recommended,
   {

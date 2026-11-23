@@ -7,9 +7,12 @@
 ; there is exactly one source of truth for each identifier.
 
 #define MyAppName         "YouTube MP3 Downloader"
+; The name users see since 2.2.0 (Windows "Apps" list, Firefox's
+; native host manifest). MyAppName stays the 1.x name: it is the AppId.
+#define MyDisplayName     "MP3 & MP4 Downloader"
 ; Must match __version__ in host\src\ytmp3_host\__init__.py
 ; (tests\host\test_versions.py checks it).
-#define MyAppVersion      "2.1.0"
+#define MyAppVersion      "2.2.0"
 #define MyAppPublisher    "Martin"
 
 ; Must match browser_specific_settings.gecko.id in the
@@ -25,19 +28,17 @@
 #define NativeExeName     "mp3.exe"
 #define NativeManifestName "app_manifest.json"
 
-; yt-dlp.exe is checked against the SHA-256 list the same release
-; publishes, like the host's updater does (updater.YT_DLP_ASSET,
-; updater.YT_DLP_SUMS; tests\host\test_versions.py checks the names).
-#define YtDlpReleaseURL   "https://github.com/yt-dlp/yt-dlp/releases/latest/download/"
-#define YtDlpTempName     "yt-dlp.exe"
-#define YtDlpSumsName     "SHA2-256SUMS"
-
 ; Every version installs into its own folder; the Firefox manifest
 ; is switched to it only after all its files are in place, so an
 ; install that is killed or loses power leaves the old version
 ; working. Must match config.VERSIONS_DIR_NAME in the host.
-; yt-dlp.exe stays in {app}: the host keeps it current (updater.py).
+; yt-dlp is shared by all versions and lives in {app}\yt-dlp\: the
+; new version installs it (InstallYtDlp) and keeps it current.
 #define VersionDir        "versions\" + MyAppVersion
+
+; Must match config.YT_DLP_DIR in the host
+; (tests\host\test_versions.py checks it).
+#define YtDlpDir          "yt-dlp"
 
 ; Repo root, relative to this script (packaging\installer\).
 ; mp3.exe comes from PyInstaller's dist\mp3\, ffmpeg.exe from host\bin\.
@@ -50,6 +51,8 @@
 ; upgrading the installed one.
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+; Only the name in Windows "Apps"; the uninstall key still comes from AppName
+UninstallDisplayName={#MyDisplayName}
 AppPublisher={#MyAppPublisher}
 WizardStyle=modern dynamic
 
@@ -96,7 +99,7 @@ SetupIconFile={#RepoRoot}\packaging\assets\mp3.ico
 ; Excludes: what running the build straight from dist\mp3\ leaves there (the binaries copied
 ; next to it, the runtime files of config.INSTALL_DIR); ffmpeg.exe and mp3.ico come below.
 Source: "{#RepoRoot}\dist\mp3\*"; DestDir: "{app}\{#VersionDir}"; \
-    Excludes: "ffmpeg.exe,mp3.ico,yt-dlp*.exe,deno*,update.lock,mp3.log*,_ytmp3_*"; \
+    Excludes: "ffmpeg.exe,mp3.ico,\{#YtDlpDir},yt-dlp*.exe,deno*,update.lock,mp3.log*,_ytmp3_*"; \
     Flags: recursesubdirs createallsubdirs ignoreversion
 
 ; Your application icon
@@ -118,12 +121,15 @@ Root: HKCU; \
     Flags: uninsdeletekey
 
 [UninstallDelete]
-; yt-dlp.exe and the manifest are written at runtime via
-; FileCopy / SaveStringToFile, not listed in [Files], so the
-; uninstaller has no record of them unless declared here. The
-; host's updater adds yt-dlp.download.exe, yt-dlp.old*.exe,
-; deno.exe (with deno.download.*) and update.lock; versions\ may
-; hold folders an update kept because they were still in use.
+; The manifest is written at runtime via SaveStringToFile, and the
+; host installs yt-dlp (the yt-dlp\ folder; yt-dlp.exe with its
+; .download/.old* copies only as a fallback, or from older hosts,
+; whose installer also left yt-dlp.exe.tmp), deno.exe (with
+; deno.download.*), update.lock and mp3.log. None of them is in
+; [Files], so the uninstaller has no record of them unless they
+; are declared here. versions\ may hold folders an update kept
+; because they were still in use.
+Type: filesandordirs; Name: "{app}\{#YtDlpDir}"
 Type: files; Name: "{app}\yt-dlp.exe"
 Type: files; Name: "{app}\yt-dlp.exe.tmp"
 Type: files; Name: "{app}\yt-dlp.download.exe"
@@ -150,12 +156,10 @@ const
   MOVEFILE_WRITE_THROUGH = $8;
 
 var
-  // False in a silent update that keeps the installed yt-dlp.exe
-  // (see PrepareToInstall). Not a { } comment: those end at the
-  // first closing brace, so they can't mention Inno constants.
-  YtDlpDownloaded: Boolean;
   // A reinstall of the installed version: its folder must stay
   // even if the self-check fails, Firefox already runs it.
+  // Not a { } comment: those end at the first closing brace, so
+  // they can't mention Inno constants.
   VersionDirExisted: Boolean;
   SelfCheckFailed: Boolean;
 
@@ -197,94 +201,15 @@ begin
 end;
 
 // ============================================================
-// YtDlpSha256
-// ============================================================
-// Downloads the release's checksum list into {tmp} and returns
-// the SHA-256 of yt-dlp.exe from it ("<hex>  yt-dlp.exe"), or ''
-// if it lists none. Raises if the download fails.
-
-function YtDlpSha256(): String;
-var
-  Lines: TArrayOfString;
-  Line: String;
-  I: Integer;
-begin
-  Result := '';
-  DownloadTemporaryFile('{#YtDlpReleaseURL}{#YtDlpSumsName}', '{#YtDlpSumsName}', '', nil);
-  if not LoadStringsFromFile(ExpandConstant('{tmp}\{#YtDlpSumsName}'), Lines) then
-    exit;
-  for I := 0 to GetArrayLength(Lines) - 1 do
-  begin
-    Line := Trim(Lines[I]);
-    if (Length(Line) > 64) and (Trim(Copy(Line, 65, Length(Line))) = '{#YtDlpTempName}') then
-    begin
-      Result := Copy(Line, 1, 64);
-      exit;
-    end;
-  end;
-end;
-
-// ============================================================
-// DownloadYtDlp
-// ============================================================
-// Downloads yt-dlp.exe into {tmp}. Returns True on success.
-// DownloadTemporaryFile checks the SHA-256 it is given and
-// raises (and deletes the file) on a mismatch, so a damaged or
-// truncated download is never installed. Both files come from
-// "latest", so a yt-dlp release in between the two downloads
-// fails the check too; the host downloads yt-dlp itself then.
-
-function DownloadYtDlp(): Boolean;
-var
-  Sha256: String;
-begin
-  Result := False;
-
-  try
-    Log('Downloading latest yt-dlp from GitHub...');
-    Sha256 := YtDlpSha256();
-    if Sha256 = '' then
-    begin
-      Log('The yt-dlp release lists no checksum for {#YtDlpTempName}.');
-      exit;
-    end;
-    DownloadTemporaryFile('{#YtDlpReleaseURL}{#YtDlpTempName}', '{#YtDlpTempName}', Sha256, nil);
-    Log('yt-dlp downloaded and checked successfully.');
-    Result := True;
-  except
-    Log('Failed to download yt-dlp: ' + GetExceptionMessage);
-  end;
-end;
-
-// ============================================================
 // PrepareToInstall
 // ============================================================
-// Runs before the actual installation. Downloads yt-dlp here,
-// except in a silent install that finds one in {app}: that is
-// the host updating itself, and the host keeps yt-dlp current
-// and repairs it. A manual (re)install always downloads it, so
-// reinstalling also fixes a broken yt-dlp.exe. A failed download
-// does not stop the installation: the host downloads a missing
-// yt-dlp.exe itself the next time the sidebar opens.
+// Runs before the actual installation: remembers whether this
+// version is already installed (see VersionDirExisted).
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
-  YtDlpDownloaded := False;
   VersionDirExisted := DirExists(ExpandConstant('{app}\{#VersionDir}'));
-
-  if WizardSilent and FileExists(ExpandConstant('{app}\yt-dlp.exe')) then
-  begin
-    Log('Silent update: keeping the installed yt-dlp.exe.');
-    exit;
-  end;
-
-  YtDlpDownloaded := DownloadYtDlp();
-  if not YtDlpDownloaded and not FileExists(ExpandConstant('{app}\yt-dlp.exe')) then
-    SuppressibleMsgBox(
-      'yt-dlp could not be downloaded right now. The app will download it ' +
-      'by itself the next time you open its sidebar in Firefox.',
-      mbInformation, MB_OK, IDOK);
 end;
 
 // ============================================================
@@ -311,7 +236,7 @@ begin
   JSON :=
     '{' + #13#10 +
     '  "name": "' + JsonEscape('{#NativeHostName}') + '",' + #13#10 +
-    '  "description": "YouTube MP3 Converter and Downloader",' + #13#10 +
+    '  "description": "' + JsonEscape('{#MyDisplayName}') + '",' + #13#10 +
     '  "path": "' + JsonEscape(ExePath) + '",' + #13#10 +
     '  "type": "stdio",' + #13#10 +
     '  "allowed_extensions": [' + #13#10 +
@@ -410,6 +335,37 @@ begin
 end;
 
 // ============================================================
+// InstallYtDlp
+// ============================================================
+// Runs the new version's mp3.exe --install-yt-dlp
+// (MP3.install_yt_dlp_for_setup): it installs the latest yt-dlp
+// into {app}\yt-dlp\, checked like every host update, or keeps
+// a working, current one (a few seconds; a download takes
+// longer). A reinstall repairs a broken yt-dlp this way too.
+// It never replaces files the running host uses, so it is safe
+// before the switch. Exit code 1 (e.g. offline) does not stop
+// the installation: the host repairs yt-dlp on its next check.
+
+procedure InstallYtDlp();
+var
+  ResultCode: Integer;
+begin
+  WizardForm.StatusLabel.Caption := 'Installing yt-dlp...';
+  if Exec(ExpandConstant('{app}\{#VersionDir}\{#NativeExeName}'), '--install-yt-dlp',
+          ExpandConstant('{app}\{#VersionDir}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) and
+     (ResultCode = 0) then
+    Log('yt-dlp is installed.')
+  else
+  begin
+    Log('Could not install yt-dlp (exit code ' + IntToStr(ResultCode) + '), see mp3.log.');
+    SuppressibleMsgBox(
+      'yt-dlp could not be installed right now. The app will install it ' +
+      'by itself the next time you open its sidebar in Firefox.',
+      mbInformation, MB_OK, IDOK);
+  end;
+end;
+
+// ============================================================
 // CurStepChanged
 // ============================================================
 // After the version's files are installed, in this order:
@@ -418,19 +374,13 @@ end;
 //    a reinstall of the version Firefox already runs) and the
 //    installed version stays, so a broken release never
 //    replaces a working host;
-// 1. a downloaded yt-dlp.exe goes into {app} (copied next to
-//    it first, then moved in one step). If that fails (e.g. a
-//    running download keeps the installed one locked), the
-//    installation goes on: the host updates or repairs yt-dlp
-//    later;
+// 1. the new version installs yt-dlp (InstallYtDlp). If that
+//    fails, the installation goes on;
 // 2. the manifest is switched to the new version;
 // 3. old versions are removed.
 // A kill before step 2 leaves Firefox on the old version.
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var
-  YtDlpSource: String;
-  YtDlpDestination: String;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -446,19 +396,7 @@ begin
       exit;
     end;
 
-    if YtDlpDownloaded then
-    begin
-      YtDlpSource := ExpandConstant('{tmp}\{#YtDlpTempName}');
-      YtDlpDestination := ExpandConstant('{app}\yt-dlp.exe');
-
-      if not CopyFile(YtDlpSource, YtDlpDestination + '.tmp', False) or
-         not ReplaceFile(YtDlpDestination + '.tmp', YtDlpDestination) then
-      begin
-        DeleteFile(YtDlpDestination + '.tmp');
-        Log('Could not install the downloaded yt-dlp.exe, the host will repair it.');
-      end;
-    end;
-
+    InstallYtDlp();
     CreateNativeMessagingManifest();
     RemoveOldVersions();
   end;

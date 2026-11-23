@@ -1,5 +1,6 @@
-"""core.download_audio with the fake yt-dlp: naming, warnings, errors, timeout and cleanup."""
+"""core.download_media with the fake yt-dlp: naming, warnings, errors, timeout and cleanup."""
 
+import functools
 import os
 import subprocess
 import time
@@ -8,14 +9,22 @@ from pathlib import Path
 import pytest
 
 from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import core
-from ytmp3_host.core import download_audio
+from ytmp3_host import config, core, files, ytdlp
+from ytmp3_host.media_format import MediaFormat, Mp3Format, Mp4Format
+from ytmp3_host.ytdlp import Progress
 
 URL = "https://www.youtube.com/watch?v=abc123"
 
+# these tests are about the MP3 download; an MP4 test passes its own media_format
+download_audio = functools.partial(core.download_media, media_format=Mp3Format())
+
+
+def downloading(*fractions: float) -> list[Progress]:
+    return [Progress("downloading", fraction) for fraction in fractions]
+
 
 def leftovers(folder: Path) -> list[str]:
-    """Temp files of any download in folder (there must be none after download_audio)."""
+    """Temp files of any download in folder (there must be none after download_media)."""
     return sorted(p.name for p in folder.glob("_ytmp3_*"))
 
 
@@ -59,13 +68,19 @@ def test_title_without_artist_takes_the_channel(fake_yt_dlp: FakeYtDlp, fake_emb
     assert fake_embed[0].tags == {}
 
 
+def test_tags_keep_what_a_filename_can_not_hold(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    fake_yt_dlp.set(title="AC/DC - Thunder: Live? (Official Video)")
+    assert download_audio(URL, out_dir).name == "ACDC - Thunder Live.mp3"
+    assert (fake_embed[0].artist, fake_embed[0].title) == ("AC/DC", "Thunder: Live?")
+
+
 def test_existing_artist_title_file_stops_before_downloading(
     fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
     # the early check uses the same name as the final file, artist included
     fake_yt_dlp.set(title="Flickermood", info={"artists": ["Forss"], "uploader": "Forss"})
     (out_dir / "Forss - Flickermood.mp3").write_bytes(b"user's file")
-    progress: list[float] = []
+    progress: list[Progress] = []
     with pytest.raises(FileExistsError):
         download_audio("https://soundcloud.com/forss/flickermood", out_dir, on_progress=progress.append)
     assert progress == [] and fake_embed == []
@@ -104,10 +119,68 @@ def test_missing_thumbnail_warns_and_still_saves(
     assert len(warnings) == 1 and "thumbnail" in warnings[0]
 
 
-def test_reports_progress_as_fractions(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
-    progress: list[float] = []
+def test_reports_the_download_then_processing(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    progress: list[Progress] = []
     download_audio(URL, out_dir, on_progress=progress.append)
-    assert progress == [0.0, 0.425, 1.0]
+    assert progress == [*downloading(0.0, 0.425, 1.0), Progress("processing")]
+
+
+def test_mp4_progress_counts_video_and_audio_as_one_download(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # yt-dlp reports each stream from 0 to its own size; filesize_approx is both together
+    fake_yt_dlp.set(streams=[3_000_000, 1_000_000], info={"filesize_approx": 4_000_000})
+    progress: list[Progress] = []
+    core.download_media(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+    # the audio's first event (0 of it, 0.75 in all) repeats the last one and is left out
+    assert progress == [*downloading(0.0, 0.319, 0.75, 0.856, 1.0), Progress("processing")]
+
+
+def test_mp4_progress_without_a_size_leaves_room_for_the_audio(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # without filesize_approx the audio is unknown until it starts: the video counts as 90 %, and
+    # the audio's first events (75 % and 85.6 % of both) would go back, so they are left out
+    fake_yt_dlp.set(streams=[3_000_000, 1_000_000])
+    progress: list[Progress] = []
+    core.download_media(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+    assert progress == [*downloading(0.0, 0.383, 0.9, 1.0), Progress("processing")]
+
+
+@pytest.mark.parametrize(
+    ("media_format", "streams", "fractions"),
+    [
+        (Mp3Format(), [3_000_000], (0.0, 0.425, 1.0)),  # the stream's own size, not 3.3 MB
+        (Mp4Format(), [3_000_000, 1_000_000], (0.0, 0.29, 0.682, 0.75, 0.856, 1.0)),
+    ],
+)
+def test_progress_ends_at_100_when_the_size_was_overestimated(
+    fake_yt_dlp: FakeYtDlp,
+    fake_embed: list[EmbedCall],
+    out_dir: Path,
+    media_format: MediaFormat,
+    streams: list[int],
+    fractions: tuple[float, ...],
+) -> None:
+    # filesize_approx 10 % above the real size (126 MB estimated for a 120 MB file was measured)
+    fake_yt_dlp.set(streams=streams, info={"filesize_approx": sum(streams) * 1.1})
+    progress: list[Progress] = []
+    core.download_media(URL, out_dir, media_format=media_format, on_progress=progress.append)
+    assert progress == [*downloading(*fractions), Progress("processing")]
+
+
+def test_an_mp4_of_a_link_without_video_stops_before_downloading(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # what the real yt-dlp picks for a SoundCloud track in MP4 mode: the audio alone
+    fake_yt_dlp.set(info={"format_id": "hls_aac_160k", "vcodec": "none"})
+    progress: list[Progress] = []
+    with pytest.raises(core.NoVideoError):
+        core.download_media(URL, out_dir, media_format=Mp4Format(), on_progress=progress.append)
+    assert progress == []  # stopped at the video info, before the first download event
+    assert fake_embed == []
+    assert leftovers(out_dir) == []
+    assert core.describe_error(core.NoVideoError()) == "This link has no video, download it as MP3 instead"
 
 
 def test_existing_requested_file_fails_before_downloading(
@@ -131,7 +204,7 @@ def test_existing_title_file_stops_before_downloading(
     fake_yt_dlp.set(title="Artist - Song (Official Video)")
     existing = out_dir / "Artist - Song.mp3"
     existing.write_bytes(b"user's file")
-    progress: list[float] = []
+    progress: list[Progress] = []
 
     with pytest.raises(FileExistsError) as info:
         download_audio(URL, out_dir, on_progress=progress.append)
@@ -149,7 +222,7 @@ def test_removes_stale_temp_files_but_keeps_recent_ones(
     stale, recent = out_dir / "_ytmp3_old.webm.part", out_dir / "_ytmp3_new.webm.part"
     stale.write_bytes(b"killed host")
     recent.write_bytes(b"running download")
-    old = time.time() - core.STALE_TEMP_AGE_S - 60
+    old = time.time() - files.STALE_TEMP_AGE_S - 60
     os.utime(stale, (old, old))
 
     download_audio(URL, out_dir, "Song")
@@ -179,6 +252,53 @@ def test_yt_dlp_without_mp3_raises(fake_yt_dlp: FakeYtDlp, fake_embed: list[Embe
     assert list(out_dir.glob("*.mp3")) == []
 
 
+def test_mp4_download_is_named_and_embedded_as_mp4(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    fake_yt_dlp.set(title="Jay-Z - Empire State of Mind (Official Music Video)")
+
+    result = core.download_media(URL, out_dir, media_format=Mp4Format(quality="720"))
+
+    assert result == out_dir / "Jay-Z - Empire State of Mind.mp4"
+    assert result.read_bytes() == b"fake mp4"  # the fake only writes .mp4 when the command merges to MP4
+    [call] = fake_embed
+    assert call.temp_mp3.suffix == ".mp4" and call.temp_mp3.name.startswith("_ytmp3_")
+    assert call.output == result
+    assert leftovers(out_dir) == []
+
+
+def test_an_existing_mp4_stops_an_mp4_download(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    existing = out_dir / "Taken.mp4"
+    existing.write_bytes(b"user's file")
+
+    with pytest.raises(FileExistsError) as info:
+        core.download_media(URL, out_dir, "Taken", media_format=Mp4Format())
+
+    assert info.value.filename == str(existing)
+    assert existing.read_bytes() == b"user's file"
+    assert fake_embed == []
+
+
+def test_an_mp3_with_the_same_name_does_not_stop_an_mp4_download(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    fake_yt_dlp.set(title="Artist - Song")
+    (out_dir / "Artist - Song.mp3").write_bytes(b"user's mp3")
+
+    result = core.download_media(URL, out_dir, media_format=Mp4Format())
+
+    assert result == out_dir / "Artist - Song.mp4"
+    assert (out_dir / "Artist - Song.mp3").read_bytes() == b"user's mp3"
+
+
+def test_yt_dlp_without_mp4_raises(fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path) -> None:
+    fake_yt_dlp.set("no_mp3")  # writes no media file in either format
+    with pytest.raises(FileNotFoundError, match="did not create the MP4"):
+        core.download_media(URL, out_dir, media_format=Mp4Format())
+    assert leftovers(out_dir) == []
+    assert list(out_dir.iterdir()) == []
+
+
 def test_ffmpeg_failure_cleans_up(fake_yt_dlp: FakeYtDlp, out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _failing_embed(*_args: object) -> None:
         raise subprocess.CalledProcessError(1, ["ffmpeg.exe"], None, "boom")
@@ -198,31 +318,97 @@ def test_ffmpeg_without_output_is_not_reported_as_success(
     assert leftovers(out_dir) == []
 
 
-@pytest.mark.parametrize("missing", ["FFMPEG_PATH", "YT_DLP_PATH"])
+@pytest.mark.parametrize(("module", "missing"), [(core, "FFMPEG_PATH"), (config, "YT_DLP_PATH")])
 def test_missing_binary_raises_before_downloading(
-    fake_yt_dlp: FakeYtDlp, out_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, missing: str
+    fake_yt_dlp: FakeYtDlp,
+    out_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    module: object,
+    missing: str,
 ) -> None:
-    monkeypatch.setattr(core, missing, tmp_path / "gone.exe")
+    monkeypatch.setattr(module, missing, tmp_path / "gone.exe")
     started: list[object] = []
     with pytest.raises(FileNotFoundError, match="please reinstall"):
         download_audio(URL, out_dir, on_start=lambda p, s: started.append(p))
     assert started == []
 
 
+def process_running(pid: int) -> bool:
+    tasks = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True, check=True)
+    return str(pid) in tasks.stdout
+
+
 def test_timeout_kills_the_whole_process_tree(
-    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # the fake leaves a grandchild holding stdout open for 30 s: if only the direct
     # child were killed, reading stdout would block until the grandchild exits
     fake_yt_dlp.set("hang")
+    pid_file = tmp_path / "child.pid"
+    monkeypatch.setenv("FAKE_YTDLP_CHILD_PID_FILE", str(pid_file))
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_S", 3)
     start = time.monotonic()
 
     with pytest.raises(subprocess.TimeoutExpired) as info:
-        download_audio(URL, out_dir, timeout=1)
+        download_audio(URL, out_dir)
 
     assert time.monotonic() - start < 15
-    assert info.value.timeout == 1
+    assert info.value.timeout == 3
     assert leftovers(out_dir) == []
+    deadline = time.monotonic() + 5
+    while process_running(child := int(pid_file.read_text())) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not process_running(child), "the process behind yt-dlp was left running"
+
+
+def test_a_known_size_extends_the_timeout(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the download takes longer than the fallback timeout, but its size asks for more
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_S", 2)
+    fake_yt_dlp.set(info={"filesize_approx": 50_000_000})
+    monkeypatch.setenv("FAKE_YTDLP_DELAY_S", "3")
+    timeouts: list[float] = []
+
+    assert download_audio(URL, out_dir, on_timeout=timeouts.append) == out_dir / "Artist - Song.mp3"
+    assert timeouts == [ytdlp.download_timeout({"filesize_approx": 50_000_000}, Mp3Format(), 2)]
+
+
+def test_the_extended_timeout_still_stops_a_hanging_download(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 4 MB at 1 MB/s without a base: 4 s, counted from the start, not from the info
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_S", 2)
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_BASE_S", 0)
+    monkeypatch.setattr(ytdlp, "MIN_SPEED_BPS", 1_000_000)
+    fake_yt_dlp.set("hang", info={"filesize_approx": 4_000_000})
+    timeouts: list[float] = []
+    start = time.monotonic()
+
+    with pytest.raises(subprocess.TimeoutExpired) as info:
+        download_audio(URL, out_dir, on_timeout=timeouts.append)
+
+    assert timeouts == [4]
+    assert info.value.timeout == 4  # the timeout it ran with, for describe_error
+    assert 4 <= time.monotonic() - start < 15
+    assert leftovers(out_dir) == []
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        {},  # no size or duration: the fallback stays
+        {"filesize_approx": 5_000_000, "duration": 240},  # an MP3 of a few MB: below the fallback
+    ],
+)
+def test_on_timeout_is_not_called_when_the_timeout_stays(
+    fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path, info: dict[str, int]
+) -> None:
+    fake_yt_dlp.set(info=info)
+    timeouts: list[float] = []
+    download_audio(URL, out_dir, on_timeout=timeouts.append)
+    assert timeouts == []
 
 
 def test_cancel_through_on_start_stops_the_download(
@@ -231,14 +417,14 @@ def test_cancel_through_on_start_stops_the_download(
     # what the GUI's cancel button does, here as soon as the download is running
     # (killing right at on_start can beat the launcher to spawning its child)
     fake_yt_dlp.set("hang")
-    processes: list[subprocess.Popen[str]] = []
+    started: list[subprocess.Popen[str]] = []
 
-    def _cancel(_fraction: float) -> None:
-        core.kill_process_tree(processes[0])
+    def _cancel(_progress: Progress) -> None:
+        ytdlp.kill_process_tree(started[0])
 
     start = time.monotonic()
     with pytest.raises(subprocess.CalledProcessError):
-        download_audio(URL, out_dir, on_progress=_cancel, on_start=lambda p, _s: processes.append(p))
+        download_audio(URL, out_dir, on_progress=_cancel, on_start=lambda p, _s: started.append(p))
 
     assert time.monotonic() - start < 15
     assert leftovers(out_dir) == []
@@ -248,17 +434,17 @@ def test_raising_progress_callback_does_not_leave_yt_dlp_running(
     fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
     fake_yt_dlp.set("hang")
-    processes: list[subprocess.Popen[str]] = []
+    prcs: list[subprocess.Popen[str]] = []
 
-    def _broken_progress(_fraction: float) -> None:
+    def _broken_progress(_progress: Progress) -> None:
         raise RuntimeError("UI is gone")
 
     start = time.monotonic()
     with pytest.raises(RuntimeError, match="UI is gone"):
-        download_audio(URL, out_dir, on_progress=_broken_progress, on_start=lambda p, _s: processes.append(p))
+        download_audio(URL, out_dir, on_progress=_broken_progress, on_start=lambda p, _s: prcs.append(p))
 
     assert time.monotonic() - start < 15
-    assert processes[0].poll() is not None
+    assert prcs[0].poll() is not None
     assert leftovers(out_dir) == []
 
 

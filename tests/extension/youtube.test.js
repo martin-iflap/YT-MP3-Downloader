@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { loadScripts } = require('./harness');
 
-const { isYouTubeUrl, isKnownSiteUrl, isWebUrl } = loadScripts(['youtube.js'], {});
+const { isYouTubeUrl, isKnownSiteUrl, isAudioSiteUrl, isWebUrl } = loadScripts(['youtube.js'], {});
 
 test('accepts video, shorts, live and short-link URLs', () => {
   for (const url of [
@@ -22,6 +22,8 @@ test('rejects non-video pages, other hosts and junk', () => {
   for (const url of [
     'https://www.youtube.com/',
     'https://www.youtube.com/watch',
+    'https://www.youtube.com/watch?v=',
+    'https://www.youtube.com/watch?list=PL123&v=',
     'https://www.youtube.com/@channel',
     'https://youtu.be/',
     'https://www.youtube.com/shorts/',
@@ -55,6 +57,9 @@ test('known sites: YouTube videos and tracks on the audio sites', () => {
     'https://soundcloud.com/',
     'https://soundcloud.com/forss',
     'https://artist.bandcamp.com/album/record',
+    'https://bandcamp.com/track/song', // tracks live on <artist>.bandcamp.com only
+    'https://www.bandcamp.com/track/song',
+    'https://m.bandcamp.com/track/song',
     'https://bandcamp.com.evil.com/track/x',
     'https://evilbandcamp.com/track/x',
     'https://www.mixcloud.com/spartacus/',
@@ -63,6 +68,28 @@ test('known sites: YouTube videos and tracks on the audio sites', () => {
     undefined
   ]) {
     assert.equal(isKnownSiteUrl(url), false, String(url));
+  }
+});
+
+test('audio sites: their tracks, never YouTube (whose static-image videos have video)', () => {
+  for (const url of [
+    'https://soundcloud.com/forss/flickermood',
+    'https://on.soundcloud.com/AbC123',
+    'https://artist.bandcamp.com/track/song',
+    'https://www.mixcloud.com/spartacus/party-time/'
+  ]) {
+    assert.equal(isAudioSiteUrl(url), true, url);
+  }
+  for (const url of [
+    'https://youtu.be/dQw4w9WgXcQ',
+    'https://music.youtube.com/watch?v=E8uQ-kLHauA',
+    'https://soundcloud.com/forss', // a profile, not a track: no warning for a link that is not a download
+    'https://artist.bandcamp.com/album/record',
+    'https://example.com/a/b',
+    'not a url',
+    undefined
+  ]) {
+    assert.equal(isAudioSiteUrl(url), false, String(url));
   }
 });
 

@@ -1,15 +1,15 @@
-# YouTube MP3 Downloader
+# MP3 & MP4 Downloader
 
-YouTube MP3 Downloader is a Firefox extension paired with a small Windows app that saves
-the audio of YouTube videos (and SoundCloud, Bandcamp, Mixcloud tracks and other
-sites) as MP3 files, with cover art and tags.
+MP3 & MP4 Downloader (formerly YouTube MP3 Downloader) is a Firefox extension paired with a small Windows app that saves
+YouTube videos as MP3 audio or MP4 video (and SoundCloud, Bandcamp, Mixcloud tracks and
+other sites), with cover art and tags.
 
 The project is split into two parts:
 
 - **Firefox extension**: the sidebar, the right-click menu entry and the browser
   integration. Installed from Firefox Add-ons, which keeps it up to date.
 - **Windows app (native host)**: does the actual download, conversion, cover art and
-  tagging with `yt-dlp` and `ffmpeg`. Installed once from GitHub; from then on it keeps
+  tagging with `yt-dlp` and `ffmpeg`, and has a window of its own (**Open in app**). Installed once from GitHub; from then on it keeps
   itself and `yt-dlp` up to date.
 
 ## Download and installation
@@ -20,8 +20,8 @@ Both parts are required.
 
 https://addons.mozilla.org/en-US/firefox/addon/youtube-mp3-downloader
 
-It adds a sidebar and a **Download as MP3** entry to the right-click menu of video and
-track links.
+It adds a sidebar and **Download as MP3** / **Download as MP4** entries to the right-click
+menu of video and track links (MP3 only for SoundCloud, Bandcamp and Mixcloud tracks).
 
 ### 2. Install the Windows app
 
@@ -37,8 +37,8 @@ downloaded, and Windows may show "Windows protected your PC": click **More info*
 It installs per user (no administrator rights) into
 `%LOCALAPPDATA%\YouTube MP3 Downloader`:
 
-- `mp3.exe`, the native messaging host, with `ffmpeg.exe`,
-- `yt-dlp.exe`, downloaded during the installation (if that fails, the app downloads it
+- `mp3.exe`, the native messaging host, with `ffmpeg.exe` (in `versions\<version>\`),
+- `yt-dlp`, downloaded during the installation (if that fails, the app downloads it
   itself the first time you open the sidebar),
 - the Firefox native-messaging registration for your user.
 
@@ -58,11 +58,20 @@ the app updates itself.
 
 - Open a video or track page and use the sidebar, or right-click a link and choose
   **Download as MP3**. Any other link can be pasted into the sidebar's URL field.
+- Pick **MP3** or **MP4** at the top of the sidebar (it is remembered):
+  - **MP3**: the audio in the best quality (LAME V0), the thumbnail as square cover art.
+  - **MP4**: the video and its audio, never re-encoded. **Quality** caps the height (Best,
+    1080p, 720p, 480p; a video without that height gets the nearest one). **Video codec**:
+    *Best* (AV1/VP9, smaller files, may not play in older players) or *Compatible* (H.264,
+    plays everywhere, up to 1080p, about 2.5x the size). The thumbnail is the cover.
+- The sidebar shows how far the download is ("Downloading 42%", then "Converting to MP3..."
+  or "Saving the MP4...").
 - The file is named after the title (or the name you type), with cover art, artist,
   title and, when the site has them, album, year and track number.
-- After a download, **Show in folder** and **Play** open the new MP3. Clicking the
+- After a download, **Show in folder** and **Play** open the new file. Clicking the
   download notification shows it in its folder.
-- **Open in app** opens the same download form in its own window.
+- **Open in app** opens the same download form in its own window, with the same MP3/MP4
+  choices and a progress bar.
 
 The default folder is `YT-MP3-Downloads` in your Documents folder (also when Windows moved
 it, e.g. into OneDrive); choose another one in
@@ -77,11 +86,12 @@ of its tools, and fixes what it can:
   checksum and installed silently. Each version goes into its own folder and must pass a
   self-check before Firefox is switched to it, so an interrupted or broken update leaves
   the working version in place.
-- **An outdated, missing or broken `yt-dlp.exe`** is replaced by the latest release, also
+- **An outdated, missing or broken yt-dlp** is replaced by the latest release, also
   checksum-verified and test-run before it is swapped in.
 - **A download that fails in yt-dlp** (from the sidebar, the right-click menu or the app
   window) updates yt-dlp and tries once more. If YouTube asks for a JavaScript challenge,
-  the app downloads Deno (about 45 MB) once and uses it from then on.
+  the app downloads Deno (about 45 MB) and uses it from then on, and updates it when YouTube
+  needs a newer one.
 
 Anything it can't fix is shown in the sidebar with a link to the installer, which
 repairs every problem with the app. Offline, nothing is checked or changed.
@@ -89,7 +99,7 @@ repairs every problem with the app. Offline, nothing is checked or changed.
 ## Uninstall
 
 Uninstall **YouTube MP3 Downloader** in Windows Settings → Apps, and remove the extension
-in Firefox. Your downloaded MP3s are not touched: the default download folder is removed
+in Firefox. Your downloaded files are not touched: the default download folder is removed
 only if it is empty.
 
 ## Troubleshooting
@@ -105,8 +115,9 @@ The extension and the app communicate through Firefox native messaging over stdi
 
 1. The sidebar or the context menu sends a request to `background.js`, which starts the
    app (`mp3.exe`, registered as the native host `app_manifest`) for each request.
-2. The app makes one `yt-dlp` call (audio as LAME V0 MP3 plus the thumbnail) and one
-   `ffmpeg` pass (cover art and tags, the audio is copied), then answers with JSON.
+2. The app makes one `yt-dlp` call (audio as LAME V0 MP3, or video and audio merged into an
+   MP4, plus the thumbnail) and one `ffmpeg` pass (cover art and tags, the media is copied),
+   reports progress while yt-dlp runs, then answers with JSON.
 3. The extension shows the result in the sidebar or as a notification.
 
 `ARCHITECTURE.md` is the technical reference: the protocol, every module, and the update

@@ -28,7 +28,7 @@ def host(monkeypatch: pytest.MonkeyPatch) -> UseHost:
     def use(code: str) -> None:
         monkeypatch.setattr(selfcheck, "host_command", lambda: [sys.executable, "-c", code])
     use(f"import sys; sys.stdin.buffer.read(); sys.stdout.buffer.write({PONG!r})")
-    monkeypatch.setattr(selfcheck, "_check_ffmpeg", lambda: [])
+    monkeypatch.setattr(selfcheck, "_check_ffmpeg", list)
     return use
 
 
@@ -98,6 +98,36 @@ def test_an_ffmpeg_that_writes_no_tags_fails(ffmpeg: Path, monkeypatch: pytest.M
     monkeypatch.setattr(core, "embed_thumbnail", lambda temp_mp3, thumb, artist, title, output: output.write_bytes(temp_mp3.read_bytes()))
     [problem] = selfcheck._check_ffmpeg()
     assert "wrote a wrong MP3" in problem
+
+
+def test_an_mp4_without_tags_or_cover_fails(ffmpeg: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # the MP3 pass is real, the MP4 is copied unchanged: a valid MP4, but without the cover and tags
+    real_embed = core.embed_thumbnail
+
+    def copy_mp4(media: Path, thumb: Path, artist: str, title: str, output: Path) -> None:
+        if output.suffix == ".mp4":
+            output.write_bytes(media.read_bytes())
+        else:
+            real_embed(media, thumb, artist, title, output)
+    monkeypatch.setattr(core, "FFMPEG_PATH", ffmpeg)
+    monkeypatch.setattr(core, "embed_thumbnail", copy_mp4)
+    [problem] = selfcheck._check_ffmpeg()
+    assert "wrote a wrong MP4 (header b'ftyp', missing ['covr', '©ART', '©nam'])" in problem
+
+
+def test_an_mp4_cover_stored_as_a_second_video_fails(ffmpeg: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # without attached_pic, players show the cover as a second video, and there is no covr box
+    real_run = selfcheck.subprocess.run
+
+    def without_attached_pic(command: list[str], **kwargs: object) -> object:
+        if "attached_pic" in command:
+            command = command[: command.index("-disposition:v:1")] + command[command.index("attached_pic") + 1 :]
+        return real_run(command, **kwargs)
+    monkeypatch.setattr(core, "FFMPEG_PATH", ffmpeg)
+    monkeypatch.setattr(core.subprocess, "run", without_attached_pic)
+    [problem] = selfcheck._check_ffmpeg()
+    assert "wrote a wrong MP4" in problem
+    assert "'covr'" in problem
 
 
 def test_the_ffmpeg_check_leaves_no_temp_files(ffmpeg: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

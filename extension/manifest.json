@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "YouTube MP3 Downloader",
-  "version": "2.1.0",
-  "description": "Download YouTube videos and audio from other sites (SoundCloud, Bandcamp, Mixcloud and more) as MP3 files",
+  "name": "MP3 & MP4 Downloader",
+  "version": "2.2.0",
+  "description": "Download YouTube videos as MP3 audio or MP4 video, and tracks from SoundCloud, Bandcamp, Mixcloud and more",
 
   "browser_specific_settings": {
     "gecko": {
@@ -14,7 +14,7 @@
   },
 
   "background": {
-    "scripts": ["youtube.js", "background.js"]
+    "scripts": ["youtube.js", "formats.js", "background.js"]
   },
 
   "icons": {
@@ -31,7 +31,7 @@
   ],
 
   "browser_action": {
-    "default_title": "YouTube MP3 Downloader",
+    "default_title": "MP3 & MP4 Downloader",
     "default_area": "navbar",
     "default_icon": {
       "48": "icons/icon-48.png",
@@ -40,7 +40,7 @@
   },
 
   "sidebar_action": {
-    "default_title": "YouTube MP3 Downloader",
+    "default_title": "MP3 & MP4 Downloader",
     "default_panel": "sidebar.html",
     "default_icon": {
       "48": "icons/icon-48.png",

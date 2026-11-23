@@ -1,47 +1,54 @@
-/* global isKnownSiteUrl */
+/* global isKnownSiteUrl, FORMATS, formatRequest, hostSupports */
 
 const NATIVE_HOST_NAME = 'app_manifest';
 const MENU_ID = 'download-mp3';
+const MP4_MENU_ID = 'download-mp4';
 const NOTIFICATION_ICON = 'icons/icon-48.png';
 // The installer of the latest release, downloaded directly: the one link that fixes every
 // host problem, including hosts that can't update themselves (1.x, broken installs).
 // Every release must carry this asset name (updater.INSTALLER_ASSET, checked by test_versions.py).
 const INSTALLER_URL = 'https://github.com/martin-iflap/YT-MP3-Downloader/releases/latest/download/YT-MP3-Downloader-Setup.exe';
-const HOST_MISSING_MESSAGE = 'The YT MP3 Downloader app is not installed. Install it from GitHub, then restart Firefox.';
+// The name users see (manifest.json, the sidebar, the app window). The installer keeps the
+// 1.x AppName, which is its AppId (mp3_installer.iss).
+const APP_NAME = 'MP3 & MP4 Downloader';
+const HOST_MISSING_MESSAGE = `The ${APP_NAME} app is not installed. Install it from GitHub, then restart Firefox.`;
 
 // The oldest host this extension works with. Raise it when the extension starts to rely on
 // a new host action or response field; a newer host is always fine.
 const MIN_HOST_VERSION = '2.0.0';
-const HOST_OUTDATED_MESSAGE = `The YT MP3 Downloader app is out of date (version ${MIN_HOST_VERSION} or newer is needed). Install the update from GitHub.`;
-const HOST_BROKEN_MESSAGE = 'The YT MP3 Downloader app is not working (it closed without answering). Reinstall it from GitHub.';
+const HOST_OUTDATED_MESSAGE = `The ${APP_NAME} app is out of date (version ${MIN_HOST_VERSION} or newer is needed). Install the update from GitHub.`;
+const HOST_BROKEN_MESSAGE = `The ${APP_NAME} app is not working (it closed without answering). Reinstall it from GitHub.`;
 // What a 1.x host answers to get_version: it treats unknown actions as a download without a URL.
 const LEGACY_HOST_REPLY = 'Invalid YouTube URL';
-const LEGACY_HOST_MESSAGE = "This version of the YT MP3 Downloader app can't update itself. Install the new version once, from then on it keeps itself up to date.";
+const LEGACY_HOST_MESSAGE = `This version of the ${APP_NAME} app can't update itself. Install the new version once, from then on it keeps itself up to date.`;
 
-// Per-action timeouts. The host allows 300s for yt-dlp plus 50s for the ffmpeg cover pass,
-// and select_folder waits on the user, so these must stay above that. get_version waits
-// up to 20s for `yt-dlp --version`. The updates (updater.py) may first wait 60s for another
+// Per-action timeouts. The host allows 900s for yt-dlp plus up to 600s for the ffmpeg cover
+// pass, and select_folder waits on the user, so these must stay above that. get_version waits
+// up to 20s for `yt-dlp --version`, after up to 5s for the cleanup's own check. The updates (updater.py) may first wait 60s for another
 // host's update, look up the tag (5s) and fetch the checksums (30s), then download for up
 // to 180s (yt-dlp) or 360s (the installer), plus up to 30s for the last read, and test-run a
-// new exe (20s): about 345s for yt-dlp (with its 20s version check first) and 485s for the
-// installer. A download that fails in yt-dlp is retried once after a repair
-// (core.download_with_repair): 350s, a yt-dlp update (345s), Deno (about 455s), 350s
-// again, so the worst case is about 25 min.
+// new exe (20s): 485s for the installer. yt-dlp starts with its 20s version check, and its
+// onedir build may fail its test-run, so the single-file exe is checked (20s) and downloaded
+// too: about 595s. A download that fails in yt-dlp is retried once after a repair
+// (core.download_with_repair): 1500s, a yt-dlp update (595s), Deno (about 465s), 1500s
+// again, so the worst case is about 68 min (test_versions.py checks the sums). A host that
+// knows the size sends a longer yt-dlp timeout (deadline_s); the request then gets that plus
+// this whole budget again, which covers the cover pass, a repair and a retry (hostRequest).
 const ACTION_TIMEOUTS_MS = {
-  download: 27 * 60 * 1000,
+  download: 70 * 60 * 1000,
   download_gui: 30 * 1000,
   select_folder: 10 * 60 * 1000,
   get_current_folder: 15 * 1000,
   show_in_folder: 15 * 1000,
   play: 15 * 1000,
   get_version: 30 * 1000,
-  update_yt_dlp: 7 * 60 * 1000,
+  update_yt_dlp: 11 * 60 * 1000,
   update_host: 9 * 60 * 1000
 };
 
 // What the sidebar shows while a repair runs.
 const REPAIR_MESSAGES = {
-  update_host: 'Updating the YT MP3 Downloader app...',
+  update_host: `Updating the ${APP_NAME} app...`,
   update_yt_dlp: 'Updating yt-dlp...'
 };
 // After update_host the installer runs on its own; poll until the new version answers.
@@ -53,37 +60,50 @@ const HOST_UPDATE_WAIT_MS = 3 * 60 * 1000;
 // itself once the window is closed.
 const KEEP_ALIVE_ACTIONS = new Set(['download_gui']);
 
+// The links isKnownSiteUrl accepts (youtube.js), as match patterns; a click checks the link exactly.
+const YOUTUBE_PATTERNS = [
+  '*://www.youtube.com/watch*',
+  '*://youtube.com/watch*',
+  '*://m.youtube.com/watch*',
+  '*://music.youtube.com/watch*',
+  '*://music.youtube.com/shorts/*',
+  '*://music.youtube.com/live/*',
+  '*://youtu.be/*',
+  '*://www.youtube.com/shorts/*',
+  '*://youtube.com/shorts/*',
+  '*://m.youtube.com/shorts/*',
+  '*://www.youtube.com/live/*',
+  '*://youtube.com/live/*',
+  '*://m.youtube.com/live/*'
+];
+const AUDIO_SITE_PATTERNS = [
+  '*://soundcloud.com/*/*',
+  '*://www.soundcloud.com/*/*',
+  '*://m.soundcloud.com/*/*',
+  '*://on.soundcloud.com/*',
+  '*://*.bandcamp.com/track/*',
+  '*://mixcloud.com/*/*',
+  '*://www.mixcloud.com/*/*',
+  '*://m.mixcloud.com/*/*'
+];
+
+// One entry per format (formats.js). MP4 is offered on YouTube links only: the audio sites
+// (isAudioSiteUrl) have no video, so there MP3 stays the only entry. Firefox shows a single
+// entry directly with the extension's icon, and puts two in a submenu named after the extension.
 // Menus are not persisted across browser restarts for MV2 persistent backgrounds,
-// so create it on every startup rather than in onInstalled. The patterns cover the links
-// isKnownSiteUrl accepts (youtube.js); a click checks the link exactly.
-browser.contextMenus.create({
-  id: MENU_ID,
-  title: 'Download as MP3',
-  contexts: ['link'],
-  targetUrlPatterns: [
-    '*://www.youtube.com/watch*',
-    '*://youtube.com/watch*',
-    '*://m.youtube.com/watch*',
-    '*://music.youtube.com/watch*',
-    '*://youtu.be/*',
-    '*://www.youtube.com/shorts/*',
-    '*://youtube.com/shorts/*',
-    '*://m.youtube.com/shorts/*',
-    '*://www.youtube.com/live/*',
-    '*://youtube.com/live/*',
-    '*://m.youtube.com/live/*',
-    '*://soundcloud.com/*/*',
-    '*://www.soundcloud.com/*/*',
-    '*://m.soundcloud.com/*/*',
-    '*://on.soundcloud.com/*',
-    '*://*.bandcamp.com/track/*',
-    '*://mixcloud.com/*/*',
-    '*://www.mixcloud.com/*/*',
-    '*://m.mixcloud.com/*/*'
-  ]
-}, () => {
-  if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
-});
+// so create them on every startup rather than in onInstalled.
+const MENU_FORMATS = { [MENU_ID]: 'mp3', [MP4_MENU_ID]: 'mp4' };
+const MENU_PATTERNS = { [MENU_ID]: [...YOUTUBE_PATTERNS, ...AUDIO_SITE_PATTERNS], [MP4_MENU_ID]: YOUTUBE_PATTERNS };
+for (const [id, format] of Object.entries(MENU_FORMATS)) {
+  browser.contextMenus.create({
+    id,
+    title: `Download as ${FORMATS[format].label}`,
+    contexts: ['link'],
+    targetUrlPatterns: MENU_PATTERNS[id]
+  }, () => {
+    if (browser.runtime.lastError) console.warn('Could not create context menu:', browser.runtime.lastError);
+  });
+}
 
 // The toolbar button opens and closes the sidebar. With tabs on top, Firefox shows no
 // sidebar launcher, so without it users would not find the extension. toggle() must run
@@ -132,7 +152,7 @@ async function isSidebarOpen() {
   }
 }
 
-// notification id -> the MP3 a click on it shows in its folder
+// notification id -> the downloaded file a click on it shows in its folder
 const notificationFiles = new Map();
 
 function notify(title, message, path) {
@@ -151,7 +171,7 @@ browser.notifications.onClosed.addListener(id => notificationFiles.delete(id));
 async function notifyDownloadResult(origin, response) {
   if (origin === 'sidebar' && await isSidebarOpen()) return;
   if (response.status === 'success') {
-    const saved = `${response.filename || 'The MP3'} saved successfully!`;
+    const saved = `${response.filename || 'The file'} saved successfully!`;
     notify('Download Complete', response.path ? `${saved} Click to show it in its folder.` : saved, response.path);
   } else {
     notify('Download Failed', response.message || 'An error occurred during download');
@@ -270,6 +290,9 @@ function withRepairFailures(status, failures) {
   return Object.assign({}, status, { message: `${status.message} Automatic repair failed: ${reasons}.` });
 }
 
+// When the last check (sidebar or background) started in this session; see checkHostInBackground.
+let lastCheckStarted = 0;
+
 // Ask the host for its state, repair what can be repaired (each repair at most once),
 // and turn the state after the last repair into the one status the user is told.
 async function checkAndRepairHost(onProgress) {
@@ -297,6 +320,12 @@ async function checkAndRepairHost(onProgress) {
     } else {
       check = await hostRequest({ action: 'get_version' });
     }
+  }
+  // the formats the host downloads, for the context menu (a host before 2.2.0 lists none:
+  // MP3 only); a host that did not answer leaves the last known ones
+  if (check.source === 'host') {
+    browser.storage.local.set({ hostFormats: check.response.formats ?? [] })
+      .catch(e => console.warn('Could not save the host formats:', e));
   }
   return withRepairFailures(assessHostStatus(check.response, check.source), failures);
 }
@@ -331,7 +360,6 @@ function checkHost(onProgress) {
 // context-menu download. Silent: problems are shown when the sidebar opens.
 const BACKGROUND_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const BACKGROUND_CHECK_DELAY_MS = 60 * 1000; // keep the host off the browser's startup
-let lastCheckStarted = 0;
 
 async function checkHostInBackground() {
   try {
@@ -350,11 +378,15 @@ setTimeout(checkHostInBackground, BACKGROUND_CHECK_DELAY_MS);
 // Resolves exactly once with { response, source }: the host's final response (source
 // 'host'), or one made up here when the host does not answer in time ('timeout'), goes
 // away without a final response ('disconnect') or can't be reached ('connect').
+// A response with deadline_s (a longer yt-dlp timeout, counted from yt-dlp's start) is not
+// relayed: it moves the timeout to deadline_s plus the action's own timeout from now, never earlier.
 function hostRequest(payload, onProgress = () => {}) {
   return new Promise((resolve) => {
     const action = payload.action;
     let port = null;
     let done = false;
+    let timeoutAt = Date.now() + ACTION_TIMEOUTS_MS[action];
+    let timer = null;
 
     const finish = (response, source, disconnect) => {
       if (done) return;
@@ -364,9 +396,18 @@ function hostRequest(payload, onProgress = () => {}) {
       resolve({ response, source });
     };
 
-    const timer = setTimeout(() => {
+    const timeOut = () => {
       finish({ status: 'error', message: 'Native host did not respond in time' }, 'timeout', true);
-    }, ACTION_TIMEOUTS_MS[action]);
+    };
+    timer = setTimeout(timeOut, ACTION_TIMEOUTS_MS[action]);
+
+    const extendTimeout = (deadlineS) => {
+      const at = Date.now() + deadlineS * 1000 + ACTION_TIMEOUTS_MS[action];
+      if (at <= timeoutAt) return;
+      timeoutAt = at;
+      clearTimeout(timer);
+      timer = setTimeout(timeOut, at - Date.now());
+    };
 
     try {
       port = browser.runtime.connectNative(NATIVE_HOST_NAME);
@@ -381,7 +422,9 @@ function hostRequest(payload, onProgress = () => {}) {
         ? Boolean(response.final)
         : response.status === 'success' || response.status === 'error';
       if (isFinal) finish(response, 'host', true);
-      else onProgress(response);
+      else if (Object.hasOwn(response, 'deadline_s')) {
+        if (Number.isFinite(response.deadline_s) && response.deadline_s > 0) extendTimeout(response.deadline_s);
+      } else onProgress(response);
     });
 
     // Firefox reports why the host went away (e.g. not installed) on port.error, not runtime.lastError.
@@ -408,17 +451,31 @@ async function runNativeAction(payload, requestId, origin) {
   if (payload.action === 'download') notifyDownloadResult(origin, response);
 }
 
+// Whether the host downloads format: what the last check saw (hostFormats), else a check
+// now, which also updates a host that is too old for it.
+async function menuHostSupports(format, hostFormats) {
+  if (hostSupports(hostFormats, format)) return true;
+  return hostSupports((await checkHost(() => {})).formats, format);
+}
+
 browser.contextMenus.onClicked.addListener(async (info) => {
-  if (info.menuItemId !== MENU_ID) return;
+  const format = MENU_FORMATS[info.menuItemId];
+  if (!format) return;
   if (!isKnownSiteUrl(info.linkUrl)) {
     notify('Invalid URL', 'Not a link to a video or track');
     return;
   }
 
-  // Use the default folder chosen in the sidebar; without one the host falls back to its own.
-  const payload = { action: 'download', url: info.linkUrl };
-  const { lastFolder } = await browser.storage.local.get('lastFolder').catch(() => ({}));
-  if (lastFolder) payload.folder = lastFolder;
+  // The sidebar's folder and the format's choices; without them the host's default folder
+  // and the format's default choices.
+  const optionsKey = `${format}Options`;
+  const stored = await browser.storage.local.get(['lastFolder', 'hostFormats', optionsKey]).catch(() => ({}));
+  if (!await menuHostSupports(format, stored.hostFormats)) {
+    notify('Download Failed', `Downloading ${FORMATS[format].label} needs a newer version of the ${APP_NAME} app. Open the sidebar to see why it could not update.`);
+    return;
+  }
+  const payload = { action: 'download', url: info.linkUrl, ...formatRequest(format, stored[optionsKey]) };
+  if (stored.lastFolder) payload.folder = stored.lastFolder;
 
   // the check comes after the download, so it never delays it
   runNativeAction(payload, crypto.randomUUID(), 'menu').then(checkHostInBackground);
@@ -437,6 +494,10 @@ browser.runtime.onMessage.addListener((msg) => {
   if (msg.folder) payload.folder = msg.folder;
   if (msg.filename) payload.filename = msg.filename;
   if (msg.path) payload.path = msg.path;
+  // a download in another format than MP3 (formats.js); MP3 sends none
+  if (msg.format) payload.format = msg.format;
+  if (msg.quality) payload.quality = msg.quality;
+  if (msg.codec) payload.codec = msg.codec;
 
   runNativeAction(payload, msg.requestId || crypto.randomUUID(), 'sidebar');
 });

@@ -7,22 +7,19 @@ import logging
 import struct
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
-from ytmp3_host.core import (
-    describe_error,
-    download_with_repair,
-    downloaded_mp3,
-    folder_is_writable,
-    is_web_url,
-    open_file,
-    requested_filename,
-    resolve_folder,
-    show_in_folder,
-)
+from ytmp3_host.core import describe_error, download_with_repair
+from ytmp3_host.files import downloaded_file, folder_is_writable, open_file, resolve_folder, show_in_folder
+from ytmp3_host.media_format import MediaFormat
+from ytmp3_host.naming import filename_too_long, filename_too_long_message, is_web_url, requested_filename
+from ytmp3_host.ytdlp import Progress
 
 logger = logging.getLogger(__name__)
+
+PROGRESS_INTERVAL_S = 0.3  # do not flood extension with updates but keep it smooth
 
 LENGTH_PREFIX = struct.Struct("@I")  # 4-byte unsigned int, native byte order
 
@@ -53,7 +50,8 @@ def read_message() -> Message:
     Returns:
         The decoded message.
     Raises:
-        ValueError: If the message is not valid UTF-8 JSON or not a JSON object.
+        ValueError: If the message is not valid UTF-8 JSON.
+        TypeError: If the message is not a JSON object.
     """
     raw_length = _read_exact(LENGTH_PREFIX.size)
     if raw_length is None:
@@ -64,7 +62,7 @@ def read_message() -> Message:
         sys.exit(0)
     message = json.loads(raw_message.decode("utf-8"))
     if not isinstance(message, dict):
-        raise ValueError("Message is not a JSON object")
+        raise TypeError("Message is not a JSON object")
     return message
 
 
@@ -89,7 +87,10 @@ def send_message(message: Message, exit_code: int = 1) -> None:
 
 def missing_folder_message(folder: str) -> str:
     """What the user is told when the download folder they set does not exist (a typo, or deleted)."""
-    return f'The download folder "{folder.strip()}" doesn\'t exist. Check the path in the sidebar, or pick a folder with Choose.'
+    return (
+        f'The download folder "{folder.strip()}" doesn\'t exist. '
+        "Check the path in the sidebar, or pick a folder with Choose."
+    )
 
 
 def unwritable_folder_message(folder: Path) -> str:
@@ -114,15 +115,15 @@ def send_current_folder(folder: str) -> None:
 
 
 def run_open_file(path: str, select: bool) -> None:
-    """Handle `show_in_folder` (select is True) and `play` for a downloaded MP3.
+    """Handle `show_in_folder` (select is True) and `play` for a downloaded MP3 or MP4.
 
     Args:
-        path: The MP3's path from the download's success response.
+        path: The file's path from the download's success response.
         select: Show the file in Explorer instead of opening it in its default app.
     """
-    file = downloaded_mp3(path)
+    file = downloaded_file(path)
     if file is None:
-        send_message({"status": "error", "message": "The MP3 was moved or deleted", "final": True})
+        send_message({"status": "error", "message": "The file was moved or deleted", "final": True})
         return
     try:
         if select:
@@ -131,21 +132,23 @@ def run_open_file(path: str, select: bool) -> None:
             open_file(file)
     except OSError as e:
         logger.error("Could not open %s: %s", file, e)
-        send_message({"status": "error", "message": f"Could not open the MP3: {describe_error(e)}", "final": True})
+        message = f"Could not open the {file.suffix[1:].upper()}: {describe_error(e)}"
+        send_message({"status": "error", "message": message, "final": True})
         return
     send_message({"status": "success", "final": True})
 
 
-def run_native(url: str, folder: str, filename: str) -> None:
+def run_native(*, url: str, folder: str, filename: str, media_format: MediaFormat) -> None:
     """Handle a headless download request and send its responses.
-    Sends intermediate warnings (no title; no thumbnail) and infos (a repair after a
-    yt-dlp failure, see download_with_repair), then exactly one final success or
-    error response.
+    Sends intermediate warnings (no title; no thumbnail), infos (a repair after a
+    yt-dlp failure, see download_with_repair) and progress infos ({"stage", "fraction"},
+    no message), then exactly one final success or error response.
 
     Args:
-        url: The YouTube video URL.
+        url: The video or track URL.
         folder: The target folder; empty means the default folder.
         filename: The requested filename; empty means name it after the video title.
+        media_format: The requested media format (MP3 or MP4) and its options.
     """
     if not is_web_url(url):
         send_message({"status": "error", "message": "Invalid URL", "final": True})
@@ -153,11 +156,15 @@ def run_native(url: str, folder: str, filename: str) -> None:
 
     folder_path = resolve_folder(folder)
     if folder_path is None:
-        # the user's mistake: say so rather than saving the MP3 somewhere they did not ask for
+        # the user's mistake: say so rather than saving the file somewhere they did not ask for
         send_message({"status": "error", "message": missing_folder_message(folder), "final": True})
         return
     if not folder_is_writable(folder_path):
         send_message({"status": "error", "message": unwritable_folder_message(folder_path), "final": True})
+        return
+    safe_name = requested_filename(filename)
+    if filename_too_long(safe_name, folder_path):
+        send_message({"status": "error", "message": filename_too_long_message(folder_path), "final": True})
         return
 
     warnings: list[str] = []
@@ -166,13 +173,36 @@ def run_native(url: str, folder: str, filename: str) -> None:
         warnings.append(message)
         send_message({"status": "warning", "message": message, "final": False})
 
+    last_sent: Progress | None = None
+    last_sent_at = 0.0
+
+    def _send_progress(progress: Progress) -> None:
+        """Send progress at most every PROGRESS_INTERVAL_S, except a new stage or a finished download.
+        Those two have no later update to replace them.
+        """
+        nonlocal last_sent, last_sent_at
+        now = time.monotonic()
+        new_stage = last_sent is None or progress.stage != last_sent.stage
+        if not new_stage and progress.fraction != 1.0 and now - last_sent_at < PROGRESS_INTERVAL_S:
+            return
+        last_sent, last_sent_at = progress, now
+        # no "message": sidebars before 2.2.0 ignore a non-final response without one
+        send_message({
+            "status": "info",
+            "progress": {"stage": progress.stage, "fraction": progress.fraction},
+            "final": False,
+        })
+
     try:
-        mp3_path = download_with_repair(
+        file_path = download_with_repair(
             url,
             folder_path,
-            requested_filename(filename),
+            safe_name,
+            media_format=media_format,
             on_warning=_send_warning,
+            on_progress=_send_progress,
             on_info=lambda message: send_message({"status": "info", "message": message, "final": False}),
+            on_timeout=lambda new: send_message({"status": "info", "deadline_s": new, "final": False}),
         )
     except FileExistsError as e:
         send_message({
@@ -187,12 +217,12 @@ def run_native(url: str, folder: str, filename: str) -> None:
         send_message({"status": "error", "message": describe_error(e), "final": True})
         return
     except Exception as e:
-        logger.error("Download failed: %s", e)
+        logger.exception("Download failed")
         send_message({"status": "error", "message": f"Download failed: {describe_error(e)}", "final": True})
         return
 
-    response: Message = {"status": "success", "filename": mp3_path.stem, "path": str(mp3_path), "final": True}
+    response: Message = {"status": "success", "filename": file_path.stem, "path": str(file_path), "final": True}
     if warnings:
         # the final message replaces the warnings in the sidebar, so repeat them there
-        response["message"] = f"Downloaded: {mp3_path.stem}. {'. '.join(warnings)}."
+        response["message"] = f"Downloaded: {file_path.stem}. {'. '.join(warnings)}."
     send_message(response)

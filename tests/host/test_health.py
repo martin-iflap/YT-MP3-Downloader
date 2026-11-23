@@ -13,7 +13,7 @@ import pytest
 from conftest import FakeYtDlp
 from ytmp3_host import __version__, health
 from ytmp3_host.github import HOST_REPO, YT_DLP_REPO
-
+from ytmp3_host.media_format import media_format_from_request
 
 # --- versions -----------------------------------------------------------------
 
@@ -131,6 +131,7 @@ def test_everything_installed_and_current(fake_yt_dlp: FakeYtDlp, latest: Latest
     fake_yt_dlp.set(version="2026.08.19")
     assert health.host_status() == {
         "version": __version__,
+        "formats": ["mp3", "mp4"],
         "latest": f"v{__version__}",
         "outdated": False,
         "self_update": False,  # only an installed host updates itself, never a source checkout
@@ -139,6 +140,14 @@ def test_everything_installed_and_current(fake_yt_dlp: FakeYtDlp, latest: Latest
         "js_runtime": {"name": "deno", "installed": False},
     }
     assert sorted(latest.looked_up) == sorted([HOST_REPO, YT_DLP_REPO])
+
+
+def test_every_format_the_host_lists_is_one_it_downloads(fake_yt_dlp: FakeYtDlp, latest: Latest) -> None:
+    # the sidebar sends a format only when it is listed; the host must then accept it
+    formats = health.host_status()["formats"]
+    assert isinstance(formats, list) and "mp3" in formats
+    for name in formats:
+        media_format_from_request({"format": name})
 
 
 def test_newer_host_release_is_reported(fake_yt_dlp: FakeYtDlp, latest: Latest) -> None:

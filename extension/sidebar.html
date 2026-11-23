@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MP3 Downloader</title>
+    <title>MP3 &amp; MP4 Downloader</title>
+    <!-- in <head>, so the page is drawn in its theme from the start -->
+    <script src="theme.js"></script>
     <style>
         * {
             margin: 0;
@@ -14,16 +16,235 @@
         html, body {
             -webkit-font-smoothing:antialiased;
             -moz-osx-font-smoothing:grayscale;
-            background: #17181a; /* uniform background to avoid white corners */
+            background: var(--bg); /* uniform background to avoid white corners */
         }
 
+        /* Every color is a variable: dark here, light below. theme.js sets <html data-theme> from the
+           toggle, or in Auto from prefers-color-scheme (in the sidebar Firefox takes that from its
+           theme, not from "Website appearance", and it does not always arrive). */
         :root {
+            /* Firefox then draws native parts (the open select list, scrollbars) in the same scheme */
+            color-scheme: dark;
             --ease: cubic-bezier(.2,.9,.3,1); /* iOS-like spring-out */
+            --glass-blur: blur(20px) saturate(160%);
+
+            --bg: #17181a;
+            --ambient-top: rgba(140,160,190,0.10);
+            --ambient-bottom: rgba(120,130,150,0.06);
+            --text: #e6e6e6;
+            --text-title: #ffffff;
+            --text-muted: #9aa0a6; /* labels, the unselected format */
+            --text-secondary: #d7dadd;
+            --text-placeholder: #7e8488;
+            --text-helper: #a8b0b4;
+
             /* liquid glass: translucent fill, hairline border, light catching the top edge */
             --glass: linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.02) 100%);
             --glass-border: rgba(255,255,255,0.07);
             --glass-highlight: inset 0 1px 0 rgba(255,255,255,0.07);
-            --glass-blur: blur(20px) saturate(160%);
+            --card-shadow: 0 10px 30px rgba(0,0,0,0.35);
+
+            /* fields recessed into the glass */
+            --field-bg: rgba(0,0,0,0.18);
+            --field-bg-focus: rgba(0,0,0,0.24);
+            --field-border: rgba(255,255,255,0.06);
+            --field-border-hover: rgba(255,255,255,0.09);
+            --field-border-focus: rgba(255,255,255,0.18);
+            --field-inset: inset 0 1px 2px rgba(0,0,0,0.25);
+            --field-ring: 0 0 0 3px rgba(255,255,255,0.05);
+            --option-bg: #1f2023;
+            --focus-ring: 0 0 0 3px rgba(255,255,255,0.12);
+
+            /* glass pills (Open in app, the selected format) */
+            --pill: linear-gradient(180deg, rgba(255,255,255,0.11) 0%, rgba(255,255,255,0.045) 100%);
+            --pill-hover: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.06) 100%);
+            --pill-text: #f3f4f6;
+            --pill-border: rgba(255,255,255,0.10);
+            --pill-border-hover: rgba(255,255,255,0.14);
+            --pill-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 6px 18px rgba(0,0,0,0.35);
+            --pill-shadow-hover: inset 0 1px 0 rgba(255,255,255,0.16), 0 10px 24px rgba(0,0,0,0.4);
+            --switch-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 2px 8px rgba(0,0,0,0.3);
+
+            /* primary action: the same glass tinted with Apple's dark-mode system blue */
+            --primary: linear-gradient(180deg, rgba(10,132,255,0.34) 0%, rgba(10,132,255,0.18) 100%);
+            --primary-hover: linear-gradient(180deg, rgba(10,132,255,0.44) 0%, rgba(10,132,255,0.24) 100%);
+            --primary-text: #eaf3ff;
+            --primary-border: rgba(10,132,255,0.45);
+            --primary-border-hover: rgba(10,132,255,0.6);
+            --primary-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 6px 18px rgba(10,132,255,0.16), 0 6px 18px rgba(0,0,0,0.3);
+            --primary-shadow-hover: inset 0 1px 0 rgba(255,255,255,0.18), 0 10px 24px rgba(10,132,255,0.22), 0 10px 24px rgba(0,0,0,0.35);
+
+            --secondary-bg: rgba(255,255,255,0.03);
+            --secondary-bg-hover: rgba(255,255,255,0.07);
+            --secondary-border: rgba(255,255,255,0.07);
+            --secondary-border-hover: rgba(255,255,255,0.11);
+            --helper-bg: rgba(255,255,255,0.01);
+
+            /* result pills: the text of each kind (the dot and tint come from --result-color/-rgb) */
+            --result-text: #dfe6e9;
+            --success-text: #bfecc8;
+            --error-text: #ffd6d6;
+            --warning-text: #ffecc5;
+            --info-text: #cfe9ff;
+
+            --loader-track: rgba(255,255,255,0.08);
+            --loader-head: #cfd6da;
+        }
+
+        :root[data-theme="light"] {
+                color-scheme: light;
+                --bg: #f2f3f5;
+                --ambient-top: rgba(120,150,200,0.16);
+                --ambient-bottom: rgba(140,150,170,0.10);
+                --text: #1d1d1f;
+                --text-title: #111214;
+                --text-muted: #6b7075;
+                --text-secondary: #2c2f33;
+                --text-placeholder: #8a8f94;
+                --text-helper: #5f666b;
+
+                --glass: linear-gradient(180deg, rgba(255,255,255,0.78) 0%, rgba(255,255,255,0.55) 100%);
+                --glass-border: rgba(0,0,0,0.08);
+                --glass-highlight: inset 0 1px 0 rgba(255,255,255,0.9);
+                --card-shadow: 0 10px 30px rgba(0,0,0,0.08);
+
+                --field-bg: rgba(0,0,0,0.04);
+                --field-bg-focus: rgba(255,255,255,0.9);
+                --field-border: rgba(0,0,0,0.10);
+                --field-border-hover: rgba(0,0,0,0.16);
+                --field-border-focus: rgba(0,0,0,0.28);
+                --field-inset: inset 0 1px 2px rgba(0,0,0,0.06);
+                --field-ring: 0 0 0 3px rgba(0,0,0,0.05);
+                --option-bg: #ffffff;
+                --focus-ring: 0 0 0 3px rgba(0,0,0,0.15);
+
+                --pill: linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(255,255,255,0.7) 100%);
+                --pill-hover: linear-gradient(180deg, rgba(255,255,255,1) 0%, rgba(255,255,255,0.85) 100%);
+                --pill-text: #1d1d1f;
+                --pill-border: rgba(0,0,0,0.10);
+                --pill-border-hover: rgba(0,0,0,0.14);
+                --pill-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 6px 18px rgba(0,0,0,0.08);
+                --pill-shadow-hover: inset 0 1px 0 rgba(255,255,255,1), 0 10px 24px rgba(0,0,0,0.12);
+                --switch-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 2px 8px rgba(0,0,0,0.12);
+
+                /* Apple's light-mode system blue, filled */
+                --primary: linear-gradient(180deg, rgba(0,122,255,0.92) 0%, rgba(0,122,255,0.8) 100%);
+                --primary-hover: linear-gradient(180deg, rgba(0,122,255,1) 0%, rgba(0,122,255,0.88) 100%);
+                --primary-text: #ffffff;
+                --primary-border: rgba(0,122,255,0.9);
+                --primary-border-hover: rgba(0,122,255,1);
+                --primary-shadow: inset 0 1px 0 rgba(255,255,255,0.25), 0 6px 18px rgba(0,122,255,0.22);
+                --primary-shadow-hover: inset 0 1px 0 rgba(255,255,255,0.3), 0 10px 24px rgba(0,122,255,0.3);
+
+                --secondary-bg: rgba(255,255,255,0.6);
+                --secondary-bg-hover: rgba(255,255,255,0.95);
+                --secondary-border: rgba(0,0,0,0.08);
+                --secondary-border-hover: rgba(0,0,0,0.14);
+                --helper-bg: rgba(0,0,0,0.02);
+
+                --result-text: #1d1d1f;
+                --success-text: #1e7a3f;
+                --error-text: #b3261e;
+                --warning-text: #8a5a00;
+                --info-text: #1f5fa8;
+
+                --loader-track: rgba(0,0,0,0.08);
+                --loader-head: #5f666b;
+        }
+
+        /* theme toggle (theme.js) top right, help top left, close in the help's corner: small round glass buttons */
+        .theme-toggle, .help-toggle, .help-close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--secondary-bg);
+            color: var(--text-muted);
+            border: 1px solid var(--secondary-border);
+            box-shadow: var(--glass-highlight);
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            transition: transform 160ms var(--ease), background 160ms var(--ease), color 160ms var(--ease);
+        }
+        .theme-toggle svg {
+            display: none;
+            width: 15px;
+            height: 15px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .theme-toggle[data-theme="auto"] .icon-auto,
+        .theme-toggle[data-theme="light"] .icon-light,
+        .theme-toggle[data-theme="dark"] .icon-dark { display: block; }
+        .help-toggle { left: 10px; right: auto; }
+        .help-toggle svg, .help-close svg {
+            width: 15px;
+            height: 15px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+        .theme-toggle:hover, .help-toggle:hover, .help-close:hover { background: var(--secondary-bg-hover); border-color: var(--secondary-border-hover); color: var(--text-secondary); }
+        .theme-toggle:active, .help-toggle:active, .help-close:active { transform: scale(0.92); transition-duration: 80ms; }
+        .theme-toggle:focus-visible, .help-toggle:focus-visible, .help-close:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+        /* "How it works": a popover (no script: the ? button opens it, Esc, a click outside or × close it)
+           laid over the sidebar as one glass card */
+        .help {
+            position: fixed;
+            inset: 10px;
+            width: auto;
+            height: auto;
+            margin: 0;
+            padding: 14px 16px 18px;
+            background: var(--glass), var(--bg);
+            color: var(--text);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            box-shadow: var(--glass-highlight), var(--card-shadow);
+            font-size: 13px;
+            line-height: 1.45;
+            overflow-y: auto;
+            scrollbar-width: thin;
+        }
+        /* hidden unless open: a Firefox without popover (before 125) drops the second rule, so it never covers the form */
+        .help { display: none; }
+        .help:popover-open { display: block; animation: rise-in 240ms var(--ease); }
+        .help::backdrop { background: rgba(0,0,0,0.25); backdrop-filter: blur(2px); }
+        .help h2 {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-title);
+            text-align: center;
+            letter-spacing: -0.01em;
+            padding: 0 30px; /* clear of the close button */
+            margin-bottom: 4px;
+        }
+        .help h3 { /* like the field labels */
+            font-size: 10px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: 600;
+            margin: 14px 0 6px;
+        }
+        .help p, .help li { color: var(--text-secondary); }
+        .help ul { padding-left: 16px; }
+        .help li + li { margin-top: 5px; }
+        .help .example { /* a name as it would be typed: a small recessed field */
+            white-space: nowrap;
+            color: var(--text);
+            background: var(--field-bg);
+            border: 1px solid var(--field-border);
+            border-radius: 6px;
+            padding: 0 5px;
         }
 
         /* Fill whatever width the user gives the sidebar */
@@ -31,13 +252,13 @@
             min-height: 600px; /* allow taller content */
             /* faint ambient light behind the glass, fixed so it doesn't scroll */
             background:
-                radial-gradient(120% 55% at 50% -12%, rgba(140,160,190,0.10), transparent 60%),
-                radial-gradient(90% 45% at 100% 105%, rgba(120,130,150,0.06), transparent 60%),
-                #17181a;
+                radial-gradient(120% 55% at 50% -12%, var(--ambient-top), transparent 60%),
+                radial-gradient(90% 45% at 100% 105%, var(--ambient-bottom), transparent 60%),
+                var(--bg);
             background-attachment: fixed;
             font-family: -apple-system, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             padding: 14px;
-            color: #e6e6e6;
+            color: var(--text);
             overflow: hidden; /* prevent flicker */
         }
 
@@ -56,10 +277,11 @@
         h1 {
             font-size: 16px;
             font-weight: 600;
-            color: #ffffff;
+            color: var(--text-title);
             text-align: center;
             letter-spacing: -0.01em;
             margin-bottom: 4px;
+            padding: 0 30px; /* keeps a long title clear of the theme toggle */
         }
 
         /* Card-like input area: a frosted glass panel */
@@ -72,7 +294,7 @@
             border-radius: 12px;
             padding: 14px;
             border: 1px solid var(--glass-border);
-            box-shadow: var(--glass-highlight), 0 10px 30px rgba(0,0,0,0.35);
+            box-shadow: var(--glass-highlight), var(--card-shadow);
             overflow: visible;
         }
 
@@ -92,7 +314,7 @@
 
         label.input-label {
             font-size: 10px;
-            color: #9aa0a6;
+            color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: normal;
             font-weight: 600;
@@ -109,31 +331,76 @@
             border: 1px solid rgba(255,255,255,0.03);
         }
 
-        input[type="text"] {
+        input[type="text"], select {
             width: 100%;
-            background: rgba(0,0,0,0.18); /* recessed into the glass */
-            border: 1px solid rgba(255,255,255,0.06);
+            background-color: var(--field-bg); /* recessed into the glass */
+            border: 1px solid var(--field-border);
             border-radius: 8px;
             padding: 10px 10px;
-            color: #e6e6e6;
+            color: var(--text);
             font-size: 13px;
             font-family: inherit;
             transition: background 160ms var(--ease), border-color 160ms var(--ease), box-shadow 160ms var(--ease);
             outline: none;
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+            box-shadow: var(--field-inset);
         }
 
-        input[type="text"]:hover { border-color: rgba(255,255,255,0.09); }
+        input[type="text"]:hover, select:hover { border-color: var(--field-border-hover); }
 
-        input[type="text"]:focus {
-            background: rgba(0,0,0,0.24);
-            border-color: rgba(255,255,255,0.18);
-            box-shadow: inset 0 1px 2px rgba(0,0,0,0.25), 0 0 0 3px rgba(255,255,255,0.05);
+        input[type="text"]:focus, select:focus {
+            background-color: var(--field-bg-focus);
+            border-color: var(--field-border-focus);
+            box-shadow: var(--field-inset), var(--field-ring);
         }
 
         input[type="text"]::placeholder {
-            color: #7e8488;
+            color: var(--text-placeholder);
         }
+
+        /* selects look like the text fields, with a chevron in place of the native arrow */
+        select {
+            appearance: none;
+            cursor: pointer;
+            padding-right: 30px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239aa0a6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+        }
+        select option { background-color: var(--option-bg); color: var(--text); }
+
+        /* author display rules (e.g. .input-group's flex) would otherwise show hidden fields */
+        [hidden] { display: none !important; }
+
+        /* MP3/MP4 switch: a glass segmented control; the radios stay focusable for the keyboard */
+        .format-switch {
+            position: relative;
+            display: flex;
+            gap: 4px;
+            padding: 3px;
+            background: var(--field-bg);
+            border: 1px solid var(--field-border);
+            border-radius: 999px;
+            box-shadow: var(--field-inset);
+        }
+        .format-switch input { position: absolute; opacity: 0; pointer-events: none; }
+        .format-switch label {
+            flex: 1 1 0;
+            text-align: center;
+            padding: 6px 10px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 180ms var(--ease), color 180ms var(--ease), box-shadow 180ms var(--ease);
+        }
+        .format-switch label:hover { color: var(--text-secondary); }
+        .format-switch input:checked + label {
+            background: var(--pill);
+            color: var(--pill-text);
+            box-shadow: var(--switch-shadow);
+        }
+        .format-switch input:focus-visible + label { box-shadow: var(--focus-ring); }
 
         /* Actions row - stack vertically for narrow sidebar */
         .actions {
@@ -147,10 +414,10 @@
 
         /* Pill style used for primary-like actions (Download, Open in app) */
         .action-pill {
-            background: linear-gradient(180deg, rgba(255,255,255,0.11) 0%, rgba(255,255,255,0.045) 100%);
+            background: var(--pill);
             backdrop-filter: var(--glass-blur);
-            color: #f3f4f6;
-            border: 1px solid rgba(255,255,255,0.10);
+            color: var(--pill-text);
+            border: 1px solid var(--pill-border);
             padding: 10px 18px;
             font-family: inherit;
             font-size: 14px;
@@ -159,39 +426,39 @@
             cursor: pointer;
             transition: transform 180ms var(--ease), background 180ms var(--ease), border-color 180ms var(--ease), box-shadow 180ms var(--ease), opacity 180ms var(--ease);
             min-width: 140px;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 6px 18px rgba(0,0,0,0.35);
+            box-shadow: var(--pill-shadow);
             letter-spacing: normal;
             margin: 0 auto; /* center in sidebar */
             display: inline-block;
             text-align: center;
         }
         .action-pill:hover {
-            background: linear-gradient(180deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.06) 100%);
-            border-color: rgba(255,255,255,0.14);
+            background: var(--pill-hover);
+            border-color: var(--pill-border-hover);
             transform: translateY(-1px);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.16), 0 10px 24px rgba(0,0,0,0.4);
+            box-shadow: var(--pill-shadow-hover);
         }
         .action-pill:active { transform: scale(0.97); transition-duration: 80ms; } /* iOS-style press */
 
-        /* Primary action: the same glass tinted with Apple's dark-mode system blue */
+        /* Primary action: tinted with the system blue (see --primary) */
         .action-pill.primary {
-            background: linear-gradient(180deg, rgba(10,132,255,0.34) 0%, rgba(10,132,255,0.18) 100%);
-            border-color: rgba(10,132,255,0.45);
-            color: #eaf3ff;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 6px 18px rgba(10,132,255,0.16), 0 6px 18px rgba(0,0,0,0.3);
+            background: var(--primary);
+            border-color: var(--primary-border);
+            color: var(--primary-text);
+            box-shadow: var(--primary-shadow);
         }
         .action-pill.primary:hover {
-            background: linear-gradient(180deg, rgba(10,132,255,0.44) 0%, rgba(10,132,255,0.24) 100%);
-            border-color: rgba(10,132,255,0.6);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 10px 24px rgba(10,132,255,0.22), 0 10px 24px rgba(0,0,0,0.35);
+            background: var(--primary-hover);
+            border-color: var(--primary-border-hover);
+            box-shadow: var(--primary-shadow-hover);
         }
         .action-pill:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 
         /* Secondary small button - default (full width) */
         .secondary-btn {
-            background: rgba(255,255,255,0.03);
-            color: #d7dadd;
-            border: 1px solid rgba(255,255,255,0.07);
+            background: var(--secondary-bg);
+            color: var(--text-secondary);
+            border: 1px solid var(--secondary-border);
             padding: 8px 10px;
             font-family: inherit;
             font-size: 13px;
@@ -202,12 +469,12 @@
             width: 100%;
             text-align: left;
         }
-        .secondary-btn:hover { background: rgba(255,255,255,0.07); border-color: rgba(255,255,255,0.11); }
+        .secondary-btn:hover { background: var(--secondary-bg-hover); border-color: var(--secondary-border-hover); }
         .secondary-btn:active { transform: scale(0.96); transition-duration: 80ms; }
 
         .action-pill:focus-visible, .secondary-btn:focus-visible {
             outline: none;
-            box-shadow: 0 0 0 3px rgba(255,255,255,0.12);
+            box-shadow: var(--focus-ring);
         }
 
         /* Narrow variant for select-folder button (inline next to input) */
@@ -237,6 +504,7 @@
            (hovering the folder row's input shows the helper below the row) */
         .input-row:has(> input[type="text"]:hover) + .helper,
         .input-group > input[type="text"]:hover + .helper,
+        .input-group > select:hover + .helper,
         .input-group > .helper:hover {
             transition-delay: 140ms; /* wait briefly before showing */
             max-height: 48px;
@@ -256,7 +524,7 @@
             /* the result kind tints the glass: --result-color as r,g,b */
             background: linear-gradient(180deg, rgba(var(--result-rgb, 74,144,226),0.10), rgba(var(--result-rgb, 74,144,226),0.04));
             backdrop-filter: var(--glass-blur);
-            color: #dfe6e9;
+            color: var(--result-text);
             border: 1px solid rgba(var(--result-rgb, 74,144,226),0.20);
             box-shadow: var(--glass-highlight);
         }
@@ -276,17 +544,17 @@
             box-shadow: 0 0 8px var(--result-color, #4a90e2); /* soft glow */
         }
 
-        #result.success { --result-color: #2ecc71; --result-rgb: 46,204,113; color:#bfecc8; }
-        #result.error, #hostNotice.error { --result-color: #ff6b6b; --result-rgb: 255,107,107; color:#ffd6d6; }
-        #result.warning, #hostNotice.warning { --result-color: #f39c12; --result-rgb: 243,156,18; color:#ffecc5; }
-        #result.info, #hostNotice.info, #toolbarTip.info { --result-color: #4a90e2; --result-rgb: 74,144,226; color:#cfe9ff; }
-        #toolbarTip .secondary-btn { display: block; margin-top: 8px; color: #dfe6e9; padding: 5px 10px; font-size: 12px; }
+        #result.success { --result-color: #2ecc71; --result-rgb: 46,204,113; color: var(--success-text); }
+        #result.error, #hostNotice.error { --result-color: #ff6b6b; --result-rgb: 255,107,107; color: var(--error-text); }
+        #result.warning, #hostNotice.warning { --result-color: #f39c12; --result-rgb: 243,156,18; color: var(--warning-text); }
+        #result.info, #hostNotice.info, #toolbarTip.info { --result-color: #4a90e2; --result-rgb: 74,144,226; color: var(--info-text); }
+        #toolbarTip .secondary-btn { display: block; margin-top: 8px; color: var(--result-text); padding: 5px 10px; font-size: 12px; }
         #result a, #hostNotice a { color: inherit; font-weight: 600; text-decoration: underline; }
         #result small, #hostNotice small { display: block; margin-top: 4px; font-size: 11px; opacity: 0.8; }
         #result .file-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-        #result .file-actions .secondary-btn { color: #dfe6e9; padding: 5px 10px; font-size: 12px; }
+        #result .file-actions .secondary-btn { color: var(--result-text); padding: 5px 10px; font-size: 12px; }
 
-        .loader { display:none; width:18px; height:18px; border:2px solid rgba(255,255,255,0.08); border-top-color:#cfd6da; border-radius:50%; animation:spin 0.8s linear infinite; margin:10px auto; }
+        .loader { display:none; width:18px; height:18px; border:2px solid var(--loader-track); border-top-color: var(--loader-head); border-radius:50%; animation:spin 0.8s linear infinite; margin:10px auto; }
         @keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 
         @media (prefers-reduced-motion: reduce) {
@@ -300,18 +568,76 @@
             max-height: 0; /* collapsed until hovered (see the :hover rules above) */
             opacity: 0;
             overflow: hidden;
-            color: #a8b0b4; /* slightly brighter for readability */
-            background: rgba(255,255,255,0.01);
+            color: var(--text-helper);
+            background: var(--helper-bg);
             border-radius: 8px;
             padding: 0 6px;
             font-size: 12px;
             transition: max-height 160ms ease, opacity 160ms ease, padding 160ms ease;
         }
+        /* a note under a field that stays visible, unlike .helper */
+        .field-warning { margin-top: 6px; padding: 0 6px; font-size: 12px; color: var(--warning-text); }
+        .field-warning[hidden] { display: none; }
     </style>
 </head>
 <body>
+    <!-- shows the icon of the current theme (data-theme, set by theme.js) -->
+    <button id="themeToggle" class="theme-toggle" type="button" data-theme="auto">
+        <svg class="icon-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor"/></svg>
+        <svg class="icon-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <svg class="icon-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>
+    </button>
+    <button class="help-toggle" type="button" popovertarget="help" title="How it works" aria-label="How it works">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 9a3 3 0 1 1 4 2.8c-.6.3-1 .9-1 1.6V14M12 18h.01"/></svg>
+    </button>
+
+    <div id="help" class="help" popover role="dialog" aria-labelledby="helpTitle">
+        <button class="help-close" type="button" popovertarget="help" popovertargetaction="hide" title="Close" aria-label="Close">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>
+        </button>
+        <h2 id="helpTitle">How it works</h2>
+
+        <h3>File names</h3>
+        <ul>
+            <li>Empty filename: named after the video title.</li>
+            <li>Clutter like <span class="example">(Official Video)</span> or <span class="example">[HD]</span> is removed.</li>
+            <li>Name it <span class="example">Artist - Song</span> to set the artist and title your player shows.</li>
+            <li>Only a spaced dash splits: "Jay-Z" stays whole.</li>
+        </ul>
+
+        <h3>The file</h3>
+        <ul>
+            <li>MP3: best quality, with the thumbnail as cover art.</li>
+            <li>MP4: the quality you pick (or the nearest the video has), never re-encoded.</li>
+            <li>Album, year and track number when the site has them.</li>
+        </ul>
+
+        <h3>Saving</h3>
+        <ul>
+            <li>Your folder is remembered, default <span class="example">Documents\YT-MP3-Downloads</span>.</li>
+            <li>Existing files are never overwritten.</li>
+        </ul>
+
+        <h3>Shortcuts</h3>
+        <ul>
+            <li>Open the sidebar on a video: the link fills in.</li>
+            <li>Right-click a video link: "Download as MP3" or "as MP4" (with your MP4 choices). SoundCloud, Bandcamp and Mixcloud links: MP3 only.</li>
+            <li>Playlists and albums: only the first track.</li>
+        </ul>
+
+        <h3>Updates</h3>
+        <ul>
+            <li>Automatic. A download after a YouTube change may take a bit longer.</li>
+        </ul>
+    </div>
     <div class="container">
-        <h1>YouTube MP3 Downloader</h1>
+        <h1>MP3 &amp; MP4 Downloader</h1>
+        <div class="format-switch" role="radiogroup" aria-label="Format">
+            <input type="radio" name="format" id="formatMp3" value="mp3" checked>
+            <label for="formatMp3">MP3</label>
+            <input type="radio" name="format" id="formatMp4" value="mp4">
+            <label for="formatMp4">MP4</label>
+        </div>
         <div id="hostNotice" role="alert"></div>
         <div id="toolbarTip" role="note">
             <span>You can open this from the sidebar, so you don't need the toolbar button. To remove it, right-click it and choose "Unpin from Toolbar".
@@ -323,6 +649,8 @@
                 <label class="input-label" for="urlInput">Video URL</label>
                 <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." aria-describedby="urlHelp">
                 <div id="urlHelp" class="helper">Paste a link or open the page: YouTube, SoundCloud, Bandcamp, Mixcloud...</div>
+                <!-- sidebar.js: shown for MP4 and a link of an audio site (a warning only, the host decides) -->
+                <div id="urlWarning" class="field-warning" role="status" hidden>SoundCloud, Bandcamp and Mixcloud have no video: choose MP3</div>
             </div>
 
             <div class="input-group">
@@ -340,6 +668,19 @@
                 <div id="filenameHelp" class="helper">Custom filename for the downloaded MP3 file</div>
             </div>
 
+            <!-- shown only for their format (data-format); sidebar.js fills the options from formats.js -->
+            <div class="input-group" data-format="mp4" hidden>
+                <label class="input-label" for="qualitySelect">Quality</label>
+                <select id="qualitySelect" data-option="quality" aria-describedby="qualityHelp"></select>
+                <div id="qualityHelp" class="helper">Higher quality means a bigger file and a longer download</div>
+            </div>
+
+            <div class="input-group" data-format="mp4" hidden>
+                <label class="input-label" for="codecSelect">Video Codec</label>
+                <select id="codecSelect" data-option="codec" aria-describedby="codecHelp"></select>
+                <div id="codecHelp" class="helper">Compatible plays on every device; Best is smaller but may not play in older players</div>
+            </div>
+
         </div>
 
         <div class="actions">
@@ -352,6 +693,8 @@
      </div>
 
      <script src="youtube.js"></script>
+     <script src="naming.js"></script>
+     <script src="formats.js"></script>
      <script src="sidebar.js"></script>
 </body>
 </html>

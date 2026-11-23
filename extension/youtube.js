@@ -1,9 +1,9 @@
-/* exported isYouTubeUrl, isKnownSiteUrl, isWebUrl */
+/* exported isYouTubeUrl, isKnownSiteUrl, isAudioSiteUrl, isWebUrl */
 
 // Shared by background.js and sidebar.js (loaded as a plain script in both).
 const YOUTUBE_HOSTS = new Set(['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be']);
 // Other sites yt-dlp downloads from without an account (tried 2026-10-24): the host (with
-// "www."/"m." or, for subdomains, any "<name>.") and what a track's path looks like. Their
+// "www."/"m."; a site with subdomains only as "<name>.<host>") and what a track's path looks like. Their
 // links get the context menu and fill the sidebar's URL field; any other http(s) URL can
 // still be pasted (see isWebUrl).
 const AUDIO_SITES = [
@@ -31,16 +31,21 @@ function isYouTubeUrl(value) {
   const url = parseWebUrl(value);
   if (!url || !YOUTUBE_HOSTS.has(url.hostname)) return false;
   if (url.hostname === 'youtu.be') return url.pathname.length > 1;
-  return (url.pathname === '/watch' && url.searchParams.has('v')) ||
+  return (url.pathname === '/watch' && Boolean(url.searchParams.get('v'))) ||
     /^\/(shorts|live)\/[^/]+/.test(url.pathname);
 }
 
 // A YouTube video or a track on one of AUDIO_SITES.
 function isKnownSiteUrl(value) {
-  if (isYouTubeUrl(value)) return true;
+  return isYouTubeUrl(value) || isAudioSiteUrl(value);
+}
+
+// A track on one of AUDIO_SITES. They have no video, so an MP4 of one fails (the host
+// decides: yt-dlp reports a link's streams, these checks only know the URL).
+function isAudioSiteUrl(value) {
   const url = parseWebUrl(value);
   if (!url) return false;
   const host = url.hostname.replace(/^(www|m)\./, '');
-  const site = AUDIO_SITES.find(s => host === s.host || (s.subdomains && host.endsWith(`.${s.host}`)));
+  const site = AUDIO_SITES.find(s => (s.subdomains ? host.endsWith(`.${s.host}`) : host === s.host));
   return Boolean(site) && site.path.test(url.pathname);
 }

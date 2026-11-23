@@ -4,10 +4,8 @@ The extension relies on: exactly one `final: true` response per request, warning
 with `final: false`, and nothing but valid frames on stdout.
 """
 
-import functools
 import io
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,8 +13,10 @@ from typing import Any
 
 import pytest
 
-from conftest import EmbedCall, FakeYtDlp
-from ytmp3_host import MP3, __version__, config, core, health, native_messaging, updater
+from conftest import EmbedCall, FakeYtDlp, point_yt_dlp_at
+from ytmp3_host import MP3, __version__, config, files, health, native_messaging, processes, updater, ytdlp
+from ytmp3_host.media_format import MediaFormat, Mp3Format, Mp4Format
+from ytmp3_host.naming import MAX_FILENAME_CHARS, filename_too_long_message
 from ytmp3_host.native_messaging import LENGTH_PREFIX
 
 URL = "https://www.youtube.com/watch?v=abc123"
@@ -40,12 +40,13 @@ def parse_frames(data: bytes) -> list[dict[str, Any]]:
     return messages
 
 
-def run_host(monkeypatch: pytest.MonkeyPatch, stdin: bytes) -> list[dict[str, Any]]:
+def run_host(monkeypatch: pytest.MonkeyPatch, stdin: bytes, *, with_progress: bool = False) -> list[dict[str, Any]]:
     """Run MP3.main() in this process until stdin is exhausted and return the decoded responses.
 
     sys.stdin/sys.stdout are replaced with in-memory text streams over bytes, which is
     what read_message/send_message use (through .buffer). End of stdin is what Firefox
-    does when it closes the port, so main() must exit with code 0.
+    does when it closes the port, so main() must exit with code 0. Every frame is checked,
+    but download progress responses are left out unless with_progress is set.
     """
     stdout = io.BytesIO()
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(stdin)))
@@ -55,7 +56,8 @@ def run_host(monkeypatch: pytest.MonkeyPatch, stdin: bytes) -> list[dict[str, An
         MP3.main()
     fake_stdout.flush()  # catch a stray print() as well
     assert info.value.code == 0
-    return parse_frames(stdout.getvalue())
+    responses = parse_frames(stdout.getvalue())
+    return responses if with_progress else [r for r in responses if "progress" not in r]
 
 
 def requests(*messages: object) -> bytes:
@@ -68,11 +70,11 @@ def finals(responses: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def assert_one_final_per_request(responses: list[dict[str, Any]], request_count: int) -> None:
-    """The contract background.js relies on: one final per request, last message final, warnings never final."""
+    """The contract background.js relies on: one final per request, last message final, warnings and infos never final."""
     assert len(finals(responses)) == request_count
     assert responses[-1]["final"] is True
-    assert all(r["status"] in {"success", "error", "warning"} for r in responses)
-    assert all(r["final"] is False for r in responses if r["status"] == "warning")
+    assert all(r["status"] in {"success", "error", "warning", "info"} for r in responses)
+    assert all(r["final"] is False for r in responses if r["status"] in {"warning", "info"})
 
 
 # --- framing ------------------------------------------------------------------
@@ -147,6 +149,34 @@ def test_get_current_folder_creates_the_default(monkeypatch: pytest.MonkeyPatch,
     assert default_folder.is_dir()
 
 
+def test_a_window_that_can_not_open_is_one_final_error_and_the_host_exits(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fail(*_args: object) -> None:
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(MP3, "open_gui", _fail)
+    [response] = run_host(monkeypatch, requests({"action": "download_gui"}, {"action": "get_current_folder"}))
+    assert response == {"status": "error", "message": "Could not open the app window: no display", "final": True}
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        ({}, Mp3Format()),  # sidebars before 2.2.0 send no format
+        ({"format": "mp4", "quality": "720", "codec": "compatible"}, Mp4Format(quality="720", codec="compatible")),
+        ({"format": "flac"}, Mp3Format()),  # only a preselection: the window still opens
+        ({"format": "mp4", "quality": "4320"}, Mp3Format()),
+    ],
+)
+def test_the_window_opens_with_the_requested_format(
+    monkeypatch: pytest.MonkeyPatch, fields: dict[str, str], expected: MediaFormat
+) -> None:
+    opened: list[tuple[object, ...]] = []
+    monkeypatch.setattr(MP3, "open_gui", lambda *args: opened.append(args))
+    with pytest.raises(SystemExit):
+        MP3.download_gui({"action": "download_gui", "url": "https://youtu.be/x", **fields})
+    assert opened == [("https://youtu.be/x", "", "", expected)]
+
+
 # --- show_in_folder and play --------------------------------------------------
 
 
@@ -171,8 +201,20 @@ def test_show_in_folder_and_play_open_the_downloaded_mp3(
     assert opened == [("show", mp3), ("play", mp3)]
 
 
-@pytest.mark.parametrize("name", ["gone.mp3", "program.exe", None])
-def test_play_refuses_anything_but_an_existing_mp3(
+def test_show_in_folder_and_play_open_a_downloaded_mp4(
+    monkeypatch: pytest.MonkeyPatch, opened: list[tuple[str, Path]], tmp_path: Path
+) -> None:
+    mp4 = tmp_path / "Artist - Video.mp4"
+    mp4.write_bytes(b"x")
+    responses = run_host(monkeypatch, requests(
+        {"action": "show_in_folder", "path": str(mp4)}, {"action": "play", "path": str(mp4)}
+    ))
+    assert responses == [{"status": "success", "final": True}] * 2
+    assert opened == [("show", mp4), ("play", mp4)]
+
+
+@pytest.mark.parametrize("name", ["gone.mp3", "gone.mp4", "program.exe", None])
+def test_play_refuses_anything_but_an_existing_media_file(
     monkeypatch: pytest.MonkeyPatch, opened: list[tuple[str, Path]], tmp_path: Path, name: str | None
 ) -> None:
     (tmp_path / "program.exe").write_bytes(b"x")
@@ -180,7 +222,7 @@ def test_play_refuses_anything_but_an_existing_mp3(
     if name:
         request["path"] = str(tmp_path / name)
     [response] = run_host(monkeypatch, frame(request))
-    assert response == {"status": "error", "message": "The MP3 was moved or deleted", "final": True}
+    assert response == {"status": "error", "message": "The file was moved or deleted", "final": True}
     assert opened == []
 
 
@@ -194,14 +236,15 @@ def test_open_failure_is_one_final_error(monkeypatch: pytest.MonkeyPatch, tmp_pa
     monkeypatch.setattr(native_messaging, "show_in_folder", _fail)
     [response] = run_host(monkeypatch, frame({"action": "show_in_folder", "path": str(mp3)}))
     assert response["status"] == "error" and response["final"] is True
+    assert response["message"].startswith("Could not open the MP3: ")
     assert "Explorer could not open the folder" in response["message"]
 
 
 def test_play_opens_through_explorer_outside_the_job(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     launched: list[object] = []
-    monkeypatch.setattr(updater, "launch_detached", launched.append)
+    monkeypatch.setattr(processes, "launch_detached", launched.append)
     mp3 = tmp_path / "A, B & C - 100% Song.mp3"
-    core.open_file(mp3)
+    files.open_file(mp3)
     # one command line, path quoted: explorer.exe splits an unquoted path at commas
     assert launched == [f'explorer.exe "{mp3}"']
 
@@ -218,6 +261,7 @@ def test_get_version_is_one_final_with_the_host_and_tool_state(
     assert responses[0] == {
         "status": "success",
         "version": __version__,
+        "formats": ["mp3", "mp4"],
         # the latest releases are unknown: no_github (conftest) keeps tests off the network
         "latest": None,
         "outdated": None,
@@ -227,6 +271,16 @@ def test_get_version_is_one_final_with_the_host_and_tool_state(
         "js_runtime": {"name": "deno", "installed": False},
         "final": True,
     }
+
+
+def test_get_version_removes_the_unused_yt_dlp_files(monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp) -> None:
+    # the version Firefox uses answers get_version, so the installer's switch to it is done (test_updater
+    # tests what is removed); MP3 binds it with a lazy import, so it is patched there
+    calls: list[str] = []
+    monkeypatch.setattr(MP3, "remove_unused_yt_dlp", lambda: calls.append("removed"))
+    [response] = run_host(monkeypatch, frame({"action": "get_version"}))
+    assert calls == ["removed"]
+    assert response["status"] == "success"
 
 
 def test_get_version_with_a_broken_yt_dlp_still_succeeds(monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp) -> None:
@@ -272,6 +326,42 @@ def test_a_failed_update_is_one_final_error_with_its_reason(monkeypatch: pytest.
     assert responses[0] == {"status": "error", "message": "GitHub could not be reached", "final": True}
 
 
+# --- mp3.exe --install-yt-dlp, run by the installer ----------------------------------
+
+
+def test_install_yt_dlp_for_setup_exits_0_with_a_working_yt_dlp(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp
+) -> None:
+    # offline (no_github), so the real updater keeps the working one; the updater imported the
+    # version command before the fixture wrapped it in health
+    monkeypatch.setattr(updater, "yt_dlp_version_command", health.yt_dlp_version_command)
+    fake_yt_dlp.set(version="2026.09.01")
+    assert MP3.install_yt_dlp_for_setup() == 0
+
+
+def test_install_yt_dlp_for_setup_exits_1_and_logs_why_without_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # offline with nothing installed: the real updater raises; the installer only reads the exit code
+    point_yt_dlp_at(monkeypatch, tmp_path / "yt-dlp.exe")
+    assert MP3.install_yt_dlp_for_setup() == 1
+    [record] = [r for r in caplog.records if r.name == "ytmp3_host.MP3"]
+    assert record.levelname == "ERROR" and record.exc_info is not None
+    assert "yt-dlp could not be downloaded" in str(record.exc_info[1])
+
+
+def test_install_yt_dlp_for_setup_exits_1_on_an_unexpected_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # an uncaught exception would exit 1 too, but its traceback would only go to the hidden stderr
+    def _crash() -> str:
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(MP3, "install_yt_dlp", _crash)
+    assert MP3.install_yt_dlp_for_setup() == 1
+    assert "Access is denied" in caplog.text
+
+
 # --- headless download --------------------------------------------------------
 
 
@@ -279,6 +369,15 @@ def test_a_failed_update_is_one_final_error_with_its_reason(monkeypatch: pytest.
 def test_invalid_url(monkeypatch: pytest.MonkeyPatch, url: object) -> None:
     [response] = run_host(monkeypatch, frame({"action": "download", "url": url}))
     assert response == {"status": "error", "message": "Invalid URL", "final": True}
+
+
+def test_a_filename_windows_can_not_hold_fails_before_downloading(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    request = {"action": "download", "url": URL, "folder": str(out_dir), "filename": "x" * (MAX_FILENAME_CHARS + 1)}
+    [response] = run_host(monkeypatch, frame(request))  # only this answer: yt-dlp never ran
+    assert response == {"status": "error", "message": filename_too_long_message(out_dir.resolve()), "final": True}
+    assert fake_embed == []
 
 
 def test_successful_download(
@@ -355,14 +454,65 @@ def test_yt_dlp_failure_is_one_readable_error(
     assert response["message"].endswith("failed: [youtube] abc123: Video unavailable")
 
 
+def test_an_mp4_of_a_link_without_video_is_one_error_without_a_repair(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    fake_yt_dlp.set(info={"vcodec": "none"})
+    request = {"action": "download", "url": URL, "folder": str(out_dir), "format": "mp4"}
+    [response] = run_host(monkeypatch, frame(request))  # no "checking for a yt-dlp update" info
+    assert response == {
+        "status": "error",
+        "message": "Download failed: This link has no video, download it as MP3 instead",
+        "final": True,
+    }
+
+
 def test_timeout_is_one_error(
     monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
 ) -> None:
     fake_yt_dlp.set("hang")
-    monkeypatch.setattr(core, "download_audio", functools.partial(core.download_audio, timeout=1))
+    monkeypatch.setattr(ytdlp, "DOWNLOAD_TIMEOUT_S", 1)
     [response] = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
     assert response["status"] == "error" and response["final"] is True
     assert response["message"].startswith("Download timed out after 1 s")
+
+
+def test_a_longer_timeout_is_sent_as_a_deadline_without_a_message(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # the extension extends its own timeout with it; with no message, no sidebar shows it
+    fake_yt_dlp.set(info={"filesize_approx": 2_000_000_000})
+    deadline, response = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}))
+    expected = ytdlp.download_timeout({"filesize_approx": 2_000_000_000}, Mp3Format(), ytdlp.DOWNLOAD_TIMEOUT_S)
+    assert expected > ytdlp.DOWNLOAD_TIMEOUT_S
+    assert deadline == {"status": "info", "deadline_s": expected, "final": False}
+    assert response["status"] == "success" and response["final"] is True
+
+
+def test_progress_is_sent_without_a_message_and_never_drops_a_stage(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    # the fake prints 0 %, 42.5 % and 100 % within milliseconds: inside the interval only the
+    # first one, 100 % and the new stage get through; without a message, older sidebars ignore them
+    monkeypatch.setattr(native_messaging, "PROGRESS_INTERVAL_S", 60)
+    responses = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}), with_progress=True)
+    assert_one_final_per_request(responses, 1)
+    *progress, final = responses
+    assert progress == [
+        {"status": "info", "progress": {"stage": "downloading", "fraction": 0.0}, "final": False},
+        {"status": "info", "progress": {"stage": "downloading", "fraction": 1.0}, "final": False},
+        {"status": "info", "progress": {"stage": "processing", "fraction": None}, "final": False},
+    ]
+    assert final["status"] == "success"
+
+
+def test_progress_after_the_interval_is_sent(
+    monkeypatch: pytest.MonkeyPatch, fake_yt_dlp: FakeYtDlp, fake_embed: list[EmbedCall], out_dir: Path
+) -> None:
+    monkeypatch.setattr(native_messaging, "PROGRESS_INTERVAL_S", 0)
+    responses = run_host(monkeypatch, frame({"action": "download", "url": URL, "folder": str(out_dir)}), with_progress=True)
+    fractions = [r["progress"]["fraction"] for r in responses if "progress" in r]
+    assert fractions == [0.0, 0.425, 1.0, None]
 
 
 def test_several_requests_in_one_session(
@@ -382,18 +532,11 @@ def test_several_requests_in_one_session(
 # --- the real entry point in its own process ----------------------------------
 
 
-def host_env(tmp_path: Path) -> dict[str, str]:
-    """Environment for a host started as a child process, where monkeypatch can't reach."""
-    env = dict(os.environ)
-    env["YTMP3_LOG_LEVEL"] = "CRITICAL"  # don't write mp3.log into the repo
-    return env
-
-
 def test_host_process_over_real_pipes(tmp_path: Path) -> None:
     # neither request touches a folder: the default one is the user's real Documents
     stdin = requests({"action": "download", "url": "bad"}, {"action": "play", "path": str(tmp_path / "missing.mp3")})
     result = subprocess.run(
-        [sys.executable, "-m", "ytmp3_host.MP3"], input=stdin, capture_output=True, env=host_env(tmp_path), timeout=60
+        [sys.executable, "-m", "ytmp3_host.MP3"], input=stdin, capture_output=True, timeout=60, check=False
     )
     assert result.returncode == 0, result.stderr
     responses = parse_frames(result.stdout)
@@ -401,11 +544,11 @@ def test_host_process_over_real_pipes(tmp_path: Path) -> None:
     assert all(r["final"] for r in responses)
 
 
-def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:
+def test_self_check_runs_instead_of_the_request_loop() -> None:
     # what the installer runs; stdin stays open, so the request loop would block
     result = subprocess.run(
         [sys.executable, "-m", "ytmp3_host.MP3", MP3.SELF_CHECK_ARG],
-        stdin=subprocess.PIPE, capture_output=True, text=True, env=host_env(tmp_path), timeout=60,
+        stdin=subprocess.PIPE, capture_output=True, text=True, timeout=60, check=False,
     )
     assert result.stdout == ""
     if config.FFMPEG_PATH.exists():
@@ -416,15 +559,20 @@ def test_self_check_runs_instead_of_the_request_loop(tmp_path: Path) -> None:
         assert problem.startswith(f"{config.FFMPEG_PATH} does not work")
 
 
-def test_headless_path_does_not_load_the_gui_health_or_updater(tmp_path: Path) -> None:
+def test_headless_path_does_not_load_the_gui_health_or_updater() -> None:
     # host startup must stay light: customtkinter/Tk only load for the GUI actions,
-    # health and the updater (and urllib with them) only for get_version and the updates
+    # health and the updater (and urllib with them) only for get_version and the updates;
+    # play starts the player through processes, not the updater
     code = (
         "import sys, ytmp3_host.MP3, ytmp3_host.native_messaging\n"
-        "heavy = ('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'ytmp3_host.updater',\n"
+        "from pathlib import Path\n"
+        "from ytmp3_host import files, processes\n"
+        "processes.launch_detached = lambda command: None\n"
+        "files.open_file(Path('C:/Song.mp3'))\n"
+        "heavy =('customtkinter', 'tkinter', 'PIL', 'ytmp3_host.gui', 'ytmp3_host.health', 'ytmp3_host.updater',\n"
         "         'ytmp3_host.selfcheck', 'urllib.request')\n"
         "loaded = [m for m in heavy if m in sys.modules]\n"
         "assert not loaded, loaded\n"
     )
-    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=host_env(tmp_path))
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60, check=False)
     assert result.returncode == 0, result.stderr

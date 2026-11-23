@@ -11,9 +11,11 @@ import sys
 import tomllib
 from pathlib import Path
 
-from ytmp3_host import MP3, __version__, config, github, updater
-from ytmp3_host.github import HOST_REPO
-from ytmp3_host.health import is_outdated, parse_version
+from ytmp3_host import MP3, __version__, config, core, github, updater, ytdlp
+from ytmp3_host.github import HOST_REPO, LOOKUP_TIMEOUT_S
+from ytmp3_host.health import VERSION_TIMEOUT_S, is_outdated, parse_version
+from ytmp3_host.media_format import MP4_CODECS, MP4_QUALITIES, media_format_from_request
+from ytmp3_host.naming import MAX_FILENAME_CHARS, MAX_PATH_CHARS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -72,15 +74,99 @@ def test_the_extension_links_the_installer_the_updater_downloads() -> None:
     assert url.group(1) == f"{github.GITHUB_URL}/{HOST_REPO}/releases/latest/download/{updater.INSTALLER_ASSET}"
 
 
-def test_the_installer_downloads_and_checks_yt_dlp_like_the_updater() -> None:
-    release = iss_setting(r'^#define\s+YtDlpReleaseURL\s+"([^"]+)"')
-    assert release == f"{github.GITHUB_URL}/{github.YT_DLP_REPO}/releases/latest/download/"
-    assert iss_setting(r'^#define\s+YtDlpTempName\s+"([^"]+)"') == updater.YT_DLP_ASSET
-    assert iss_setting(r'^#define\s+YtDlpSumsName\s+"([^"]+)"') == updater.YT_DLP_SUMS
+def test_the_installer_runs_the_self_check_and_the_yt_dlp_install_the_host_knows() -> None:
+    script = INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    assert f"'{MP3.SELF_CHECK_ARG}'" in script
+    assert f"'{MP3.INSTALL_YT_DLP_ARG}'" in script
 
 
-def test_the_installer_runs_the_self_check_the_host_knows() -> None:
-    assert f"'{MP3.SELF_CHECK_ARG}'" in INSTALLER_SCRIPT.read_text(encoding="utf-8")
+def test_the_installer_knows_the_yt_dlp_folder_and_the_uninstaller_removes_it() -> None:
+    # the folder sits in {app}, which is config.INSTALL_DIR in the installed layout
+    folder = iss_setting(r'^#define\s+YtDlpDir\s+"([^"]+)"')
+    assert (folder, config.YT_DLP_DIR.parent) == (config.YT_DLP_DIR.name, config.INSTALL_DIR)
+    uninstall = INSTALLER_SCRIPT.read_text(encoding="utf-8").split("[UninstallDelete]")[1].split("\n[")[0]
+    assert 'Type: filesandordirs; Name: "{app}\\{#YtDlpDir}"' in uninstall
+
+
+def test_the_extension_and_the_installer_use_the_same_identifiers() -> None:
+    manifest = json.loads((REPO_ROOT / "extension" / "manifest.json").read_text(encoding="utf-8"))
+    extension_id = manifest["browser_specific_settings"]["gecko"]["id"]
+    background = (REPO_ROOT / "extension" / "background.js").read_text(encoding="utf-8")
+    host_name = re.search(r"^const NATIVE_HOST_NAME = '([^']+)';", background, flags=re.MULTILINE)
+    assert host_name, "NATIVE_HOST_NAME not found in background.js"
+    assert iss_setting(r'^#define\s+ExtensionID\s+"([^"]+)"') == extension_id
+    assert iss_setting(r'^#define\s+NativeHostName\s+"([^"]+)"') == host_name.group(1)
+    dev_manifest = json.loads((REPO_ROOT / "packaging" / "app_manifest.dev.json").read_text(encoding="utf-8"))
+    assert (dev_manifest["name"], dev_manifest["allowed_extensions"]) == (host_name.group(1), [extension_id])
+
+
+def action_timeouts() -> str:
+    background = (REPO_ROOT / "extension" / "background.js").read_text(encoding="utf-8")
+    block = re.search(r"const ACTION_TIMEOUTS_MS = \{(.*?)};", background, flags=re.DOTALL)
+    assert block, "ACTION_TIMEOUTS_MS not found in background.js"
+    return block.group(1)
+
+
+def test_every_action_the_extension_sends_exists_in_the_host() -> None:
+    # the host treats an unknown action as a download
+    actions = re.findall(r"^\s*(\w+):", action_timeouts(), flags=re.MULTILINE)
+    assert actions and set(actions) <= set(MP3.ACTIONS)
+
+
+def timeout_s(action: str) -> int:
+    minutes = re.search(rf"^\s*{action}: (\d+) \* 60 \* 1000", action_timeouts(), flags=re.MULTILINE)
+    assert minutes, f"the {action} timeout not found in ACTION_TIMEOUTS_MS"
+    return int(minutes.group(1)) * 60
+
+
+# an update waits for another host's update, checks the installed tool, looks up the tag and
+# fetches the checksums; each download may take its deadline plus a last read, then a test-run
+UPDATE_START_S = updater.LOCK_TIMEOUT_S + VERSION_TIMEOUT_S + LOOKUP_TIMEOUT_S + updater.SOCKET_TIMEOUT_S
+YT_DLP_DOWNLOAD_S = updater.YT_DLP_DOWNLOAD_S + updater.SOCKET_TIMEOUT_S + VERSION_TIMEOUT_S
+# the onedir build fails its test-run, so the single-file exe is checked, then downloaded too
+YT_DLP_UPDATE_S = UPDATE_START_S + YT_DLP_DOWNLOAD_S + VERSION_TIMEOUT_S + YT_DLP_DOWNLOAD_S
+DENO_INSTALL_S = UPDATE_START_S + updater.DENO_DOWNLOAD_S + updater.SOCKET_TIMEOUT_S + VERSION_TIMEOUT_S
+
+
+def test_the_extension_waits_longer_than_the_slowest_download() -> None:
+    # without a deadline_s the extension waits this long from the start, with one this long after
+    # the deadline: both must cover the embed, a repair and a retry that sends no deadline_s
+    worst_case = 2 * (ytdlp.DOWNLOAD_TIMEOUT_S + core.EMBED_TIMEOUT_CAP_S) + YT_DLP_UPDATE_S + DENO_INSTALL_S
+    assert timeout_s("download") > worst_case
+
+
+def test_the_extension_waits_longer_than_the_slowest_yt_dlp_update() -> None:
+    assert timeout_s("update_yt_dlp") > YT_DLP_UPDATE_S
+
+
+def test_the_extension_waits_longer_than_the_slowest_get_version() -> None:
+    seconds = re.search(r"^\s*get_version: (\d+) \* 1000", action_timeouts(), flags=re.MULTILINE)
+    assert seconds, "the get_version timeout not found in ACTION_TIMEOUTS_MS"
+    # the cleanup's version check, then host_status's, with the GitHub lookups running alongside
+    worst_case = updater.CLEANUP_VERSION_TIMEOUT_S + max(VERSION_TIMEOUT_S, LOOKUP_TIMEOUT_S)
+    assert int(seconds.group(1)) > worst_case
+
+
+def test_the_sidebar_limits_the_filename_like_the_host() -> None:
+    naming = (REPO_ROOT / "extension" / "naming.js").read_text(encoding="utf-8")
+    limits = dict(re.findall(r"^const (MAX_FILENAME_CHARS|MAX_PATH_CHARS) = (\d+);", naming, flags=re.MULTILINE))
+    assert limits == {"MAX_FILENAME_CHARS": str(MAX_FILENAME_CHARS), "MAX_PATH_CHARS": str(MAX_PATH_CHARS)}
+
+
+def test_the_sidebar_offers_only_formats_and_choices_the_host_accepts() -> None:
+    formats_js = (REPO_ROOT / "extension" / "formats.js").read_text(encoding="utf-8")
+    block = re.search(r"^const FORMATS = \{(.*?)^};", formats_js, flags=re.MULTILINE | re.DOTALL)
+    assert block, "FORMATS not found in formats.js"
+    formats = re.split(r"^ {2}(\w+): \{", block.group(1), flags=re.MULTILINE)[1:]
+    offered = dict(zip(formats[::2], formats[1::2], strict=True))
+    assert set(offered) == {"mp3", "mp4"}
+    options = {
+        name: re.findall(r"\['([^']+)', '", values)
+        for name, values in re.findall(r"^\s+(\w+): (\[\[.*]]),?$", offered["mp4"], flags=re.MULTILINE)
+    }
+    # the same choices, the same default first
+    assert options == {"quality": list(MP4_QUALITIES), "codec": list(MP4_CODECS)}
+    assert media_format_from_request({}) == media_format_from_request({"format": "mp3"})
 
 
 # The permissions of the extension 1.x users have. Firefox holds back an update that asks

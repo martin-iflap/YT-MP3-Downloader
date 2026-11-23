@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from ytmp3_host import config, core
+from ytmp3_host.media_format import Mp3Format
 
 pytestmark = pytest.mark.network
 
@@ -14,14 +15,16 @@ SHORT_VIDEO = "https://www.youtube.com/watch?v=jNQXAC9IVRw"  # "Me at the zoo", 
 
 
 def test_real_download(out_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    for binary in (config.YT_DLP_PATH, config.FFMPEG_PATH):
+    for binary in (config.yt_dlp_path(), config.FFMPEG_PATH):
         if not binary.exists():
             pytest.skip(f"{binary} missing")
     warnings: list[str] = []
 
-    result = core.download_audio(SHORT_VIDEO, out_dir, on_warning=warnings.append)
+    result = core.download_media(SHORT_VIDEO, out_dir, media_format=Mp3Format(), on_warning=warnings.append)
 
     assert result.exists() and result.stat().st_size > 50_000
-    assert result.read_bytes()[:4] == b"ID3\x03"
+    header = result.read_bytes()[:4096]
+    assert header[:4] == b"ID3\x03"
+    assert all(frame in header for frame in (b"TPE1", b"TIT2", b"APIC"))  # artist, title and cover
     assert warnings == []
     assert [p.name for p in out_dir.iterdir()] == [result.name]
